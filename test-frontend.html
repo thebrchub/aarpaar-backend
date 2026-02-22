@@ -1,0 +1,1689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aarpaar Backend – Test Console</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    /* ------------------------------------------------------------------ */
+    /*  CSS Variables & Reset                                             */
+    /* ------------------------------------------------------------------ */
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242836;
+      --border: #2e3345;
+      --text: #e4e6f0;
+      --text-muted: #8b8fa3;
+      --accent: #6c5ce7;
+      --accent-hover: #7f71ed;
+      --success: #00cec9;
+      --error: #ff6b6b;
+      --warn: #fdcb6e;
+      --info: #74b9ff;
+      --radius: 10px;
+      --shadow: 0 2px 12px rgba(0,0,0,.35);
+      --mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      --sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 14px; }
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.55;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ------------------------------------------------------------------ */
+    /*  Header / Toolbar                                                  */
+    /* ------------------------------------------------------------------ */
+    .toolbar {
+      position: sticky; top: 0; z-index: 100;
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    .toolbar h1 {
+      font-size: 1.15rem; font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--success));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      white-space: nowrap;
+    }
+    .toolbar .sep { width: 1px; height: 24px; background: var(--border); }
+    .toolbar label { font-size: .8rem; color: var(--text-muted); white-space: nowrap; }
+    .toolbar input[type="text"] {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      padding: 5px 10px; border-radius: 6px; font-size: .85rem; width: 260px;
+    }
+    .health-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 12px; border-radius: 20px; font-size: .75rem; font-weight: 600;
+      background: var(--surface2); border: 1px solid var(--border); cursor: pointer;
+      transition: .2s;
+    }
+    .health-badge:hover { border-color: var(--accent); }
+    .health-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--text-muted); transition: .3s;
+    }
+    .health-dot.ok { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    .health-dot.fail { background: var(--error); box-shadow: 0 0 6px var(--error); }
+
+    /* ------------------------------------------------------------------ */
+    /*  Tab Navigation                                                    */
+    /* ------------------------------------------------------------------ */
+    .tabs {
+      display: flex; gap: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      overflow-x: auto;
+    }
+    .tab-btn {
+      background: none; border: none; color: var(--text-muted); cursor: pointer;
+      padding: 12px 20px; font-size: .85rem; font-weight: 500;
+      border-bottom: 2px solid transparent; transition: .2s;
+      white-space: nowrap; font-family: var(--sans);
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ------------------------------------------------------------------ */
+    /*  Layout                                                            */
+    /* ------------------------------------------------------------------ */
+    .content { padding: 20px; max-width: 1200px; margin: 0 auto; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 800px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    /* ------------------------------------------------------------------ */
+    /*  Cards                                                             */
+    /* ------------------------------------------------------------------ */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: var(--shadow);
+    }
+    .card h3 {
+      font-size: .95rem; font-weight: 600; margin-bottom: 14px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card h3 .badge {
+      font-size: .65rem; padding: 2px 8px; border-radius: 4px;
+      font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    }
+    .badge-get { background: rgba(0,206,201,.15); color: var(--success); }
+    .badge-post { background: rgba(108,92,231,.15); color: var(--accent); }
+    .badge-patch { background: rgba(116,185,255,.15); color: var(--info); }
+    .badge-put { background: rgba(253,203,110,.15); color: var(--warn); }
+    .badge-delete { background: rgba(255,107,107,.15); color: var(--error); }
+    .badge-ws { background: rgba(253,203,110,.15); color: var(--warn); }
+
+    /* Friend / DM request list items */
+    .req-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 12px; border-bottom: 1px solid var(--border);
+    }
+    .req-item .req-info { display: flex; align-items: center; gap: 10px; }
+    .req-item img { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+    .req-item .req-name { font-weight: 500; font-size: .85rem; }
+    .req-item .req-meta { font-size: .7rem; color: var(--text-muted); }
+    .req-item .req-actions { display: flex; gap: 6px; }
+
+    /* Toggle switch */
+    .toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .toggle-row label { font-size: .78rem; color: var(--text-muted); margin-bottom: 0; }
+    .toggle { position: relative; width: 40px; height: 22px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .slider {
+      position: absolute; inset: 0; background: var(--surface2); border-radius: 22px;
+      border: 1px solid var(--border); cursor: pointer; transition: .3s;
+    }
+    .toggle .slider::before {
+      content: ''; position: absolute; height: 16px; width: 16px;
+      left: 2px; bottom: 2px; background: var(--text-muted);
+      border-radius: 50%; transition: .3s;
+    }
+    .toggle input:checked + .slider { background: var(--accent); border-color: var(--accent); }
+    .toggle input:checked + .slider::before { transform: translateX(18px); background: #fff; }
+
+    /* ------------------------------------------------------------------ */
+    /*  Form Elements                                                     */
+    /* ------------------------------------------------------------------ */
+    .form-row { margin-bottom: 12px; }
+    .form-row label {
+      display: block; font-size: .75rem; color: var(--text-muted);
+      margin-bottom: 4px; font-weight: 500;
+    }
+    input[type="text"], input[type="number"], textarea, select {
+      width: 100%; background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); padding: 8px 12px; border-radius: 6px;
+      font-size: .85rem; font-family: var(--sans); transition: border .2s;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none; border-color: var(--accent);
+    }
+    textarea { resize: vertical; min-height: 60px; }
+    select { cursor: pointer; }
+
+    /* ------------------------------------------------------------------ */
+    /*  Buttons                                                           */
+    /* ------------------------------------------------------------------ */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 18px; border: none; border-radius: 6px;
+      font-size: .82rem; font-weight: 600; cursor: pointer;
+      font-family: var(--sans); transition: .2s; white-space: nowrap;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-success { background: var(--success); color: #000; }
+    .btn-success:hover { opacity: .85; }
+    .btn-danger { background: var(--error); color: #fff; }
+    .btn-danger:hover { opacity: .85; }
+    .btn-outline {
+      background: transparent; border: 1px solid var(--border); color: var(--text);
+    }
+    .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-sm { padding: 5px 12px; font-size: .75rem; }
+    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+    /* ------------------------------------------------------------------ */
+    /*  Response Panel                                                    */
+    /* ------------------------------------------------------------------ */
+    .response-panel {
+      margin-top: 14px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 6px;
+      max-height: 300px; overflow: auto;
+    }
+    .response-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 12px; background: var(--surface2);
+      border-bottom: 1px solid var(--border); font-size: .7rem;
+      color: var(--text-muted); font-weight: 600;
+    }
+    .response-header .status { font-weight: 700; }
+    .response-header .status.s2xx { color: var(--success); }
+    .response-header .status.s4xx { color: var(--warn); }
+    .response-header .status.s5xx { color: var(--error); }
+    .response-body {
+      padding: 10px 14px; font-family: var(--mono); font-size: .78rem;
+      white-space: pre-wrap; word-break: break-word; color: var(--text);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  WebSocket Log                                                     */
+    /* ------------------------------------------------------------------ */
+    .ws-log {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      height: 350px; overflow-y: auto; padding: 10px; font-family: var(--mono);
+      font-size: .75rem;
+    }
+    .ws-entry { margin-bottom: 4px; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.04); }
+    .ws-entry .ts { color: var(--text-muted); margin-right: 8px; }
+    .ws-entry.inbound { color: var(--success); }
+    .ws-entry.outbound { color: var(--info); }
+    .ws-entry.system { color: var(--warn); }
+    .ws-entry.err { color: var(--error); }
+
+    /* ------------------------------------------------------------------ */
+    /*  Status Badge (WebSocket)                                          */
+    /* ------------------------------------------------------------------ */
+    .ws-status {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: .8rem; font-weight: 600;
+    }
+    .ws-status .dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--text-muted); transition: .3s;
+    }
+    .ws-status .dot.connected { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    .ws-status .dot.error { background: var(--error); box-shadow: 0 0 6px var(--error); }
+
+    /* ------------------------------------------------------------------ */
+    /*  Toast                                                             */
+    /* ------------------------------------------------------------------ */
+    .toast-container {
+      position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+      display: flex; flex-direction: column-reverse; gap: 8px;
+    }
+    .toast {
+      padding: 10px 18px; border-radius: 8px; font-size: .82rem;
+      font-weight: 500; color: #fff; box-shadow: var(--shadow);
+      animation: slideIn .3s ease;
+    }
+    .toast.success { background: #00b894; }
+    .toast.error { background: #d63031; }
+    .toast.info { background: #0984e3; }
+    @keyframes slideIn { from { opacity:0; transform: translateX(40px); } to { opacity:1; transform: none; } }
+
+    /* ------------------------------------------------------------------ */
+    /*  Token display                                                     */
+    /* ------------------------------------------------------------------ */
+    .token-display {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      padding: 10px 14px; font-family: var(--mono); font-size: .75rem;
+      word-break: break-all; position: relative; margin-bottom: 8px;
+      min-height: 38px; display: flex; align-items: center; gap: 10px;
+    }
+    .token-display .token-text { flex: 1; color: var(--text-muted); }
+    .token-display .copy-btn {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text-muted); padding: 3px 8px; border-radius: 4px;
+      font-size: .7rem; cursor: pointer; white-space: nowrap;
+    }
+    .token-display .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* ------------------------------------------------------------------ */
+    /*  Profile card                                                      */
+    /* ------------------------------------------------------------------ */
+    .profile { display: flex; gap: 14px; align-items: center; }
+    .profile img {
+      width: 48px; height: 48px; border-radius: 50%;
+      border: 2px solid var(--accent); object-fit: cover;
+    }
+    .profile .info h4 { font-size: .95rem; }
+    .profile .info p { font-size: .78rem; color: var(--text-muted); }
+
+    /* ------------------------------------------------------------------ */
+    /*  User search results                                               */
+    /* ------------------------------------------------------------------ */
+    .user-list { list-style: none; }
+    .user-list li {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: .15s;
+    }
+    .user-list li:hover { background: var(--surface2); }
+    .user-list img {
+      width: 32px; height: 32px; border-radius: 50%; object-fit: cover;
+    }
+    .user-list .name { font-weight: 500; font-size: .85rem; }
+    .user-list .uid { font-size: .7rem; color: var(--text-muted); font-family: var(--mono); }
+
+    /* ------------------------------------------------------------------ */
+    /*  Room list                                                         */
+    /* ------------------------------------------------------------------ */
+    .room-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 12px; border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: .15s;
+    }
+    .room-item:hover { background: var(--surface2); }
+    .room-item .room-info h4 { font-size: .85rem; font-weight: 500; }
+    .room-item .room-info p { font-size: .72rem; color: var(--text-muted); }
+    .room-item .room-meta { text-align: right; font-size: .7rem; color: var(--text-muted); }
+    .room-item .unread {
+      display: inline-block; background: var(--accent); color: #fff;
+      padding: 1px 7px; border-radius: 10px; font-size: .68rem; font-weight: 700;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Misc                                                              */
+    /* ------------------------------------------------------------------ */
+    .empty-state {
+      text-align: center; padding: 30px; color: var(--text-muted); font-size: .85rem;
+    }
+    .divider { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+    .hidden { display: none !important; }
+    code { font-family: var(--mono); font-size: .82rem; color: var(--info); }
+    .inline-form { display: flex; gap: 8px; align-items: flex-end; }
+    .inline-form .form-row { margin-bottom: 0; flex: 1; }
+    .scroll-box { max-height: 250px; overflow-y:auto; }
+
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  </style>
+</head>
+<body>
+
+<!-- ===== TOOLBAR ===== -->
+<div class="toolbar">
+  <h1>Aarpaar Test Console</h1>
+  <div class="sep"></div>
+  <label>API Base URL</label>
+  <input type="text" id="baseUrl" value="http://localhost:8080" />
+  <div class="health-badge" onclick="checkHealth()" title="Click to check">
+    <span class="health-dot" id="healthDot"></span>
+    <span id="healthText">Check Health</span>
+  </div>
+  <div style="flex:1"></div>
+  <span style="font-size:.72rem;color:var(--text-muted)">Token stored:
+    <strong id="tokenIndicator" style="color:var(--error)">None</strong>
+  </span>
+</div>
+
+<!-- ===== TABS ===== -->
+<div class="tabs">
+  <button class="tab-btn active" data-tab="auth">Auth</button>
+  <button class="tab-btn" data-tab="users">Users</button>
+  <button class="tab-btn" data-tab="rooms">Rooms</button>
+  <button class="tab-btn" data-tab="friends">Friends</button>
+  <button class="tab-btn" data-tab="match">Match</button>
+  <button class="tab-btn" data-tab="ws">WebSocket</button>
+</div>
+
+<!-- ===== CONTENT ===== -->
+<div class="content">
+
+  <!-- ========== AUTH TAB ========== -->
+  <div id="tab-auth" class="tab-panel active">
+    <div class="grid-2">
+
+      <!-- Google Login -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Google Login</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/auth/google</code> — Sign in with Google to get access &amp; refresh tokens.
+        </p>
+        <div id="g_id_onload"
+             data-client_id="1024944888869-9356nb9mq73ki2u2tch6ebtaoic7q3bg.apps.googleusercontent.com"
+             data-callback="handleGoogleCallback"
+             data-auto_prompt="false">
+        </div>
+        <div class="g_id_signin"
+             data-type="standard"
+             data-size="large"
+             data-theme="filled_black"
+             data-text="signin_with"
+             data-shape="rectangular"
+             data-logo_alignment="left">
+        </div>
+        <div id="authResponse" class="response-panel hidden"></div>
+        <div style="margin-top:14px">
+          <label style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px;display:block">Access Token</label>
+          <div class="token-display">
+            <span class="token-text" id="accessTokenDisplay">—</span>
+            <button class="copy-btn" onclick="copyText('accessTokenDisplay')">Copy</button>
+          </div>
+          <label style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px;display:block">Refresh Token</label>
+          <div class="token-display">
+            <span class="token-text" id="refreshTokenDisplay">—</span>
+            <button class="copy-btn" onclick="copyText('refreshTokenDisplay')">Copy</button>
+          </div>
+          <label style="font-size:.72rem;color:var(--text-muted);margin-bottom:4px;display:block">User ID</label>
+          <div class="token-display">
+            <span class="token-text" id="userIdDisplay">—</span>
+            <button class="copy-btn" onclick="copyText('userIdDisplay')">Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Refresh Token + Device Reg -->
+      <div>
+        <!-- Refresh Token -->
+        <div class="card">
+          <h3><span class="badge badge-post">POST</span> Refresh Token</h3>
+          <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+            <code>/api/v1/auth/refresh</code> — Exchange refresh token for a new access token.
+          </p>
+          <div class="form-row">
+            <label>Refresh Token</label>
+            <input type="text" id="refreshTokenInput" placeholder="Paste refresh token..." />
+          </div>
+          <button class="btn btn-primary" onclick="refreshToken()">Refresh</button>
+          <div id="refreshResponse" class="response-panel hidden"></div>
+        </div>
+
+        <!-- Register Device -->
+        <div class="card">
+          <h3><span class="badge badge-post">POST</span> Register Device</h3>
+          <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+            <code>/api/v1/auth/device</code> — Register a device for push notifications.
+          </p>
+          <div class="form-row">
+            <label>FCM / APNs Token</label>
+            <input type="text" id="deviceToken" placeholder="Device push token..." />
+          </div>
+          <div class="form-row">
+            <label>Device Type</label>
+            <select id="deviceType">
+              <option value="android">Android</option>
+              <option value="ios">iOS</option>
+              <option value="web">Web</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" onclick="registerDevice()">Register</button>
+          <div id="deviceResponse" class="response-panel hidden"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Manual Token Entry -->
+    <div class="card">
+      <h3>Manual Token Entry</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+        Paste an access token directly if you already have one (e.g. from another session).
+      </p>
+      <div class="inline-form">
+        <div class="form-row">
+          <label>Access Token</label>
+          <input type="text" id="manualToken" placeholder="Paste JWT access token..." />
+        </div>
+        <button class="btn btn-success" onclick="setManualToken()" style="margin-bottom:0">Save</button>
+        <button class="btn btn-danger" onclick="clearToken()" style="margin-bottom:0">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== USERS TAB ========== -->
+  <div id="tab-users" class="tab-panel">
+    <div class="grid-2">
+      <!-- My Profile -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> My Profile</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/users/me</code> — Get the authenticated user's profile.
+        </p>
+        <button class="btn btn-primary" onclick="getMyProfile()">Fetch Profile</button>
+        <div id="profileResult" style="margin-top:14px"></div>
+        <div id="profileResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Search Users -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> Search Users</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/users/search?query=</code> — Search users by name or username.
+        </p>
+        <div class="inline-form">
+          <div class="form-row">
+            <label>Search Query</label>
+            <input type="text" id="userSearchQuery" placeholder="Type a name or username..." maxlength="30" />
+          </div>
+          <button class="btn btn-primary" onclick="searchUsers()">Search</button>
+        </div>
+        <div id="userSearchResults" class="scroll-box" style="margin-top:14px"></div>
+        <div id="searchResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <!-- Update Profile (PATCH) -->
+    <div class="grid-2">
+      <div class="card">
+        <h3><span class="badge badge-post">PATCH</span> Update Profile (Partial)</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/users/me</code> — Update one or both fields. Only provided fields are changed.
+        </p>
+        <div class="form-row">
+          <label>Username (optional)</label>
+          <input type="text" id="patchUsername" placeholder="New username..." />
+        </div>
+        <div class="form-row">
+          <label>Name (optional)</label>
+          <input type="text" id="patchName" placeholder="New display name..." />
+        </div>
+        <div class="toggle-row">
+          <label class="toggle">
+            <input type="checkbox" id="patchIsPrivate" />
+            <span class="slider"></span>
+          </label>
+          <label>Private Account</label>
+          <span style="font-size:.7rem;color:var(--text-muted)">(leave unchecked = no change)</span>
+        </div>
+        <button class="btn btn-primary" onclick="patchProfile()">Update (PATCH)</button>
+        <div id="patchResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Replace Profile (PUT) -->
+      <div class="card">
+        <h3><span class="badge badge-post">PUT</span> Replace Profile (Full)</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/users/me</code> — Replace both username and name. Both fields required.
+        </p>
+        <div class="form-row">
+          <label>Username (required)</label>
+          <input type="text" id="putUsername" placeholder="Username..." />
+        </div>
+        <div class="form-row">
+          <label>Name (required)</label>
+          <input type="text" id="putName" placeholder="Display name..." />
+        </div>
+        <div class="toggle-row">
+          <label class="toggle">
+            <input type="checkbox" id="putIsPrivate" />
+            <span class="slider"></span>
+          </label>
+          <label>Private Account</label>
+        </div>
+        <button class="btn btn-primary" onclick="putProfile()">Replace (PUT)</button>
+        <div id="putResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== ROOMS TAB ========== -->
+  <div id="tab-rooms" class="tab-panel">
+    <div class="grid-2">
+      <!-- Room List -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> My Rooms</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/rooms</code> — List all active chat rooms (excludes pending DM requests).
+        </p>
+        <button class="btn btn-primary" onclick="getRooms()">Fetch Rooms</button>
+        <div id="roomList" class="scroll-box" style="margin-top:14px"></div>
+        <div id="roomsResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Create DM -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Create DM Room</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/rooms</code> — Create a DM room. If target is private &amp; not a friend, creates a pending DM request.
+        </p>
+        <div class="form-row">
+          <label>Target Username</label>
+          <input type="text" id="dmUsername" placeholder="Username of the other user..." />
+        </div>
+        <button class="btn btn-primary" onclick="createDM()">Create DM</button>
+        <div id="createDmResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <!-- DM Requests -->
+    <div class="grid-2">
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> DM Requests (Inbox)</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/rooms/requests</code> — Rooms where you have a pending DM invite (like Instagram message requests).
+        </p>
+        <button class="btn btn-primary" onclick="getDMRequests()">Fetch DM Requests</button>
+        <div id="dmRequestsList" class="scroll-box" style="margin-top:14px"></div>
+        <div id="dmRequestsResponse" class="response-panel hidden"></div>
+      </div>
+
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Accept / Reject DM Request</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/rooms/{roomId}/accept</code> or <code>/reject</code>
+        </p>
+        <div class="form-row">
+          <label>Room ID (from DM request)</label>
+          <input type="text" id="dmReqRoomId" placeholder="Room UUID..." />
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-success" onclick="acceptDMRequest()">Accept</button>
+          <button class="btn btn-danger" onclick="rejectDMRequest()">Reject</button>
+        </div>
+        <div id="dmReqActionResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <!-- Room Messages -->
+    <div class="card">
+      <h3><span class="badge badge-get">GET</span> Room Messages</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+        <code>/api/v1/rooms/{roomId}/messages</code> — Fetch paginated messages in a room.
+      </p>
+      <div class="inline-form">
+        <div class="form-row">
+          <label>Room ID</label>
+          <input type="text" id="msgRoomId" placeholder="Room UUID..." />
+        </div>
+        <div class="form-row" style="max-width:140px">
+          <label>Cursor (msg ID)</label>
+          <input type="text" id="msgCursor" placeholder="Optional" />
+        </div>
+        <div class="form-row" style="max-width:100px">
+          <label>Limit</label>
+          <input type="number" id="msgLimit" value="50" min="1" max="100" />
+        </div>
+        <button class="btn btn-primary" onclick="getRoomMessages()">Fetch</button>
+      </div>
+      <div id="messagesResult" class="scroll-box" style="margin-top:14px"></div>
+      <div id="messagesResponse" class="response-panel hidden"></div>
+    </div>
+  </div>
+
+  <!-- ========== FRIENDS TAB ========== -->
+  <div id="tab-friends" class="tab-panel">
+    <div class="grid-2">
+      <!-- Friends List -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> My Friends</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/friends</code> — List all your friends.
+        </p>
+        <button class="btn btn-primary" onclick="getFriends()">Fetch Friends</button>
+        <div id="friendsList" class="scroll-box" style="margin-top:14px"></div>
+        <div id="friendsResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Friend Requests -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> Friend Requests</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/friends/requests?type=received|sent</code>
+        </p>
+        <div class="form-row">
+          <label>Type</label>
+          <select id="friendReqType">
+            <option value="received">Received</option>
+            <option value="sent">Sent</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="getFriendRequests()">Fetch Requests</button>
+        <div id="friendReqList" class="scroll-box" style="margin-top:14px"></div>
+        <div id="friendReqResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Send Friend Request -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Send Friend Request</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/friends/request</code> — Send a friend request. Auto-accepts if mutual.
+        </p>
+        <div class="form-row">
+          <label>Username</label>
+          <input type="text" id="friendReqUsername" placeholder="Username to befriend..." />
+        </div>
+        <button class="btn btn-success" onclick="sendFriendRequest()">Send Request</button>
+        <div id="sendFriendReqResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Accept / Reject / Remove -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Accept / Reject / Remove</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          Accept or reject a pending request, or remove an existing friend.
+        </p>
+        <div class="form-row">
+          <label>Username</label>
+          <input type="text" id="friendActionUsername" placeholder="Username..." />
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-success" onclick="acceptFriendRequest()">Accept</button>
+          <button class="btn btn-danger" onclick="rejectFriendRequest()">Reject</button>
+          <button class="btn btn-outline" onclick="removeFriend()">Remove Friend</button>
+        </div>
+        <div id="friendActionResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== MATCH TAB ========== -->
+  <div id="tab-match" class="tab-panel">
+    <div class="grid-2">
+      <!-- Enter Queue -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Enter Match Queue</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/match/enter</code> — Enter the matchmaking queue.
+        </p>
+        <div class="form-row">
+          <label>My Gender</label>
+          <select id="matchMyGender">
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+            <option value="Any">Any</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Gender Preference</label>
+          <select id="matchGenderPref">
+            <option value="Any">Any</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+          </select>
+        </div>
+        <button class="btn btn-success" onclick="enterMatchQueue()">Enter Queue</button>
+        <div id="enterMatchResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Leave Queue -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Leave Match Queue</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/match/leave</code> — Leave the matchmaking queue.
+        </p>
+        <div class="form-row">
+          <label>My Gender</label>
+          <select id="leaveMyGender">
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+            <option value="Any">Any</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Gender Preference</label>
+          <select id="leaveGenderPref">
+            <option value="Any">Any</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+          </select>
+        </div>
+        <button class="btn btn-danger" onclick="leaveMatchQueue()">Leave Queue</button>
+        <div id="leaveMatchResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Match Action -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Match Action</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/match/action</code> — Skip or block a stranger.
+        </p>
+        <div class="form-row">
+          <label>Partner Username <span style="font-size:.65rem;color:var(--text-muted)">(optional)</span></label>
+          <input type="text" id="actionPartnerUsername" placeholder="Auto-resolved from room..." />
+        </div>
+        <div class="form-row">
+          <label>Room ID</label>
+          <input type="text" id="actionRoomId" placeholder="stranger_xxx" />
+        </div>
+        <div class="form-row">
+          <label>Action</label>
+          <select id="actionType">
+            <option value="skip">Skip</option>
+            <option value="block">Block</option>
+            <option value="friend">Friend</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="matchAction()">Submit</button>
+        <div id="matchActionResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Report User -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Report User</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/match/report</code> — Report a user for moderation.
+        </p>
+        <div class="form-row">
+          <label>Reported Username</label>
+          <input type="text" id="reportUsername" placeholder="Username of user to report..." />
+        </div>
+        <div class="form-row">
+          <label>Reason</label>
+          <textarea id="reportReason" placeholder="Describe the issue..."></textarea>
+        </div>
+        <button class="btn btn-danger" onclick="reportUser()">Report</button>
+        <div id="reportResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== WEBSOCKET TAB ========== -->
+  <div id="tab-ws" class="tab-panel">
+    <!-- Connection Controls -->
+    <div class="card">
+      <h3><span class="badge badge-ws">WS</span> WebSocket Connection</h3>
+      <div class="inline-form" style="margin-bottom:12px">
+        <div class="form-row">
+          <label>WebSocket URL (auto-derived from Base URL)</label>
+          <input type="text" id="wsUrl" placeholder="ws://localhost:8080/ws" />
+        </div>
+        <button class="btn btn-success" onclick="wsConnect()">Connect</button>
+        <button class="btn btn-danger" onclick="wsDisconnect()">Disconnect</button>
+      </div>
+      <div class="ws-status">
+        <span class="dot" id="wsDot"></span>
+        <span id="wsStatusText">Disconnected</span>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Controls -->
+      <div>
+        <!-- Room Info -->
+        <div class="card">
+          <h3>Room Info</h3>
+          <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:10px">
+            Rooms are <strong>auto-subscribed</strong> by the server on connect. No need to join manually.
+            Just enter a Room ID below to send messages or typing indicators.
+          </p>
+          <div class="form-row">
+            <label>Active Room ID</label>
+            <input type="text" id="wsRoomId" placeholder="Room UUID or stranger_xxx" />
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="
+            const rid = document.getElementById('wsRoomId').value.trim();
+            if (rid) {
+              document.getElementById('wsMsgRoomId').value = rid;
+              document.getElementById('wsTypingRoomId').value = rid;
+              toast('Room ID applied to message & typing fields', 'info');
+            } else {
+              toast('Enter a room ID first', 'error');
+            }
+          ">Apply to fields</button>
+        </div>
+
+        <!-- Send Message -->
+        <div class="card">
+          <h3>Send Message</h3>
+          <div class="form-row">
+            <label>Room ID</label>
+            <input type="text" id="wsMsgRoomId" placeholder="Room UUID..." />
+          </div>
+          <div class="form-row">
+            <label>Message Text</label>
+            <input type="text" id="wsMsgText" placeholder="Type your message..." />
+          </div>
+          <div class="form-row">
+            <label>Temp ID (optional)</label>
+            <input type="text" id="wsMsgTempId" placeholder="client-generated-id" />
+          </div>
+          <button class="btn btn-primary" onclick="wsSendMessage()">Send</button>
+        </div>
+
+        <!-- Typing + Heartbeat -->
+        <div class="card">
+          <h3>Typing &amp; Heartbeat</h3>
+          <div class="form-row">
+            <label>Room ID</label>
+            <input type="text" id="wsTypingRoomId" placeholder="Room UUID..." />
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-outline btn-sm" onclick="wsTypingStart()">Typing Start</button>
+            <button class="btn btn-outline btn-sm" onclick="wsTypingEnd()">Typing End</button>
+            <button class="btn btn-outline btn-sm" onclick="wsSendHeartbeat()">Heartbeat</button>
+          </div>
+        </div>
+
+        <!-- Send Raw JSON -->
+        <div class="card">
+          <h3>Send Raw JSON</h3>
+          <div class="form-row">
+            <label>Raw JSON Payload</label>
+            <textarea id="wsRawJson" placeholder='{"type":"heartbeat"}' style="font-family:var(--mono);min-height:80px"></textarea>
+          </div>
+          <button class="btn btn-primary" onclick="wsSendRaw()">Send Raw</button>
+        </div>
+      </div>
+
+      <!-- Event Log -->
+      <div class="card">
+        <h3>Event Log
+          <span style="flex:1"></span>
+          <button class="btn btn-outline btn-sm" onclick="clearWsLog()">Clear</button>
+        </h3>
+        <div class="ws-log" id="wsLog">
+          <div class="ws-entry system"><span class="ts">[--:--:--]</span> Waiting for connection...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- ===== JAVASCRIPT ===== -->
+<script>
+// ======================================================================
+//  Globals
+// ======================================================================
+let accessToken = localStorage.getItem('aarpaar_access_token') || '';
+let refreshTokenStored = localStorage.getItem('aarpaar_refresh_token') || '';
+let ws = null;
+let heartbeatInterval = null;
+let isRefreshing = false; // prevents concurrent refresh attempts
+
+// Update indicator on load
+if (accessToken) {
+  document.getElementById('tokenIndicator').textContent = 'Yes';
+  document.getElementById('tokenIndicator').style.color = 'var(--success)';
+  document.getElementById('accessTokenDisplay').textContent = accessToken;
+}
+if (refreshTokenStored) {
+  document.getElementById('refreshTokenDisplay').textContent = refreshTokenStored;
+  document.getElementById('refreshTokenInput').value = refreshTokenStored;
+}
+
+// ======================================================================
+//  Helpers
+// ======================================================================
+function base() { return document.getElementById('baseUrl').value.replace(/\/+$/, ''); }
+
+function authHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (accessToken) h['Authorization'] = 'Bearer ' + accessToken;
+  return h;
+}
+
+function saveToken(token) {
+  accessToken = token;
+  localStorage.setItem('aarpaar_access_token', token);
+  document.getElementById('tokenIndicator').textContent = 'Yes';
+  document.getElementById('tokenIndicator').style.color = 'var(--success)';
+}
+
+function saveRefreshToken(token) {
+  refreshTokenStored = token;
+  localStorage.setItem('aarpaar_refresh_token', token);
+  document.getElementById('refreshTokenInput').value = token;
+}
+
+function clearToken() {
+  accessToken = '';
+  refreshTokenStored = '';
+  localStorage.removeItem('aarpaar_access_token');
+  localStorage.removeItem('aarpaar_refresh_token');
+  document.getElementById('tokenIndicator').textContent = 'None';
+  document.getElementById('tokenIndicator').style.color = 'var(--error)';
+  document.getElementById('accessTokenDisplay').textContent = '—';
+  document.getElementById('refreshTokenDisplay').textContent = '—';
+  document.getElementById('userIdDisplay').textContent = '—';
+  document.getElementById('refreshTokenInput').value = '';
+  toast('Token cleared', 'info');
+}
+
+function setManualToken() {
+  const t = document.getElementById('manualToken').value.trim();
+  if (!t) return toast('Enter a token first', 'error');
+  saveToken(t);
+  document.getElementById('accessTokenDisplay').textContent = t;
+  toast('Token saved', 'success');
+}
+
+function copyText(elId) {
+  const text = document.getElementById(elId).textContent;
+  if (!text || text === '—') return;
+  navigator.clipboard.writeText(text).then(() => toast('Copied!', 'info'));
+}
+
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+function showResponse(panelId, status, body) {
+  const panel = document.getElementById(panelId);
+  panel.classList.remove('hidden');
+  let statusClass = '';
+  if (status >= 200 && status < 300) statusClass = 's2xx';
+  else if (status >= 400 && status < 500) statusClass = 's4xx';
+  else if (status >= 500) statusClass = 's5xx';
+  let formatted = body;
+  try { formatted = JSON.stringify(JSON.parse(body), null, 2); } catch {}
+  panel.innerHTML = `
+    <div class="response-header">
+      <span>Response</span>
+      <span class="status ${statusClass}">${status}</span>
+    </div>
+    <div class="response-body">${escapeHtml(formatted)}</div>`;
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function apiCall(method, path, body, responsePanelId, _isRetry = false) {
+  try {
+    const opts = { method, headers: authHeaders() };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(base() + path, opts);
+    const text = await res.text();
+
+    // Auto-refresh: if we get a 401 and have a refresh token, try once
+    if (res.status === 401 && !_isRetry && refreshTokenStored) {
+      const refreshed = await doSilentRefresh();
+      if (refreshed) {
+        return apiCall(method, path, body, responsePanelId, true);
+      }
+    }
+
+    if (responsePanelId) showResponse(responsePanelId, res.status, text);
+    return { status: res.status, text, data: (() => { try { return JSON.parse(text); } catch { return null; } })() };
+  } catch (err) {
+    if (responsePanelId) showResponse(responsePanelId, 0, err.message);
+    toast('Request failed: ' + err.message, 'error');
+    return { status: 0, text: err.message, data: null };
+  }
+}
+
+// Silent refresh: exchanges stored refresh token for a new access token
+async function doSilentRefresh() {
+  if (isRefreshing) return false;
+  isRefreshing = true;
+  try {
+    const res = await fetch(base() + '/api/v1/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshTokenStored })
+    });
+    const data = await res.json();
+    if (res.ok && data.access_token) {
+      saveToken(data.access_token);
+      document.getElementById('accessTokenDisplay').textContent = data.access_token;
+      toast('Token auto-refreshed', 'info');
+      return true;
+    } else {
+      clearToken();
+      toast('Session expired — please log in again', 'error');
+      return false;
+    }
+  } catch {
+    return false;
+  } finally {
+    isRefreshing = false;
+  }
+}
+
+// ======================================================================
+//  Tab Switching
+// ======================================================================
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ======================================================================
+//  Health Check
+// ======================================================================
+async function checkHealth() {
+  const dot = document.getElementById('healthDot');
+  const txt = document.getElementById('healthText');
+  try {
+    const res = await fetch(base() + '/health');
+    const data = await res.json();
+    if (data.status === 'ok') {
+      dot.className = 'health-dot ok';
+      txt.textContent = 'Healthy';
+      toast('Backend is healthy', 'success');
+    } else {
+      dot.className = 'health-dot fail';
+      txt.textContent = 'Unhealthy';
+    }
+  } catch (e) {
+    dot.className = 'health-dot fail';
+    txt.textContent = 'Offline';
+    toast('Cannot reach backend', 'error');
+  }
+}
+
+// ======================================================================
+//  AUTH: Google Login
+// ======================================================================
+function handleGoogleCallback(response) {
+  const idToken = response.credential;
+  apiCall('POST', '/api/v1/auth/google', { google_id_token: idToken }, 'authResponse')
+    .then(r => {
+      if (r.data && r.data.access_token) {
+        saveToken(r.data.access_token);
+        if (r.data.refresh_token) saveRefreshToken(r.data.refresh_token);
+        document.getElementById('accessTokenDisplay').textContent = r.data.access_token;
+        document.getElementById('refreshTokenDisplay').textContent = r.data.refresh_token || '—';
+        document.getElementById('userIdDisplay').textContent = r.data.user_id || '—';
+        toast('Logged in successfully!', 'success');
+      } else {
+        toast('Login failed', 'error');
+      }
+    });
+}
+
+// AUTH: Refresh Token
+async function refreshToken() {
+  const rt = document.getElementById('refreshTokenInput').value.trim();
+  if (!rt) return toast('Enter a refresh token', 'error');
+  const r = await apiCall('POST', '/api/v1/auth/refresh', { refresh_token: rt }, 'refreshResponse');
+  if (r.data && r.data.access_token) {
+    saveToken(r.data.access_token);
+    document.getElementById('accessTokenDisplay').textContent = r.data.access_token;
+    toast('Access token refreshed!', 'success');
+  }
+}
+
+// AUTH: Register Device
+async function registerDevice() {
+  const token = document.getElementById('deviceToken').value.trim();
+  const deviceType = document.getElementById('deviceType').value;
+  if (!token) return toast('Enter a device token', 'error');
+  await apiCall('POST', '/api/v1/auth/device', { token, device_type: deviceType }, 'deviceResponse');
+}
+
+// ======================================================================
+//  USERS
+// ======================================================================
+async function getMyProfile() {
+  const r = await apiCall('GET', '/api/v1/users/me', null, 'profileResponse');
+  const el = document.getElementById('profileResult');
+  if (r.data && r.data.id) {
+    const d = r.data;
+    el.innerHTML = `
+      <div class="profile">
+        <img src="${escapeHtml(d.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(d.name || 'U'))}" alt="avatar" />
+        <div class="info">
+          <h4>${escapeHtml(d.name || 'Unknown')} ${d.is_private ? '<span style="font-size:.7rem;color:var(--warn)">🔒 Private</span>' : '<span style="font-size:.7rem;color:var(--text-muted)">Public</span>'}</h4>
+          <p>@${escapeHtml(d.username || '—')} &bull; ${escapeHtml(d.email || '')}</p>
+          <p style="font-family:var(--mono);font-size:.7rem;color:var(--text-muted)">${escapeHtml(d.id)}</p>
+        </div>
+      </div>`;
+    // Sync privacy toggles in edit forms
+    if (d.is_private !== undefined) {
+      document.getElementById('patchIsPrivate').checked = d.is_private;
+      document.getElementById('putIsPrivate').checked = d.is_private;
+    }
+  } else {
+    el.innerHTML = '<div class="empty-state">No profile data</div>';
+  }
+}
+
+async function searchUsers() {
+  const q = document.getElementById('userSearchQuery').value.trim();
+  if (!q) return toast('Enter a search query', 'error');
+  const r = await apiCall('GET', '/api/v1/users/search?query=' + encodeURIComponent(q), null, 'searchResponse');
+  const el = document.getElementById('userSearchResults');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = '<ul class="user-list">' + r.data.map(u => `
+      <li onclick="navigator.clipboard.writeText('${escapeHtml(u.username || u.id)}'); document.getElementById('dmUsername').value='${escapeHtml(u.username || '')}'; toast('Username copied & set in DM field','info');">
+        <img src="${escapeHtml(u.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(u.name || 'U'))}" alt="" />
+        <div>
+          <div class="name">${escapeHtml(u.name || 'Unknown')} ${u.username ? '<span style="color:var(--text-muted)">@' + escapeHtml(u.username) + '</span>' : ''}</div>
+          <div class="uid">${escapeHtml(u.id)}</div>
+        </div>
+      </li>`).join('') + '</ul>';
+  } else {
+    el.innerHTML = '<div class="empty-state">No users found</div>';
+  }
+}
+
+// ======================================================================
+//  ROOMS
+// ======================================================================
+async function getRooms() {
+  const r = await apiCall('GET', '/api/v1/rooms', null, 'roomsResponse');
+  const el = document.getElementById('roomList');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = r.data.map(rm => `
+      <div class="room-item" onclick="document.getElementById('msgRoomId').value='${escapeHtml(rm.room_id)}';document.getElementById('wsRoomId').value='${escapeHtml(rm.room_id)}';document.getElementById('wsMsgRoomId').value='${escapeHtml(rm.room_id)}';wsMarkRead('${escapeHtml(rm.room_id)}');toast('Room ID set in message & WS fields','info');">
+        <div class="room-info">
+          <h4>${escapeHtml(rm.name || rm.room_id)}</h4>
+          <p>${escapeHtml(rm.last_message_preview || 'No messages')}${rm.type ? ' &bull; ' + escapeHtml(rm.type) : ''}</p>
+        </div>
+        <div class="room-meta">
+          ${rm.unread_count > 0 ? '<span class="unread">' + rm.unread_count + '</span><br/>' : ''}
+          <span>${rm.last_message_at ? new Date(rm.last_message_at).toLocaleString() : ''}</span>
+        </div>
+      </div>`).join('');
+  } else {
+    el.innerHTML = '<div class="empty-state">No rooms found</div>';
+  }
+}
+
+async function createDM() {
+  const username = document.getElementById('dmUsername').value.trim();
+  if (!username) return toast('Enter a username', 'error');
+  const r = await apiCall('POST', '/api/v1/rooms', { username: username }, 'createDmResponse');
+  if (r.data && r.data.room_id) {
+    document.getElementById('msgRoomId').value = r.data.room_id;
+    document.getElementById('wsRoomId').value = r.data.room_id;
+    document.getElementById('wsMsgRoomId').value = r.data.room_id;
+    toast('DM room ' + (r.data.existing ? 'already exists' : 'created') + ': ' + r.data.room_id, 'success');
+  }
+}
+
+async function getRoomMessages() {
+  const roomId = document.getElementById('msgRoomId').value.trim();
+  if (!roomId) return toast('Enter a room ID', 'error');
+  let path = '/api/v1/rooms/' + encodeURIComponent(roomId) + '/messages';
+  const params = [];
+  const cursor = document.getElementById('msgCursor').value.trim();
+  const limit = document.getElementById('msgLimit').value.trim();
+  if (cursor) params.push('cursor=' + encodeURIComponent(cursor));
+  if (limit) params.push('limit=' + encodeURIComponent(limit));
+  if (params.length) path += '?' + params.join('&');
+
+  const r = await apiCall('GET', path, null, 'messagesResponse');
+  const el = document.getElementById('messagesResult');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = '<div style="font-size:.78rem">' + r.data.map(m => `
+      <div style="padding:6px 0;border-bottom:1px solid var(--border)">
+        <span style="color:var(--accent);font-family:var(--mono);font-size:.7rem">${escapeHtml(String(m.id))}</span>
+        <span style="color:var(--text-muted);font-size:.7rem;margin-left:8px">${m.created_at ? new Date(m.created_at).toLocaleString() : ''}</span>
+        <br/>
+        <span style="color:var(--info);font-size:.72rem">${escapeHtml(m.sender_id || '')}</span>
+        <div style="margin-top:3px">${escapeHtml(m.content || '')}</div>
+      </div>`).join('') + '</div>';
+    // Set cursor for next page
+    const lastMsg = r.data[r.data.length - 1];
+    if (lastMsg && lastMsg.id) document.getElementById('msgCursor').value = lastMsg.id;
+  } else {
+    el.innerHTML = '<div class="empty-state">No messages</div>';
+  }
+}
+
+// ======================================================================
+//  MATCH
+// ======================================================================
+async function enterMatchQueue() {
+  const body = {
+    my_gender: document.getElementById('matchMyGender').value,
+    gender_preference: document.getElementById('matchGenderPref').value
+  };
+  const r = await apiCall('POST', '/api/v1/match/enter', body, 'enterMatchResponse');
+  if (r.data && r.data.room_id) {
+    document.getElementById('wsRoomId').value = r.data.room_id;
+    document.getElementById('wsMsgRoomId').value = r.data.room_id;
+    document.getElementById('wsTypingRoomId').value = r.data.room_id;
+    document.getElementById('actionRoomId').value = r.data.room_id;
+    toast('Matched! Room: ' + r.data.room_id + ' — auto-subscribed, go to WebSocket tab to chat', 'success');
+  }
+}
+
+async function leaveMatchQueue() {
+  const body = {
+    my_gender: document.getElementById('leaveMyGender').value,
+    gender_preference: document.getElementById('leaveGenderPref').value
+  };
+  await apiCall('POST', '/api/v1/match/leave', body, 'leaveMatchResponse');
+}
+
+async function matchAction() {
+  const body = {
+    room_id: document.getElementById('actionRoomId').value.trim(),
+    action: document.getElementById('actionType').value
+  };
+  if (!body.room_id) return toast('Room ID is required', 'error');
+  const partnerUsername = document.getElementById('actionPartnerUsername').value.trim();
+  if (partnerUsername) body.partner_username = partnerUsername;
+  await apiCall('POST', '/api/v1/match/action', body, 'matchActionResponse');
+}
+
+async function reportUser() {
+  const body = {
+    reported_username: document.getElementById('reportUsername').value.trim(),
+    reason: document.getElementById('reportReason').value.trim()
+  };
+  if (!body.reported_username || !body.reason) return toast('Fill in all fields', 'error');
+  await apiCall('POST', '/api/v1/match/report', body, 'reportResponse');
+}
+
+// ======================================================================
+//  WEBSOCKET
+// ======================================================================
+function wsTimestamp() {
+  return new Date().toLocaleTimeString('en-GB', { hour12: false });
+}
+
+function wsLog(msg, cls = 'system') {
+  const log = document.getElementById('wsLog');
+  const entry = document.createElement('div');
+  entry.className = 'ws-entry ' + cls;
+  entry.innerHTML = `<span class="ts">[${wsTimestamp()}]</span> ${escapeHtml(msg)}`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+}
+
+function clearWsLog() {
+  document.getElementById('wsLog').innerHTML = '';
+}
+
+function updateWsStatus(connected, text) {
+  const dot = document.getElementById('wsDot');
+  const txt = document.getElementById('wsStatusText');
+  dot.className = 'dot' + (connected === true ? ' connected' : connected === false ? ' error' : '');
+  txt.textContent = text || (connected ? 'Connected' : 'Disconnected');
+}
+
+function deriveWsUrl() {
+  const b = base();
+  const wsUrl = b.replace(/^http/, 'ws') + '/ws';
+  document.getElementById('wsUrl').value = wsUrl;
+  return wsUrl;
+}
+
+function wsConnect() {
+  if (ws && ws.readyState <= 1) {
+    toast('Already connected', 'info');
+    return;
+  }
+  if (!accessToken) {
+    toast('No access token — authenticate first', 'error');
+    return;
+  }
+  const url = document.getElementById('wsUrl').value.trim() || deriveWsUrl();
+
+  // The Gorilla upgrader needs the token in the header, but browser WebSocket
+  // doesn't support custom headers. We'll pass it as a query param instead,
+  // OR if the backend reads it from a protocol, we try sub-protocol.
+  // Most common workaround: pass token as query param.
+  const urlWithToken = url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(accessToken);
+
+  wsLog('Connecting to ' + url + ' ...', 'system');
+  updateWsStatus(null, 'Connecting...');
+
+  try {
+    ws = new WebSocket(urlWithToken);
+  } catch (e) {
+    wsLog('Connection error: ' + e.message, 'err');
+    updateWsStatus(false);
+    return;
+  }
+
+  ws.onopen = () => {
+    wsLog('Connected! Rooms are auto-subscribed by the server.', 'system');
+    updateWsStatus(true);
+    toast('WebSocket connected — rooms auto-subscribed', 'success');
+  };
+
+  ws.onclose = (e) => {
+    wsLog(`Disconnected (code=${e.code}, reason=${e.reason || 'none'})`, 'system');
+    updateWsStatus(false);
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  };
+
+  ws.onerror = (e) => {
+    wsLog('Error occurred', 'err');
+    updateWsStatus(false, 'Error');
+  };
+
+  ws.onmessage = (e) => {
+    let display = e.data;
+    try {
+      const parsed = JSON.parse(e.data);
+      display = JSON.stringify(parsed, null, 2);
+
+      // Special handling for match_found
+      if (parsed.type === 'match_found') {
+        toast('Match found! Room: ' + (parsed.roomId || ''), 'success');
+        if (parsed.roomId) {
+          document.getElementById('wsRoomId').value = parsed.roomId;
+          document.getElementById('wsMsgRoomId').value = parsed.roomId;
+          document.getElementById('wsTypingRoomId').value = parsed.roomId;
+          document.getElementById('actionRoomId').value = parsed.roomId;
+        }
+      }
+      if (parsed.type === 'stranger_disconnected') {
+        toast('Stranger disconnected from ' + (parsed.roomId || ''), 'info');
+      }
+      if (parsed.type === 'room_closed') {
+        toast('Room closed: ' + (parsed.roomId || ''), 'info');
+      }
+      if (parsed.type === 'friend_request') {
+        toast('Friend request from ' + (parsed.username || parsed.from || ''), 'info');
+      }
+      if (parsed.type === 'friend_accepted') {
+        toast('Friend accepted! You are now friends with ' + (parsed.from || ''), 'success');
+      }
+      if (parsed.type === 'dm_request') {
+        toast('New DM request – Room: ' + (parsed.roomId || ''), 'info');
+      }
+      if (parsed.type === 'dm_accepted') {
+        toast('Your DM was accepted! Room: ' + (parsed.roomId || ''), 'success');
+      }
+      if (parsed.type === 'error') {
+        let errMsg = parsed.message || parsed.code;
+        if (parsed.code === 'DEPRECATED') errMsg = '⚠ ' + errMsg + ' (join_room/leave_room removed)';
+        if (parsed.code === 'NOT_A_MEMBER') errMsg = '🚫 ' + errMsg;
+        toast('WS Error: ' + errMsg, 'error');
+      }
+    } catch {}
+    wsLog(display, 'inbound');
+  };
+}
+
+function wsDisconnect() {
+  if (ws) {
+    ws.close();
+    ws = null;
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  }
+  updateWsStatus(false);
+}
+
+function wsSend(obj) {
+  if (!ws || ws.readyState !== 1) {
+    toast('WebSocket not connected', 'error');
+    return false;
+  }
+  const str = JSON.stringify(obj);
+  ws.send(str);
+  wsLog(str, 'outbound');
+  return true;
+}
+
+function wsJoinRoom() {
+  toast('Rooms are now auto-subscribed by the server. No need to join manually.', 'info');
+}
+
+function wsLeaveRoom() {
+  toast('Rooms are now auto-managed by the server. No need to leave manually.', 'info');
+}
+
+function wsSendMessage() {
+  const roomId = document.getElementById('wsMsgRoomId').value.trim();
+  const text = document.getElementById('wsMsgText').value.trim();
+  if (!roomId || !text) return toast('Enter room ID and message', 'error');
+  const msg = { type: 'send_message', roomId, text };
+  const tempId = document.getElementById('wsMsgTempId').value.trim();
+  if (tempId) msg.tempId = tempId;
+  wsSend(msg);
+  document.getElementById('wsMsgText').value = '';
+  // Auto-increment tempId if numeric
+  if (tempId && /^\d+$/.test(tempId)) {
+    document.getElementById('wsMsgTempId').value = String(parseInt(tempId) + 1);
+  }
+}
+
+function wsTypingStart() {
+  const roomId = document.getElementById('wsTypingRoomId').value.trim();
+  if (!roomId) return toast('Enter a room ID', 'error');
+  wsSend({ type: 'typing_start', roomId });
+}
+
+function wsTypingEnd() {
+  const roomId = document.getElementById('wsTypingRoomId').value.trim();
+  if (!roomId) return toast('Enter a room ID', 'error');
+  wsSend({ type: 'typing_end', roomId });
+}
+
+function wsMarkRead(roomId) {
+  if (!roomId) {
+    roomId = document.getElementById('wsMsgRoomId').value.trim();
+  }
+  if (!roomId) return;
+  wsSend({ type: 'mark_read', roomId });
+}
+
+function wsSendHeartbeat() {
+  wsSend({ type: 'heartbeat' });
+}
+
+function wsSendRaw() {
+  const raw = document.getElementById('wsRawJson').value.trim();
+  if (!raw) return toast('Enter JSON payload', 'error');
+  try {
+    const obj = JSON.parse(raw);
+    wsSend(obj);
+  } catch (e) {
+    toast('Invalid JSON: ' + e.message, 'error');
+  }
+}
+
+// Auto-derive WS URL when base URL changes
+document.getElementById('baseUrl').addEventListener('input', deriveWsUrl);
+
+// Allow Enter key to send messages in WS
+document.getElementById('wsMsgText').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); wsSendMessage(); }
+});
+// Allow Enter key to search users
+document.getElementById('userSearchQuery').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); searchUsers(); }
+});
+
+// ======================================================================
+//  USERS: Update Profile (PATCH)
+// ======================================================================
+async function patchProfile() {
+  const body = {};
+  const u = document.getElementById('patchUsername').value.trim();
+  const n = document.getElementById('patchName').value.trim();
+  const privCheckbox = document.getElementById('patchIsPrivate');
+  if (u) body.username = u;
+  if (n) body.name = n;
+  // Only send is_private if the checkbox was explicitly changed
+  if (privCheckbox.dataset.changed === '1') body.is_private = privCheckbox.checked;
+  if (!u && !n && !('is_private' in body)) return toast('Enter at least one field or toggle privacy', 'error');
+  const r = await apiCall('PATCH', '/api/v1/users/me', body, 'patchResponse');
+  if (r.status >= 200 && r.status < 300) toast('Profile updated!', 'success');
+  privCheckbox.dataset.changed = '';
+}
+// Track if privacy toggle was explicitly changed
+document.getElementById('patchIsPrivate').addEventListener('change', function() { this.dataset.changed = '1'; });
+
+// ======================================================================
+//  USERS: Replace Profile (PUT)
+// ======================================================================
+async function putProfile() {
+  const u = document.getElementById('putUsername').value.trim();
+  const n = document.getElementById('putName').value.trim();
+  if (!u || !n) return toast('Both username and name are required', 'error');
+  const p = document.getElementById('putIsPrivate').checked;
+  const r = await apiCall('PUT', '/api/v1/users/me', { username: u, name: n, is_private: p }, 'putResponse');
+  if (r.status >= 200 && r.status < 300) toast('Profile replaced!', 'success');
+}
+
+// Derive WS URL on load
+window.addEventListener('load', deriveWsUrl);
+
+// ======================================================================
+//  FRIENDS
+// ======================================================================
+async function getFriends() {
+  const r = await apiCall('GET', '/api/v1/friends', null, 'friendsResponse');
+  const el = document.getElementById('friendsList');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = r.data.map(f => `
+      <div class="req-item">
+        <div class="req-info">
+          <img src="${escapeHtml(f.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(f.name || 'U'))}" alt="" />
+          <div>
+            <div class="req-name">${escapeHtml(f.name || 'Unknown')} <span style="color:var(--text-muted)">@${escapeHtml(f.username || '')}</span></div>
+            <div class="req-meta">Friends since ${f.friends_since ? new Date(f.friends_since).toLocaleDateString() : '—'}</div>
+          </div>
+        </div>
+        <div class="req-actions">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('dmUsername').value='${escapeHtml(f.username || '')}'; document.querySelector('[data-tab=rooms]').click(); toast('Username set in DM field','info');">DM</button>
+          <button class="btn btn-danger btn-sm" onclick="document.getElementById('friendActionUsername').value='${escapeHtml(f.username || '')}'; removeFriend();">Remove</button>
+        </div>
+      </div>`).join('');
+  } else {
+    el.innerHTML = '<div class="empty-state">No friends yet</div>';
+  }
+}
+
+async function getFriendRequests() {
+  const type = document.getElementById('friendReqType').value;
+  const r = await apiCall('GET', '/api/v1/friends/requests?type=' + type, null, 'friendReqResponse');
+  const el = document.getElementById('friendReqList');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    const isSent = (type === 'sent');
+    el.innerHTML = r.data.map(fr => `
+      <div class="req-item">
+        <div class="req-info">
+          <img src="${escapeHtml(fr.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(fr.name || 'U'))}" alt="" />
+          <div>
+            <div class="req-name">${escapeHtml(fr.name || 'Unknown')} <span style="color:var(--text-muted)">@${escapeHtml(fr.username || '')}</span></div>
+            <div class="req-meta">${isSent ? 'Sent' : 'Received'} ${fr.created_at ? new Date(fr.created_at).toLocaleDateString() : ''}</div>
+          </div>
+        </div>
+        <div class="req-actions">
+          ${isSent ? '' : `
+            <button class="btn btn-success btn-sm" onclick="document.getElementById('friendActionUsername').value='${escapeHtml(fr.username || '')}'; acceptFriendRequest();">Accept</button>
+            <button class="btn btn-danger btn-sm" onclick="document.getElementById('friendActionUsername').value='${escapeHtml(fr.username || '')}'; rejectFriendRequest();">Reject</button>
+          `}
+        </div>
+      </div>`).join('');
+  } else {
+    el.innerHTML = '<div class="empty-state">No ' + type + ' requests</div>';
+  }
+}
+
+async function sendFriendRequest() {
+  const username = document.getElementById('friendReqUsername').value.trim();
+  if (!username) return toast('Enter a username', 'error');
+  const r = await apiCall('POST', '/api/v1/friends/request', { username }, 'sendFriendReqResponse');
+  if (r.status >= 200 && r.status < 300) toast(r.data?.message || 'Request sent', 'success');
+}
+
+async function acceptFriendRequest() {
+  const username = document.getElementById('friendActionUsername').value.trim();
+  if (!username) return toast('Enter a username', 'error');
+  const r = await apiCall('POST', '/api/v1/friends/accept', { username }, 'friendActionResponse');
+  if (r.status >= 200 && r.status < 300) { toast('Friend request accepted!', 'success'); getFriendRequests(); }
+}
+
+async function rejectFriendRequest() {
+  const username = document.getElementById('friendActionUsername').value.trim();
+  if (!username) return toast('Enter a username', 'error');
+  const r = await apiCall('POST', '/api/v1/friends/reject', { username }, 'friendActionResponse');
+  if (r.status >= 200 && r.status < 300) { toast('Friend request rejected', 'info'); getFriendRequests(); }
+}
+
+async function removeFriend() {
+  const username = document.getElementById('friendActionUsername').value.trim();
+  if (!username) return toast('Enter a username', 'error');
+  const r = await apiCall('DELETE', '/api/v1/friends/' + encodeURIComponent(username), null, 'friendActionResponse');
+  if (r.status >= 200 && r.status < 300) { toast('Friend removed', 'info'); getFriends(); }
+}
+
+// ======================================================================
+//  DM REQUESTS
+// ======================================================================
+async function getDMRequests() {
+  const r = await apiCall('GET', '/api/v1/rooms/requests', null, 'dmRequestsResponse');
+  const el = document.getElementById('dmRequestsList');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = r.data.map(dm => `
+      <div class="req-item">
+        <div class="req-info">
+          <img src="${escapeHtml(dm.sender_avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(dm.sender_name || 'U'))}" alt="" />
+          <div>
+            <div class="req-name">${escapeHtml(dm.sender_name || 'Unknown')} <span style="color:var(--text-muted)">@${escapeHtml(dm.sender_username || '')}</span></div>
+            <div class="req-meta">${escapeHtml(dm.last_message_preview || 'No message')} &bull; ${escapeHtml(dm.type || 'dm')}</div>
+          </div>
+        </div>
+        <div class="req-actions">
+          <button class="btn btn-success btn-sm" onclick="document.getElementById('dmReqRoomId').value='${escapeHtml(dm.room_id)}'; acceptDMRequest();">Accept</button>
+          <button class="btn btn-danger btn-sm" onclick="document.getElementById('dmReqRoomId').value='${escapeHtml(dm.room_id)}'; rejectDMRequest();">Reject</button>
+        </div>
+      </div>`).join('');
+  } else {
+    el.innerHTML = '<div class="empty-state">No DM requests</div>';
+  }
+}
+
+async function acceptDMRequest() {
+  const roomId = document.getElementById('dmReqRoomId').value.trim();
+  if (!roomId) return toast('Enter a room ID', 'error');
+  const r = await apiCall('POST', '/api/v1/rooms/' + encodeURIComponent(roomId) + '/accept', null, 'dmReqActionResponse');
+  if (r.status >= 200 && r.status < 300) { toast('DM request accepted!', 'success'); getDMRequests(); }
+}
+
+async function rejectDMRequest() {
+  const roomId = document.getElementById('dmReqRoomId').value.trim();
+  if (!roomId) return toast('Enter a room ID', 'error');
+  const r = await apiCall('POST', '/api/v1/rooms/' + encodeURIComponent(roomId) + '/reject', null, 'dmReqActionResponse');
+  if (r.status >= 200 && r.status < 300) { toast('DM request rejected', 'info'); getDMRequests(); }
+}
+</script>
+
+</body>
+</html>

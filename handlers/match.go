@@ -1,0 +1,489 @@
+package handlers
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/goccy/go-json"
+
+	"github.com/google/uuid"
+	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
+	"github.com/thebrchub/aarpaar/chat"
+	"github.com/thebrchub/aarpaar/config"
+)
+
+// ---------------------------------------------------------------------------
+// Matchmaking: Enter Queue
+// ---------------------------------------------------------------------------
+
+type MatchEnterRequest struct {
+	MyGender         string `json:"my_gender"`         // "M", "F", or "Any"
+	GenderPreference string `json:"gender_preference"` // "M", "F", or "Any"
+}
+
+// EnterMatchQueueHandler tries to find an instant stranger match.
+// If no match is found, the user is placed in a Redis queue to wait.
+//
+// How it works:
+//  1. Pop a random user from the opposite queue
+//  2. Check if they've blocked each other in Postgres
+//  3. If clean — create a room and notify both via WebSocket
+//  4. If blocked — put them back and try again (up to MaxMatchAttempts times)
+//  5. If no match found — add ourselves to the queue and wait
+//
+// POST /api/v1/match/enter (requires auth)
+func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req MatchEnterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		JSONError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Default to "Any" if not specified
+	if req.MyGender == "" {
+		req.MyGender = config.GenderAny
+	}
+	if req.GenderPreference == "" {
+		req.GenderPreference = config.GenderAny
+	}
+
+	ctx := context.Background()
+	rdb := redis.GetRawClient()
+
+	// The queue I should look in (people who match my preference)
+	targetQueue := fmt.Sprintf(config.MatchQueueFormat, req.GenderPreference, req.MyGender)
+
+	// The queue I should join if nobody is available
+	myQueue := fmt.Sprintf(config.MatchQueueFormat, req.MyGender, req.GenderPreference)
+
+	// Try to find a partner who hasn't blocked us (and vice versa)
+	var matchedPartner string
+
+	for range config.MaxMatchAttempts {
+		// Pull a random person from the target queue
+		partnerID, err := rdb.SPop(ctx, targetQueue).Result()
+		if err != nil || partnerID == "" {
+			break // Queue is empty
+		}
+
+		// Skip if we somehow pulled ourselves
+		if partnerID == userID {
+			continue
+		}
+
+		// Check Postgres: did either of us block the other?
+		query := `
+			SELECT EXISTS (
+				SELECT 1 FROM blocked_users 
+				WHERE (blocker_id = $1 AND blocked_id = $2) 
+				   OR (blocker_id = $2 AND blocked_id = $1)
+			)
+		`
+		var isBlocked bool
+		err = postgress.GetRawDB().QueryRow(query, userID, partnerID).Scan(&isBlocked)
+
+		if err == nil && !isBlocked {
+			// Found a clean match
+			matchedPartner = partnerID
+			break
+		}
+
+		// Blocked — put them back for someone else to match with
+		rdb.SAdd(ctx, targetQueue, partnerID)
+	}
+
+	// Route the result
+	if matchedPartner != "" {
+		// Create a unique stranger room and notify both users
+		roomID := config.STRANGER_PREFIX + uuid.New().String()
+
+		// Store both participants in Redis so MatchActionHandler can resolve
+		// the partner server-side without requiring partner_username from the client
+		rdb.SAdd(ctx, config.STRANGER_MEMBERS_COLON+roomID, userID, matchedPartner)
+		rdb.Expire(ctx, config.STRANGER_MEMBERS_COLON+roomID, 24*time.Hour)
+
+		notifyMatch(ctx, userID, roomID)
+		notifyMatch(ctx, matchedPartner, roomID)
+
+		// Auto-subscribe both users to the stranger room (no join_room needed)
+		if e := chat.GetEngine(); e != nil {
+			e.JoinRoomForUser(userID, roomID)
+			e.JoinRoomForUser(matchedPartner, roomID)
+		}
+
+		JSONSuccess(w, map[string]string{
+			"status":  "matched",
+			"message": "Match found instantly",
+			"room_id": roomID,
+		})
+		return
+	}
+
+	// No match — add ourselves to the queue and wait for someone else
+	rdb.SAdd(ctx, myQueue, userID)
+	JSONMessage(w, "queued", "Waiting for a match...")
+}
+
+// notifyMatch sends a "match_found" event to a specific user via Redis Pub/Sub.
+// The engine picks this up and delivers it over their WebSocket.
+func notifyMatch(ctx context.Context, targetUser, roomID string) {
+	eventPayload := map[string]interface{}{
+		config.FieldType:            config.MsgTypeMatchFound,
+		config.FieldRoomID:          roomID,
+		config.FieldPartnerFakeName: config.DefaultStrangerName,
+		config.FieldPartnerAvatar:   "",
+	}
+
+	// Wrap in the routing envelope that engine.go expects
+	envelope := map[string]interface{}{
+		config.FieldType: config.MsgTypePrivate,
+		config.FieldTo:   targetUser,
+		config.FieldFrom: config.SystemSender,
+		config.FieldData: eventPayload,
+	}
+
+	envBytes, err := json.Marshal(envelope)
+	if err != nil {
+		log.Printf("[match] Failed to marshal match notification: %v", err)
+		return
+	}
+	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, envBytes)
+}
+
+// ---------------------------------------------------------------------------
+// Matchmaking: Leave Queue
+// ---------------------------------------------------------------------------
+
+type MatchLeaveRequest struct {
+	MyGender         string `json:"my_gender"`
+	GenderPreference string `json:"gender_preference"`
+}
+
+// LeaveMatchQueueHandler removes the user from the matchmaking queue.
+// Call this when the user navigates away from the matching screen.
+//
+// POST /api/v1/match/leave (requires auth)
+func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req MatchLeaveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		JSONError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.MyGender == "" {
+		req.MyGender = config.GenderAny
+	}
+	if req.GenderPreference == "" {
+		req.GenderPreference = config.GenderAny
+	}
+
+	// Remove from the exact Redis set they were placed in
+	myQueue := fmt.Sprintf(config.MatchQueueFormat, req.MyGender, req.GenderPreference)
+	redis.GetRawClient().SRem(context.Background(), myQueue, userID)
+
+	JSONMessage(w, "success", "Removed from queue")
+}
+
+// ---------------------------------------------------------------------------
+// Match Actions: Skip / Block / Disconnect
+// ---------------------------------------------------------------------------
+
+type MatchActionRequest struct {
+	PartnerUsername string `json:"partner_username"`
+	RoomID          string `json:"room_id"`
+	Action          string `json:"action"` // "skip" or "block"
+}
+
+// MatchActionHandler processes skip/block/friend actions during a stranger chat.
+//   - "block" → saves the block in Postgres so they never match again
+//   - "skip"  → ends the chat, notifies partner
+//   - "friend" → one-sided request; when both send it, creates a permanent DM room
+//   - skip & block also close the stranger room
+//
+// POST /api/v1/match/action (requires auth)
+func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req MatchActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		JSONError(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	ctx := context.Background()
+	rdb := redis.GetRawClient()
+
+	// Resolve partner: prefer server-side lookup from Redis stranger_members set,
+	// fall back to partner_username if provided (backward compatible)
+	var partnerID string
+	if req.RoomID != "" {
+		members, _ := rdb.SMembers(ctx, config.STRANGER_MEMBERS_COLON+req.RoomID).Result()
+		for _, m := range members {
+			if m != userID {
+				partnerID = m
+				break
+			}
+		}
+	}
+	// Fallback: resolve from partner_username if Redis lookup didn't find it
+	if partnerID == "" && req.PartnerUsername != "" {
+		postgress.GetRawDB().QueryRow(
+			`SELECT id FROM users WHERE username = $1`, req.PartnerUsername,
+		).Scan(&partnerID)
+	}
+
+	// ---- Friend request (mutual opt-in) ----
+	if req.Action == config.ActionFriend {
+		if partnerID == "" || req.RoomID == "" {
+			JSONError(w, "room_id is required", http.StatusBadRequest)
+			return
+		}
+
+		myKey := config.FRIEND_REQUEST_COLON + req.RoomID + ":" + userID
+		partnerKey := config.FRIEND_REQUEST_COLON + req.RoomID + ":" + partnerID
+
+		// Record in Redis for fast mutual detection (1h TTL)
+		rdb.Set(ctx, myKey, "1", 1*time.Hour)
+
+		// Also persist to Postgres so it survives logout/restart
+		postgress.Exec(
+			`INSERT INTO friend_requests (sender_id, receiver_id, status, stranger_room_id)
+			 VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (sender_id, receiver_id) DO UPDATE SET status = $3, stranger_room_id = $4, updated_at = NOW()`,
+			userID, partnerID, config.FriendReqPending, req.RoomID,
+		)
+
+		// Check if the partner already sent a friend request (Redis fast path)
+		exists, _ := rdb.Exists(ctx, partnerKey).Result()
+
+		// If not in Redis, also check Postgres (they may have logged out)
+		if exists == 0 {
+			var pgExists bool
+			postgress.GetRawDB().QueryRow(
+				`SELECT EXISTS (SELECT 1 FROM friend_requests
+				 WHERE sender_id = $1 AND receiver_id = $2 AND status = $3)`,
+				partnerID, userID, config.FriendReqPending,
+			).Scan(&pgExists)
+			if pgExists {
+				exists = 1
+			}
+		}
+
+		if exists == 0 {
+			// One-sided: notify partner that we want to be friends
+			notifyUser(ctx, partnerID, map[string]interface{}{
+				config.FieldType:   config.MsgTypeFriendRequest,
+				config.FieldRoomID: req.RoomID,
+				config.FieldFrom:   userID,
+			})
+			JSONMessage(w, "pending", "Friend request sent, waiting for partner")
+			return
+		}
+
+		// Mutual! Clean up Redis keys
+		rdb.Del(ctx, myKey, partnerKey)
+
+		// Update both friend_requests to accepted
+		postgress.Exec(
+			`UPDATE friend_requests SET status = $1, updated_at = NOW()
+			 WHERE (sender_id = $2 AND receiver_id = $3) OR (sender_id = $3 AND receiver_id = $2)`,
+			config.FriendReqAccepted, userID, partnerID,
+		)
+
+		// Create friendship
+		uid1, uid2 := sortUUIDs(userID, partnerID)
+		postgress.Exec(
+			`INSERT INTO friendships (user_id_1, user_id_2) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			uid1, uid2,
+		)
+
+		// Create a permanent DM room in Postgres
+		tx, err := postgress.GetRawDB().Begin()
+		if err != nil {
+			JSONError(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
+		var dmRoomID string
+		err = tx.QueryRow(`INSERT INTO rooms (type) VALUES ('DM') RETURNING id`).Scan(&dmRoomID)
+		if err != nil {
+			JSONError(w, "Failed to create room", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = tx.Exec(
+			`INSERT INTO room_members (room_id, user_id) VALUES ($1, $2), ($1, $3)`,
+			dmRoomID, userID, partnerID,
+		)
+		if err != nil {
+			JSONError(w, "Failed to add members", http.StatusInternalServerError)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			JSONError(w, "Failed to commit", http.StatusInternalServerError)
+			return
+		}
+		// Auto-subscribe both users to the new permanent DM room
+		if e := chat.GetEngine(); e != nil {
+			e.JoinRoomForUser(userID, dmRoomID)
+			e.JoinRoomForUser(partnerID, dmRoomID)
+		}
+		// Notify both users about the new DM room
+		acceptPayload := map[string]interface{}{
+			config.FieldType:   config.MsgTypeFriendAccepted,
+			config.FieldRoomID: req.RoomID,
+			"dm_room_id":       dmRoomID,
+		}
+		notifyUser(ctx, userID, acceptPayload)
+		notifyUser(ctx, partnerID, acceptPayload)
+
+		// Close the stranger room — they now have a permanent DM
+		rdb.Set(ctx, config.CHAT_CLOSED_COLON+req.RoomID, "1", 24*time.Hour)
+		rdb.Del(ctx, config.STRANGER_MEMBERS_COLON+req.RoomID) // clean up members set
+		closedEvent, _ := json.Marshal(map[string]string{
+			config.FieldType:   config.MsgTypeRoomClosed,
+			config.FieldRoomID: req.RoomID,
+		})
+		redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent)
+
+		JSONSuccess(w, map[string]string{
+			"status":     "friends",
+			"message":    "You are now friends!",
+			"dm_room_id": dmRoomID,
+		})
+		return
+	}
+
+	// ---- Skip / Block ----
+
+	// 1. If the action is "block", save it to Postgres
+	if req.Action == config.ActionBlock && partnerID != "" {
+		query := `
+			INSERT INTO blocked_users (blocker_id, blocked_id) 
+			VALUES ($1, $2) ON CONFLICT DO NOTHING;
+		`
+		postgress.Exec(query, userID, partnerID)
+	}
+
+	// 2. Notify the partner that the stranger disconnected
+	if partnerID != "" && req.RoomID != "" {
+		notifyUser(ctx, partnerID, map[string]interface{}{
+			config.FieldType:   config.MsgTypeStrangerDisconnected,
+			config.FieldRoomID: req.RoomID,
+		})
+	}
+
+	// 3. Mark the stranger room as closed in Redis (24h TTL)
+	if req.RoomID != "" {
+		rdb.Set(ctx, config.CHAT_CLOSED_COLON+req.RoomID, "1", 24*time.Hour)
+		rdb.Del(ctx, config.STRANGER_MEMBERS_COLON+req.RoomID) // clean up members set
+
+		// Broadcast room_closed to all servers so every connected client gets kicked
+		closedEvent, _ := json.Marshal(map[string]string{
+			config.FieldType:   config.MsgTypeRoomClosed,
+			config.FieldRoomID: req.RoomID,
+		})
+		redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent)
+	}
+
+	// 4. Clean up any pending friend requests for this room
+	if req.RoomID != "" {
+		rdb.Del(ctx,
+			config.FRIEND_REQUEST_COLON+req.RoomID+":"+userID,
+			config.FRIEND_REQUEST_COLON+req.RoomID+":"+partnerID,
+		)
+		// Also clean up Postgres friend requests for this stranger room
+		if partnerID != "" {
+			postgress.Exec(
+				`DELETE FROM friend_requests WHERE stranger_room_id = $1
+				 AND ((sender_id = $2 AND receiver_id = $3) OR (sender_id = $3 AND receiver_id = $2))`,
+				req.RoomID, userID, partnerID,
+			)
+		}
+	}
+
+	JSONMessage(w, "success", "Action processed")
+}
+
+// notifyUser sends a private system event to a user via Redis Pub/Sub.
+func notifyUser(ctx context.Context, targetUserID string, data map[string]interface{}) {
+	envelope := map[string]interface{}{
+		config.FieldType: config.MsgTypePrivate,
+		config.FieldTo:   targetUserID,
+		config.FieldFrom: config.SystemSender,
+		config.FieldData: data,
+	}
+	envBytes, err := json.Marshal(envelope)
+	if err != nil {
+		log.Printf("[match] Failed to marshal notification: %v", err)
+		return
+	}
+	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, envBytes)
+}
+
+// ---------------------------------------------------------------------------
+// Report User
+// ---------------------------------------------------------------------------
+
+type ReportRequest struct {
+	ReportedUsername string `json:"reported_username"`
+	Reason           string `json:"reason"`
+}
+
+// ReportUserHandler saves a user report to Postgres for moderation review.
+//
+// POST /api/v1/match/report (requires auth)
+func ReportUserHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req ReportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ReportedUsername == "" || req.Reason == "" {
+		JSONError(w, "Invalid request or missing fields", http.StatusBadRequest)
+		return
+	}
+
+	// Resolve username to UUID
+	var reportedID string
+	err := postgress.GetRawDB().QueryRow(
+		`SELECT id FROM users WHERE username = $1`, req.ReportedUsername,
+	).Scan(&reportedID)
+	if err != nil || reportedID == "" {
+		JSONError(w, "Reported user not found", http.StatusNotFound)
+		return
+	}
+
+	query := `INSERT INTO user_reports (reporter_id, reported_id, reason) VALUES ($1, $2, $3)`
+	_, err = postgress.Exec(query, userID, reportedID, req.Reason)
+	if err != nil {
+		JSONError(w, "Failed to submit report", http.StatusInternalServerError)
+		return
+	}
+
+	JSONMessage(w, "success", "User reported successfully")
+}
