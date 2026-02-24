@@ -107,10 +107,10 @@ func upsertUser(googleID, email, name, avatar string) (string, bool, error) {
 	var isBanned bool
 
 	// ON CONFLICT requires a UNIQUE constraint on the google_id column.
-	// On first insert username defaults to the email address (before the @).
+	// Username is NULL on first signup — the user sets it later via PATCH/PUT.
 	query := `
-		INSERT INTO users (google_id, email, name, username, avatar_url)
-		VALUES ($1, $2, $3, SPLIT_PART($2, '@', 1), $4)
+		INSERT INTO users (google_id, email, name, avatar_url)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (google_id) DO UPDATE 
 		SET email = EXCLUDED.email, name = EXCLUDED.name, avatar_url = EXCLUDED.avatar_url, updated_at = NOW()
 		RETURNING id, is_banned;

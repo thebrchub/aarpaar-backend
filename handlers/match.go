@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -20,16 +19,11 @@ import (
 // Matchmaking: Enter Queue
 // ---------------------------------------------------------------------------
 
-type MatchEnterRequest struct {
-	MyGender         string `json:"my_gender"`         // "M", "F", or "Any"
-	GenderPreference string `json:"gender_preference"` // "M", "F", or "Any"
-}
-
 // EnterMatchQueueHandler tries to find an instant stranger match.
 // If no match is found, the user is placed in a Redis queue to wait.
 //
 // How it works:
-//  1. Pop a random user from the opposite queue
+//  1. Pop a random user from the queue
 //  2. Check if they've blocked each other in Postgres
 //  3. If clean — create a room and notify both via WebSocket
 //  4. If blocked — put them back and try again (up to MaxMatchAttempts times)
@@ -43,35 +37,18 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req MatchEnterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Default to "Any" if not specified
-	if req.MyGender == "" {
-		req.MyGender = config.GenderAny
-	}
-	if req.GenderPreference == "" {
-		req.GenderPreference = config.GenderAny
-	}
-
 	ctx := context.Background()
 	rdb := redis.GetRawClient()
 
-	// The queue I should look in (people who match my preference)
-	targetQueue := fmt.Sprintf(config.MatchQueueFormat, req.GenderPreference, req.MyGender)
-
-	// The queue I should join if nobody is available
-	myQueue := fmt.Sprintf(config.MatchQueueFormat, req.MyGender, req.GenderPreference)
+	// Single queue for all users (no gender preference)
+	queue := config.DefaultMatchQueue
 
 	// Try to find a partner who hasn't blocked us (and vice versa)
 	var matchedPartner string
 
 	for range config.MaxMatchAttempts {
-		// Pull a random person from the target queue
-		partnerID, err := rdb.SPop(ctx, targetQueue).Result()
+		// Pull a random person from the queue
+		partnerID, err := rdb.SPop(ctx, queue).Result()
 		if err != nil || partnerID == "" {
 			break // Queue is empty
 		}
@@ -99,7 +76,7 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Blocked — put them back for someone else to match with
-		rdb.SAdd(ctx, targetQueue, partnerID)
+		rdb.SAdd(ctx, queue, partnerID)
 	}
 
 	// Route the result
@@ -130,7 +107,7 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// No match — add ourselves to the queue and wait for someone else
-	rdb.SAdd(ctx, myQueue, userID)
+	rdb.SAdd(ctx, queue, userID)
 	JSONMessage(w, "queued", "Waiting for a match...")
 }
 
@@ -164,11 +141,6 @@ func notifyMatch(ctx context.Context, targetUser, roomID string) {
 // Matchmaking: Leave Queue
 // ---------------------------------------------------------------------------
 
-type MatchLeaveRequest struct {
-	MyGender         string `json:"my_gender"`
-	GenderPreference string `json:"gender_preference"`
-}
-
 // LeaveMatchQueueHandler removes the user from the matchmaking queue.
 // Call this when the user navigates away from the matching screen.
 //
@@ -180,22 +152,8 @@ func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req MatchLeaveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if req.MyGender == "" {
-		req.MyGender = config.GenderAny
-	}
-	if req.GenderPreference == "" {
-		req.GenderPreference = config.GenderAny
-	}
-
-	// Remove from the exact Redis set they were placed in
-	myQueue := fmt.Sprintf(config.MatchQueueFormat, req.MyGender, req.GenderPreference)
-	redis.GetRawClient().SRem(context.Background(), myQueue, userID)
+	// Remove from the single matchmaking queue
+	redis.GetRawClient().SRem(context.Background(), config.DefaultMatchQueue, userID)
 
 	JSONMessage(w, "success", "Removed from queue")
 }

@@ -38,6 +38,9 @@ var migrationStatements = []string{
         name        TEXT NOT NULL,
         username    VARCHAR(30),
         avatar_url  TEXT DEFAULT '',
+        mobile      TEXT,
+        gender      TEXT NOT NULL DEFAULT 'Any',
+        is_private  BOOLEAN NOT NULL DEFAULT false,
         is_banned   BOOLEAN NOT NULL DEFAULT false,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -51,9 +54,6 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_users_name_trgm ON users USING gin (name gin_trgm_ops)`,
 
 	`CREATE INDEX IF NOT EXISTS idx_users_not_banned ON users (id) WHERE is_banned = false`,
-
-	// is_private: controls whether strangers can DM directly (like Instagram)
-	`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT false`,
 
 	// ===================================================================
 	// TABLE: device_tokens
@@ -90,6 +90,7 @@ var migrationStatements = []string{
         room_id      UUID NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
         user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        status       TEXT NOT NULL DEFAULT 'active',
         PRIMARY KEY (room_id, user_id)
     )`,
 
@@ -99,9 +100,6 @@ var migrationStatements = []string{
 	// SELECT room_id FROM room_members WHERE user_id = $1 AND status = 'active'
 	// This enables an index-only scan (no heap lookups) on every WS connect.
 	`CREATE INDEX IF NOT EXISTS idx_room_members_user_active ON room_members (user_id) INCLUDE (room_id) WHERE status = 'active'`,
-
-	// status: "active" (normal) or "pending" (DM request, Instagram-style)
-	`ALTER TABLE room_members ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
 
 	// ===================================================================
 	// TABLE: messages

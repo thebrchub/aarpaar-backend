@@ -28,7 +28,7 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT COALESCE(
 			(SELECT row_to_json(t)::text FROM (
-				SELECT id, email, name, username, avatar_url, is_private, created_at
+				SELECT id, email, name, username, avatar_url, mobile, gender, is_private, created_at
 				FROM users WHERE id = $1 AND is_banned = false
 			) t),
 			''
@@ -90,6 +90,41 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// CheckUsernameHandler checks if a username is available.
+//
+// GET /api/v1/users/check-username?username=ninja (requires auth)
+// ---------------------------------------------------------------------------
+
+func CheckUsernameHandler(w http.ResponseWriter, r *http.Request) {
+	_, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	username := r.URL.Query().Get("username")
+	if username == "" || len(username) > 30 {
+		JSONError(w, "Username is required and must be <= 30 characters", http.StatusBadRequest)
+		return
+	}
+
+	var exists bool
+	err := postgress.GetRawDB().QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, username,
+	).Scan(&exists)
+	if err != nil {
+		JSONError(w, "Check failed", http.StatusInternalServerError)
+		return
+	}
+
+	if exists {
+		JSONMessage(w, "taken", "Username is already taken")
+	} else {
+		JSONMessage(w, "available", "Username is available")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // UpdateMeHandler partially updates the authenticated user's profile.
 // Only the fields provided in the body are updated (PATCH semantics).
 //
@@ -107,6 +142,8 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username  *string `json:"username"`
 		Name      *string `json:"name"`
+		Mobile    *string `json:"mobile"`
+		Gender    *string `json:"gender"`
 		IsPrivate *bool   `json:"is_private"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -114,9 +151,25 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if body.Username == nil && body.Name == nil && body.IsPrivate == nil {
+	if body.Username == nil && body.Name == nil && body.Mobile == nil && body.Gender == nil && body.IsPrivate == nil {
 		JSONError(w, "Nothing to update", http.StatusBadRequest)
 		return
+	}
+
+	// Username is immutable once set — reject attempts to change it
+	if body.Username != nil {
+		var existingUsername *string
+		err := postgress.GetRawDB().QueryRow(
+			`SELECT username FROM users WHERE id = $1`, userID,
+		).Scan(&existingUsername)
+		if err != nil {
+			JSONError(w, "Failed to verify username", http.StatusInternalServerError)
+			return
+		}
+		if existingUsername != nil && *existingUsername != "" {
+			JSONError(w, "Username cannot be changed once set", http.StatusConflict)
+			return
+		}
 	}
 
 	// Build dynamic SET clause
@@ -134,6 +187,16 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		args = append(args, *body.Name)
 		i++
 	}
+	if body.Mobile != nil {
+		sets = append(sets, fmt.Sprintf("mobile = $%d", i))
+		args = append(args, *body.Mobile)
+		i++
+	}
+	if body.Gender != nil {
+		sets = append(sets, fmt.Sprintf("gender = $%d", i))
+		args = append(args, *body.Gender)
+		i++
+	}
 	if body.IsPrivate != nil {
 		sets = append(sets, fmt.Sprintf("is_private = $%d", i))
 		args = append(args, *body.IsPrivate)
@@ -145,7 +208,7 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		WITH updated AS (
 			UPDATE users SET %s
 			WHERE id = $%d AND is_banned = false
-			RETURNING id, email, name, username, avatar_url, is_private, created_at
+			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, created_at
 		)
 		SELECT COALESCE(
 			(SELECT row_to_json(updated)::text FROM updated),
@@ -182,9 +245,11 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Username  string `json:"username"`
-		Name      string `json:"name"`
-		IsPrivate *bool  `json:"is_private"`
+		Username  string  `json:"username"`
+		Name      string  `json:"name"`
+		Mobile    *string `json:"mobile"`
+		Gender    *string `json:"gender"`
+		IsPrivate *bool   `json:"is_private"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		JSONError(w, "Invalid request body", http.StatusBadRequest)
@@ -196,16 +261,40 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Username is immutable once set — reject attempts to change it
+	var existingUsername *string
+	err := postgress.GetRawDB().QueryRow(
+		`SELECT username FROM users WHERE id = $1`, userID,
+	).Scan(&existingUsername)
+	if err != nil {
+		JSONError(w, "Failed to verify username", http.StatusInternalServerError)
+		return
+	}
+	if existingUsername != nil && *existingUsername != "" && *existingUsername != body.Username {
+		JSONError(w, "Username cannot be changed once set", http.StatusConflict)
+		return
+	}
+
 	isPrivate := false
 	if body.IsPrivate != nil {
 		isPrivate = *body.IsPrivate
 	}
 
+	mobile := ""
+	if body.Mobile != nil {
+		mobile = *body.Mobile
+	}
+
+	gender := "Any"
+	if body.Gender != nil {
+		gender = *body.Gender
+	}
+
 	query := `
 		WITH updated AS (
-			UPDATE users SET username = $1, name = $2, is_private = $3
-			WHERE id = $4 AND is_banned = false
-			RETURNING id, email, name, username, avatar_url, is_private, created_at
+			UPDATE users SET username = $1, name = $2, is_private = $3, mobile = $4, gender = $5
+			WHERE id = $6 AND is_banned = false
+			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, created_at
 		)
 		SELECT COALESCE(
 			(SELECT row_to_json(updated)::text FROM updated),
@@ -214,7 +303,7 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	var rawJSON string
-	err := postgress.GetRawDB().QueryRow(query, body.Username, body.Name, isPrivate, userID).Scan(&rawJSON)
+	err = postgress.GetRawDB().QueryRow(query, body.Username, body.Name, isPrivate, mobile, gender, userID).Scan(&rawJSON)
 	if err != nil || rawJSON == "" {
 		log.Printf("[PutMe] DB error: %v", err)
 		JSONError(w, "Update failed", http.StatusInternalServerError)
