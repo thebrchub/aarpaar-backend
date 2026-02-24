@@ -78,6 +78,9 @@ const (
 // Usage: fmt.Sprintf(MatchQueueFormat, gender, seekingGender)
 const MatchQueueFormat = "match_queue:%s_seeking_%s"
 
+// DefaultMatchQueue is the single matchmaking queue (no gender preference).
+const DefaultMatchQueue = "match_queue:Any_seeking_Any"
+
 // ---------------------------------------------------------------------------
 // Match Action Types
 // ---------------------------------------------------------------------------

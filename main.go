@@ -95,6 +95,7 @@ func main() {
 	mux.HandleFunc("PATCH /api/v1/users/me", mw.Auth(handlers.UpdateMeHandler))
 	mux.HandleFunc("PUT /api/v1/users/me", mw.Auth(handlers.PutMeHandler))
 	mux.HandleFunc("GET /api/v1/users/search", mw.Auth(handlers.SearchUsersHandler))
+	mux.HandleFunc("GET /api/v1/users/check-username", mw.Auth(handlers.CheckUsernameHandler))
 
 	// --- Rooms (protected) ---
 	mux.HandleFunc("GET /api/v1/rooms", mw.Auth(handlers.GetRoomsHandler))

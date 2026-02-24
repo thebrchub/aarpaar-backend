@@ -347,6 +347,28 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    /* ------------------------------------------------------------------ */
+    /*  Username Setup Modal                                              */
+    /* ------------------------------------------------------------------ */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 10000;
+      background: rgba(0,0,0,.75); backdrop-filter: blur(4px);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .modal-box {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 30px 36px; max-width: 420px; width: 90%;
+      box-shadow: 0 8px 40px rgba(0,0,0,.5);
+    }
+    .modal-box h2 {
+      font-size: 1.1rem; margin-bottom: 6px;
+      background: linear-gradient(135deg, var(--accent), var(--success));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .modal-box p { font-size: .82rem; color: var(--text-muted); margin-bottom: 18px; }
+    .modal-box .form-row { margin-bottom: 14px; }
+    .modal-box .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
   </style>
 </head>
 <body>
@@ -356,7 +378,7 @@
   <h1>Aarpaar Test Console</h1>
   <div class="sep"></div>
   <label>API Base URL</label>
-  <input type="text" id="baseUrl" value="http://localhost:8080" />
+  <input type="text" id="baseUrl" value="https://aarpaar-api.brchub.me" />
   <div class="health-badge" onclick="checkHealth()" title="Click to check">
     <span class="health-dot" id="healthDot"></span>
     <span id="healthText">Check Health</span>
@@ -521,12 +543,29 @@
           <code>/api/v1/users/me</code> — Update one or both fields. Only provided fields are changed.
         </p>
         <div class="form-row">
-          <label>Username (optional)</label>
-          <input type="text" id="patchUsername" placeholder="New username..." />
+          <label>Username <span style="font-size:.65rem;color:var(--warn)">(one-time only — cannot be changed once set)</span></label>
+          <div class="inline-form">
+            <input type="text" id="patchUsername" placeholder="New username..." maxlength="30" />
+            <button class="btn btn-outline btn-sm" onclick="checkUsernameAvailability()" style="white-space:nowrap">Check</button>
+          </div>
+          <span id="usernameCheckResult" style="font-size:.72rem;margin-top:4px;display:block"></span>
         </div>
         <div class="form-row">
           <label>Name (optional)</label>
           <input type="text" id="patchName" placeholder="New display name..." />
+        </div>
+        <div class="form-row">
+          <label>Mobile (optional)</label>
+          <input type="text" id="patchMobile" placeholder="+91xxxxxxxxxx" />
+        </div>
+        <div class="form-row">
+          <label>Gender (optional)</label>
+          <select id="patchGender">
+            <option value="">— no change —</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+            <option value="Any">Any / Prefer not to say</option>
+          </select>
         </div>
         <div class="toggle-row">
           <label class="toggle">
@@ -547,12 +586,24 @@
           <code>/api/v1/users/me</code> — Replace both username and name. Both fields required.
         </p>
         <div class="form-row">
-          <label>Username (required)</label>
-          <input type="text" id="putUsername" placeholder="Username..." />
+          <label>Username (required) <span style="font-size:.65rem;color:var(--warn)">(immutable once set)</span></label>
+          <input type="text" id="putUsername" placeholder="Username..." maxlength="30" />
         </div>
         <div class="form-row">
           <label>Name (required)</label>
           <input type="text" id="putName" placeholder="Display name..." />
+        </div>
+        <div class="form-row">
+          <label>Mobile (optional)</label>
+          <input type="text" id="putMobile" placeholder="+91xxxxxxxxxx" />
+        </div>
+        <div class="form-row">
+          <label>Gender</label>
+          <select id="putGender">
+            <option value="Any">Any / Prefer not to say</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+          </select>
         </div>
         <div class="toggle-row">
           <label class="toggle">
@@ -726,24 +777,8 @@
       <div class="card">
         <h3><span class="badge badge-post">POST</span> Enter Match Queue</h3>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-          <code>/api/v1/match/enter</code> — Enter the matchmaking queue.
+          <code>/api/v1/match/enter</code> — Enter the matchmaking queue. Matches randomly with any available user.
         </p>
-        <div class="form-row">
-          <label>My Gender</label>
-          <select id="matchMyGender">
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-            <option value="Any">Any</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>Gender Preference</label>
-          <select id="matchGenderPref">
-            <option value="Any">Any</option>
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-          </select>
-        </div>
         <button class="btn btn-success" onclick="enterMatchQueue()">Enter Queue</button>
         <div id="enterMatchResponse" class="response-panel hidden"></div>
       </div>
@@ -754,22 +789,6 @@
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
           <code>/api/v1/match/leave</code> — Leave the matchmaking queue.
         </p>
-        <div class="form-row">
-          <label>My Gender</label>
-          <select id="leaveMyGender">
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-            <option value="Any">Any</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>Gender Preference</label>
-          <select id="leaveGenderPref">
-            <option value="Any">Any</option>
-            <option value="M">Male</option>
-            <option value="F">Female</option>
-          </select>
-        </div>
         <button class="btn btn-danger" onclick="leaveMatchQueue()">Leave Queue</button>
         <div id="leaveMatchResponse" class="response-panel hidden"></div>
       </div>
@@ -923,6 +942,25 @@
 
 </div>
 
+<!-- Username Setup Modal (shown when user has no username after login) -->
+<div class="modal-overlay hidden" id="usernameModal">
+  <div class="modal-box">
+    <h2>Welcome! Set your username</h2>
+    <p>You need to choose a unique username before you can use Aarpaar. This cannot be changed later.</p>
+    <div class="form-row">
+      <label>Username</label>
+      <div class="inline-form">
+        <input type="text" id="modalUsername" placeholder="Pick a username..." maxlength="30" />
+        <button class="btn btn-outline btn-sm" onclick="checkModalUsername()" style="white-space:nowrap">Check</button>
+      </div>
+      <span id="modalUsernameStatus" style="font-size:.72rem;margin-top:4px;display:block"></span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="submitModalUsername()" id="modalSubmitBtn">Set Username</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast Container -->
 <div class="toast-container" id="toastContainer"></div>
 
@@ -936,6 +974,10 @@ let refreshTokenStored = localStorage.getItem('aarpaar_refresh_token') || '';
 let ws = null;
 let heartbeatInterval = null;
 let isRefreshing = false; // prevents concurrent refresh attempts
+let wsAutoReconnect = true; // auto-reconnect on disconnect
+let wsReconnectTimer = null;
+let wsManualDisconnect = false; // true when user clicks Disconnect
+let currentUserProfile = null; // cached profile data
 
 // Update indicator on load
 if (accessToken) {
@@ -992,6 +1034,8 @@ function setManualToken() {
   saveToken(t);
   document.getElementById('accessTokenDisplay').textContent = t;
   toast('Token saved', 'success');
+  // Auto-connect WebSocket and check if username is set
+  postLoginFlow();
 }
 
 function copyText(elId) {
@@ -1131,6 +1175,8 @@ function handleGoogleCallback(response) {
         document.getElementById('refreshTokenDisplay').textContent = r.data.refresh_token || '—';
         document.getElementById('userIdDisplay').textContent = r.data.user_id || '—';
         toast('Logged in successfully!', 'success');
+        // Auto-connect WebSocket and check if username is set
+        postLoginFlow();
       } else {
         toast('Login failed', 'error');
       }
@@ -1165,23 +1211,144 @@ async function getMyProfile() {
   const el = document.getElementById('profileResult');
   if (r.data && r.data.id) {
     const d = r.data;
+    currentUserProfile = d;
     el.innerHTML = `
       <div class="profile">
         <img src="${escapeHtml(d.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(d.name || 'U'))}" alt="avatar" />
         <div class="info">
           <h4>${escapeHtml(d.name || 'Unknown')} ${d.is_private ? '<span style="font-size:.7rem;color:var(--warn)">🔒 Private</span>' : '<span style="font-size:.7rem;color:var(--text-muted)">Public</span>'}</h4>
           <p>@${escapeHtml(d.username || '—')} &bull; ${escapeHtml(d.email || '')}</p>
+          <p style="font-size:.72rem;color:var(--text-muted)">Gender: ${escapeHtml(d.gender || 'Any')} &bull; Mobile: ${escapeHtml(d.mobile || '—')}</p>
           <p style="font-family:var(--mono);font-size:.7rem;color:var(--text-muted)">${escapeHtml(d.id)}</p>
         </div>
       </div>`;
-    // Sync privacy toggles in edit forms
+    // Sync edit form fields
     if (d.is_private !== undefined) {
       document.getElementById('patchIsPrivate').checked = d.is_private;
       document.getElementById('putIsPrivate').checked = d.is_private;
     }
+    // If username is already set, disable it in edit forms
+    if (d.username) {
+      document.getElementById('patchUsername').value = d.username;
+      document.getElementById('patchUsername').disabled = true;
+      document.getElementById('patchUsername').style.opacity = '0.5';
+      document.getElementById('putUsername').value = d.username;
+      document.getElementById('putUsername').disabled = true;
+      document.getElementById('putUsername').style.opacity = '0.5';
+    } else {
+      document.getElementById('patchUsername').disabled = false;
+      document.getElementById('patchUsername').style.opacity = '1';
+      document.getElementById('putUsername').disabled = false;
+      document.getElementById('putUsername').style.opacity = '1';
+    }
+    if (d.gender) document.getElementById('putGender').value = d.gender;
   } else {
     el.innerHTML = '<div class="empty-state">No profile data</div>';
   }
+}
+
+// ======================================================================
+//  Profile helpers: fetch & cache, username check, post-login flow
+// ======================================================================
+async function fetchAndCacheProfile() {
+  try {
+    const resp = await fetch(BASE + '/api/v1/users/me', { headers: authHeaders() });
+    if (resp.ok) {
+      const json = await resp.json();
+      currentUserProfile = json.data || json;
+      // Re-lock username fields if now set
+      if (currentUserProfile.username) {
+        document.getElementById('patchUsername').value = currentUserProfile.username;
+        document.getElementById('patchUsername').disabled = true;
+        document.getElementById('patchUsername').style.opacity = '0.5';
+        document.getElementById('putUsername').value = currentUserProfile.username;
+        document.getElementById('putUsername').disabled = true;
+        document.getElementById('putUsername').style.opacity = '0.5';
+      }
+    }
+  } catch(e) { console.warn('fetchAndCacheProfile error', e); }
+}
+
+async function checkUsernameAvailability() {
+  const u = document.getElementById('patchUsername').value.trim();
+  if (!u) return;
+  const resultEl = document.getElementById('usernameCheckResult');
+  resultEl.textContent = 'Checking…';
+  try {
+    const resp = await fetch(BASE + '/api/v1/users/check-username?username=' + encodeURIComponent(u), { headers: authHeaders() });
+    const json = await resp.json();
+    if (json.status === 'available') {
+      resultEl.textContent = '✓ Available';
+      resultEl.style.color = 'var(--success)';
+    } else {
+      resultEl.textContent = '✗ Taken';
+      resultEl.style.color = 'var(--error)';
+    }
+  } catch(e) {
+    resultEl.textContent = 'Error checking';
+    resultEl.style.color = 'var(--error)';
+  }
+}
+
+async function checkModalUsername() {
+  const u = document.getElementById('modalUsername').value.trim();
+  const statusEl = document.getElementById('modalUsernameStatus');
+  if (!u) { statusEl.textContent = ''; return; }
+  statusEl.textContent = 'Checking…';
+  statusEl.style.color = 'var(--text-muted)';
+  try {
+    const resp = await fetch(BASE + '/api/v1/users/check-username?username=' + encodeURIComponent(u), { headers: authHeaders() });
+    const json = await resp.json();
+    if (json.status === 'available') {
+      statusEl.textContent = '✓ Available';
+      statusEl.style.color = 'var(--success)';
+    } else {
+      statusEl.textContent = '✗ Username taken';
+      statusEl.style.color = 'var(--error)';
+    }
+  } catch(e) {
+    statusEl.textContent = 'Error';
+    statusEl.style.color = 'var(--error)';
+  }
+}
+
+async function submitModalUsername() {
+  const u = document.getElementById('modalUsername').value.trim();
+  if (!u) return toast('Please enter a username', 'error');
+  // Verify available first
+  try {
+    const chk = await fetch(BASE + '/api/v1/users/check-username?username=' + encodeURIComponent(u), { headers: authHeaders() });
+    const chkJson = await chk.json();
+    if (chkJson.status !== 'available') return toast('Username is already taken', 'error');
+  } catch(e) { return toast('Could not verify username', 'error'); }
+  // Submit via PATCH
+  try {
+    const resp = await fetch(BASE + '/api/v1/users/me', {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u })
+    });
+    if (resp.ok) {
+      toast('Username set successfully!', 'success');
+      document.getElementById('usernameModal').classList.add('hidden');
+      fetchAndCacheProfile();
+    } else {
+      const err = await resp.json();
+      toast(err.message || 'Failed to set username', 'error');
+    }
+  } catch(e) { toast('Network error', 'error'); }
+}
+
+async function postLoginFlow() {
+  // 1. Fetch profile
+  await fetchAndCacheProfile();
+  // 2. If no username, show mandatory modal
+  if (currentUserProfile && !currentUserProfile.username) {
+    document.getElementById('usernameModal').classList.remove('hidden');
+  }
+  // 3. Auto-connect WebSocket
+  deriveWsUrl();
+  wsConnect();
 }
 
 async function searchUsers() {
@@ -1272,26 +1439,19 @@ async function getRoomMessages() {
 //  MATCH
 // ======================================================================
 async function enterMatchQueue() {
-  const body = {
-    my_gender: document.getElementById('matchMyGender').value,
-    gender_preference: document.getElementById('matchGenderPref').value
-  };
-  const r = await apiCall('POST', '/api/v1/match/enter', body, 'enterMatchResponse');
+  const r = await apiCall('POST', '/api/v1/match/enter', {}, 'enterMatchResponse');
   if (r.data && r.data.room_id) {
     document.getElementById('wsRoomId').value = r.data.room_id;
     document.getElementById('wsMsgRoomId').value = r.data.room_id;
     document.getElementById('wsTypingRoomId').value = r.data.room_id;
     document.getElementById('actionRoomId').value = r.data.room_id;
     toast('Matched! Room: ' + r.data.room_id + ' — auto-subscribed, go to WebSocket tab to chat', 'success');
+    getRooms(); // auto-refresh rooms
   }
 }
 
 async function leaveMatchQueue() {
-  const body = {
-    my_gender: document.getElementById('leaveMyGender').value,
-    gender_preference: document.getElementById('leaveGenderPref').value
-  };
-  await apiCall('POST', '/api/v1/match/leave', body, 'leaveMatchResponse');
+  await apiCall('POST', '/api/v1/match/leave', {}, 'leaveMatchResponse');
 }
 
 async function matchAction() {
@@ -1349,6 +1509,7 @@ function deriveWsUrl() {
 }
 
 function wsConnect() {
+  wsManualDisconnect = false;
   if (ws && ws.readyState <= 1) {
     toast('Already connected', 'info');
     return;
@@ -1358,11 +1519,6 @@ function wsConnect() {
     return;
   }
   const url = document.getElementById('wsUrl').value.trim() || deriveWsUrl();
-
-  // The Gorilla upgrader needs the token in the header, but browser WebSocket
-  // doesn't support custom headers. We'll pass it as a query param instead,
-  // OR if the backend reads it from a protocol, we try sub-protocol.
-  // Most common workaround: pass token as query param.
   const urlWithToken = url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(accessToken);
 
   wsLog('Connecting to ' + url + ' ...', 'system');
@@ -1373,6 +1529,7 @@ function wsConnect() {
   } catch (e) {
     wsLog('Connection error: ' + e.message, 'err');
     updateWsStatus(false);
+    scheduleReconnect();
     return;
   }
 
@@ -1380,12 +1537,14 @@ function wsConnect() {
     wsLog('Connected! Rooms are auto-subscribed by the server.', 'system');
     updateWsStatus(true);
     toast('WebSocket connected — rooms auto-subscribed', 'success');
+    wsAutoReconnect = true; // enable auto-reconnect after first successful connect
   };
 
   ws.onclose = (e) => {
     wsLog(`Disconnected (code=${e.code}, reason=${e.reason || 'none'})`, 'system');
     updateWsStatus(false);
     if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+    scheduleReconnect();
   };
 
   ws.onerror = (e) => {
@@ -1396,36 +1555,44 @@ function wsConnect() {
   ws.onmessage = (e) => {
     let display = e.data;
     try {
-      const parsed = JSON.parse(e.data);
+      let parsed = JSON.parse(e.data);
+      // Unwrap private envelope: { type:"private", to:"...", data:{ ... } }
+      if (parsed.type === 'private' && parsed.data) {
+        parsed = parsed.data;
+      }
       display = JSON.stringify(parsed, null, 2);
 
-      // Special handling for match_found
       if (parsed.type === 'match_found') {
-        toast('Match found! Room: ' + (parsed.roomId || ''), 'success');
-        if (parsed.roomId) {
-          document.getElementById('wsRoomId').value = parsed.roomId;
-          document.getElementById('wsMsgRoomId').value = parsed.roomId;
-          document.getElementById('wsTypingRoomId').value = parsed.roomId;
-          document.getElementById('actionRoomId').value = parsed.roomId;
+        const rid = parsed.roomId || parsed.room_id || '';
+        toast('Match found! Room: ' + rid, 'success');
+        if (rid) {
+          document.getElementById('wsRoomId').value = rid;
+          document.getElementById('wsMsgRoomId').value = rid;
+          document.getElementById('wsTypingRoomId').value = rid;
+          document.getElementById('actionRoomId').value = rid;
         }
+        getRooms(); // auto-refresh rooms list
       }
       if (parsed.type === 'stranger_disconnected') {
         toast('Stranger disconnected from ' + (parsed.roomId || ''), 'info');
       }
       if (parsed.type === 'room_closed') {
         toast('Room closed: ' + (parsed.roomId || ''), 'info');
+        getRooms();
       }
       if (parsed.type === 'friend_request') {
         toast('Friend request from ' + (parsed.username || parsed.from || ''), 'info');
       }
       if (parsed.type === 'friend_accepted') {
         toast('Friend accepted! You are now friends with ' + (parsed.from || ''), 'success');
+        getRooms();
       }
       if (parsed.type === 'dm_request') {
         toast('New DM request – Room: ' + (parsed.roomId || ''), 'info');
       }
       if (parsed.type === 'dm_accepted') {
         toast('Your DM was accepted! Room: ' + (parsed.roomId || ''), 'success');
+        getRooms();
       }
       if (parsed.type === 'error') {
         let errMsg = parsed.message || parsed.code;
@@ -1438,7 +1605,19 @@ function wsConnect() {
   };
 }
 
+function scheduleReconnect() {
+  if (wsManualDisconnect || !wsAutoReconnect) return;
+  if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+  wsLog('Auto-reconnect in 3s...', 'system');
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    if (!ws || ws.readyState > 1) wsConnect();
+  }, 3000);
+}
+
 function wsDisconnect() {
+  wsManualDisconnect = true;
+  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
   if (ws) {
     ws.close();
     ws = null;
@@ -1535,14 +1714,24 @@ async function patchProfile() {
   const body = {};
   const u = document.getElementById('patchUsername').value.trim();
   const n = document.getElementById('patchName').value.trim();
+  const m = document.getElementById('patchMobile').value.trim();
+  const g = document.getElementById('patchGender').value;
   const privCheckbox = document.getElementById('patchIsPrivate');
   if (u) body.username = u;
   if (n) body.name = n;
+  if (m) body.mobile = m;
+  if (g) body.gender = g;
   // Only send is_private if the checkbox was explicitly changed
   if (privCheckbox.dataset.changed === '1') body.is_private = privCheckbox.checked;
-  if (!u && !n && !('is_private' in body)) return toast('Enter at least one field or toggle privacy', 'error');
+  if (Object.keys(body).length === 0) return toast('Enter at least one field to update', 'error');
   const r = await apiCall('PATCH', '/api/v1/users/me', body, 'patchResponse');
-  if (r.status >= 200 && r.status < 300) toast('Profile updated!', 'success');
+  if (r.status >= 200 && r.status < 300) {
+    toast('Profile updated!', 'success');
+    // Refresh cached profile (username may have been set)
+    fetchAndCacheProfile();
+  } else if (r.status === 409) {
+    toast('Username cannot be changed once set', 'error');
+  }
   privCheckbox.dataset.changed = '';
 }
 // Track if privacy toggle was explicitly changed
@@ -1556,12 +1745,27 @@ async function putProfile() {
   const n = document.getElementById('putName').value.trim();
   if (!u || !n) return toast('Both username and name are required', 'error');
   const p = document.getElementById('putIsPrivate').checked;
-  const r = await apiCall('PUT', '/api/v1/users/me', { username: u, name: n, is_private: p }, 'putResponse');
-  if (r.status >= 200 && r.status < 300) toast('Profile replaced!', 'success');
+  const body = { username: u, name: n, is_private: p };
+  const m = document.getElementById('putMobile').value.trim();
+  if (m) body.mobile = m;
+  body.gender = document.getElementById('putGender').value;
+  const r = await apiCall('PUT', '/api/v1/users/me', body, 'putResponse');
+  if (r.status >= 200 && r.status < 300) {
+    toast('Profile replaced!', 'success');
+    fetchAndCacheProfile();
+  } else if (r.status === 409) {
+    toast('Username cannot be changed once set', 'error');
+  }
 }
 
-// Derive WS URL on load
-window.addEventListener('load', deriveWsUrl);
+// On page load: derive WS URL, auto-login if token present
+window.addEventListener('load', function() {
+  deriveWsUrl();
+  // If access token already exists (e.g. from previous session), run post-login flow
+  if (localStorage.getItem('access_token')) {
+    postLoginFlow();
+  }
+});
 
 // ======================================================================
 //  FRIENDS
