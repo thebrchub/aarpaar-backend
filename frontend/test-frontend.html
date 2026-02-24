@@ -375,6 +375,144 @@
     .modal-box p { font-size: .82rem; color: var(--text-muted); margin-bottom: 18px; }
     .modal-box .form-row { margin-bottom: 14px; }
     .modal-box .modal-actions { display: flex; gap: 10px; margin-top: 16px; }
+
+    /* ------------------------------------------------------------------ */
+    /*  Chat Tab – WhatsApp-style                                         */
+    /* ------------------------------------------------------------------ */
+    .chat-container {
+      display: flex; height: calc(100vh - 130px);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      overflow: hidden; background: var(--surface);
+    }
+    .chat-sidebar {
+      width: 340px; min-width: 280px; border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; background: var(--surface);
+    }
+    .chat-sidebar-header {
+      padding: 14px 16px; background: #075e54; color: #fff;
+      font-weight: 600; font-size: .95rem;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .chat-sidebar-header .refresh-btn {
+      background: rgba(255,255,255,.15); border: none; color: #fff;
+      padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: .75rem;
+    }
+    .chat-sidebar-header .refresh-btn:hover { background: rgba(255,255,255,.25); }
+    .chat-room-list { flex: 1; overflow-y: auto; }
+    .chat-room-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: background .15s;
+    }
+    .chat-room-item:hover { background: var(--surface2); }
+    .chat-room-item.active { background: var(--surface2); border-left: 3px solid #075e54; }
+    .chat-room-avatar {
+      width: 48px; height: 48px; border-radius: 50%; background: #2a3942;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem; font-weight: 600; color: #aebac1; flex-shrink: 0; overflow: hidden;
+    }
+    .chat-room-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .chat-room-details { flex: 1; min-width: 0; }
+    .chat-room-name {
+      font-weight: 600; font-size: .85rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .chat-room-preview {
+      font-size: .75rem; color: var(--text-muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;
+    }
+    .chat-room-meta {
+      display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0;
+    }
+    .chat-room-time { font-size: .65rem; color: var(--text-muted); }
+    .chat-unread-badge {
+      background: #25d366; color: #fff; font-size: .65rem; font-weight: 700;
+      padding: 1px 7px; border-radius: 10px; min-width: 20px; text-align: center;
+    }
+    .chat-main {
+      flex: 1; display: flex; flex-direction: column; background: #0b141a;
+    }
+    .chat-main-header {
+      padding: 12px 20px; background: #075e54; color: #fff;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .chat-main-header .chat-contact-name { font-weight: 600; font-size: .9rem; }
+    .chat-main-header .chat-typing-text {
+      font-size: .72rem; color: #a8d8b6; font-style: italic;
+    }
+    .chat-messages {
+      flex: 1; overflow-y: auto; padding: 16px 60px;
+      display: flex; flex-direction: column; gap: 4px;
+      background: #0b141a;
+    }
+    .chat-bubble {
+      max-width: 65%; padding: 8px 12px; border-radius: 8px;
+      font-size: .84rem; line-height: 1.4; position: relative; word-wrap: break-word;
+    }
+    .chat-bubble.sent {
+      align-self: flex-end; background: #005c4b; color: #e9edef; border-top-right-radius: 2px;
+    }
+    .chat-bubble.received {
+      align-self: flex-start; background: #1f2c34; color: #e9edef; border-top-left-radius: 2px;
+    }
+    .chat-bubble .bubble-text { margin-bottom: 2px; }
+    .chat-bubble .bubble-meta {
+      display: flex; align-items: center; justify-content: flex-end;
+      gap: 4px; font-size: .65rem; color: rgba(255,255,255,.5); margin-top: 2px;
+    }
+    .chat-bubble .bubble-ticks { font-size: .72rem; }
+    .chat-bubble .bubble-ticks.sent-tick { color: rgba(255,255,255,.45); }
+    .chat-bubble .bubble-ticks.delivered-tick { color: rgba(255,255,255,.45); }
+    .chat-bubble .bubble-ticks.read-tick { color: #53bdeb; }
+    .chat-bubble .bubble-ticks.pending-tick { color: rgba(255,255,255,.3); }
+    .chat-date-divider {
+      align-self: center; background: rgba(255,255,255,.08); color: var(--text-muted);
+      font-size: .7rem; padding: 4px 14px; border-radius: 6px; margin: 8px 0;
+    }
+    .chat-input-bar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px; background: #1f2c34; border-top: 1px solid var(--border);
+    }
+    .chat-input-bar input {
+      flex: 1; background: #2a3942; border: none; color: #e9edef;
+      padding: 10px 16px; border-radius: 24px; font-size: .85rem; outline: none;
+    }
+    .chat-input-bar input::placeholder { color: #8696a0; }
+    .chat-send-btn {
+      width: 42px; height: 42px; border-radius: 50%; border: none;
+      background: #00a884; color: #fff; font-size: 1.1rem; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: .15s; flex-shrink: 0;
+    }
+    .chat-send-btn:hover { background: #06cf9c; }
+    .chat-empty-state {
+      flex: 1; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; color: var(--text-muted); font-size: .9rem; gap: 10px;
+    }
+    .chat-empty-state .icon { font-size: 3rem; opacity: .3; }
+    .chat-dm-requests-section { border-bottom: 2px solid var(--border); }
+    .chat-dm-requests-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 16px; background: rgba(108,92,231,.1); cursor: pointer;
+      font-size: .78rem; font-weight: 600; color: var(--accent);
+    }
+    .chat-dm-req-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 16px; border-bottom: 1px solid var(--border); font-size: .8rem;
+    }
+    .chat-dm-req-item .dm-req-actions { margin-left: auto; display: flex; gap: 4px; }
+    .chat-load-more {
+      text-align: center; padding: 8px; font-size: .72rem;
+      color: var(--accent); cursor: pointer;
+    }
+    .chat-load-more:hover { text-decoration: underline; }
+    @media (max-width: 700px) {
+      .chat-sidebar { width: 100%; }
+      .chat-main { display: none; }
+      .chat-container.room-open .chat-sidebar { display: none; }
+      .chat-container.room-open .chat-main { display: flex; }
+      .chat-messages { padding: 12px 16px; }
+    }
   </style>
 </head>
 <body>
@@ -403,6 +541,7 @@
   <button class="tab-btn" data-tab="friends">Friends</button>
   <button class="tab-btn" data-tab="match">Match</button>
   <button class="tab-btn" data-tab="ws">WebSocket</button>
+  <button class="tab-btn" data-tab="chat">💬 Chat</button>
 </div>
 
 <!-- ===== CONTENT ===== -->
@@ -941,6 +1080,61 @@
         </h3>
         <div class="ws-log" id="wsLog">
           <div class="ws-entry system"><span class="ts">[--:--:--]</span> Waiting for connection...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== CHAT TAB ========== -->
+  <div id="tab-chat" class="tab-panel">
+    <div class="chat-container" id="chatContainer">
+      <!-- Sidebar -->
+      <div class="chat-sidebar">
+        <div class="chat-sidebar-header">
+          <span>Chats</span>
+          <button class="refresh-btn" onclick="chatLoadRooms()">&#8635; Refresh</button>
+        </div>
+        <!-- DM Requests -->
+        <div class="chat-dm-requests-section hidden" id="chatDmRequestsSection">
+          <div class="chat-dm-requests-header" onclick="toggleChatDmRequests()">
+            <span>Message Requests <span id="chatDmReqCount"></span></span>
+            <span id="chatDmReqArrow">&#9654;</span>
+          </div>
+          <div id="chatDmRequestsList" class="hidden"></div>
+        </div>
+        <!-- Room list -->
+        <div class="chat-room-list" id="chatRoomList">
+          <div class="chat-empty-state" style="padding:40px 20px">
+            <div class="icon">&#128172;</div>
+            <div>Connect WebSocket to load chats</div>
+          </div>
+        </div>
+      </div>
+      <!-- Main Chat Area -->
+      <div class="chat-main">
+        <div id="chatMainContent" style="display:flex;flex-direction:column;height:100%">
+          <div class="chat-empty-state" id="chatEmptyState">
+            <div class="icon">&#128172;</div>
+            <div>Select a conversation to start chatting</div>
+            <div style="font-size:.75rem">Messages appear here in real-time via WebSocket</div>
+          </div>
+          <!-- Active chat view (hidden by default) -->
+          <div id="chatActiveView" class="hidden" style="display:none;flex-direction:column;height:100%">
+            <div class="chat-main-header">
+              <div class="chat-room-avatar" id="chatHeaderAvatar" style="width:40px;height:40px;font-size:.9rem"></div>
+              <div>
+                <div class="chat-contact-name" id="chatHeaderName">&mdash;</div>
+                <div class="chat-typing-text hidden" id="chatTypingIndicator">typing...</div>
+              </div>
+              <div style="flex:1"></div>
+              <button class="btn btn-outline btn-sm" onclick="chatBackToList()" style="display:none" id="chatBackBtn">&larr; Back</button>
+            </div>
+            <div class="chat-messages" id="chatMessagesArea"></div>
+            <div class="chat-input-bar">
+              <input type="text" id="chatInput" placeholder="Type a message..." autocomplete="off" />
+              <button class="chat-send-btn" onclick="chatSendMessage()" title="Send">&#10148;</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1551,12 +1745,14 @@ function wsConnect() {
     updateWsStatus(true);
     toast('WebSocket connected — rooms auto-subscribed', 'success');
     wsAutoReconnect = true; // enable auto-reconnect after first successful connect
+    chatOnWsConnected();
   };
 
   ws.onclose = (e) => {
     wsLog(`Disconnected (code=${e.code}, reason=${e.reason || 'none'})`, 'system');
     updateWsStatus(false);
     if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+    chatOnWsDisconnected();
     scheduleReconnect();
   };
 
@@ -1619,6 +1815,7 @@ function wsConnect() {
         if (parsed.code === 'NOT_A_MEMBER') errMsg = '🚫 ' + errMsg;
         toast('WS Error: ' + errMsg, 'error');
       }
+      chatHandleWsEvent(parsed);
     } catch {}
     wsLog(display, 'inbound');
   };
@@ -1906,6 +2103,468 @@ async function rejectDMRequest() {
   const r = await apiCall('POST', '/api/v1/rooms/' + encodeURIComponent(roomId) + '/reject', null, 'dmReqActionResponse');
   if (r.status >= 200 && r.status < 300) { toast('DM request rejected', 'info'); getDMRequests(); }
 }
+
+// ======================================================================
+//  CHAT TAB — WhatsApp-style UI
+// ======================================================================
+const chatState = {
+  rooms: [],
+  friends: {},           // id/username → friend object
+  dmRequests: [],
+  activeRoomId: null,
+  messages: {},          // roomId → [msg objects]
+  roomMeta: {},          // roomId → {name, type, unread}
+  typingUsers: {},       // roomId → {userId: timeoutId}
+  myTypingTimeout: null,
+  amITyping: false,
+  oldestCursor: {},      // roomId → oldest msg id for pagination
+  hasMoreMessages: {},   // roomId → bool
+};
+
+// ---- lifecycle hooks (called from WS handlers) ----
+function chatOnWsConnected() {
+  chatLoadRooms();
+}
+
+function chatOnWsDisconnected() {
+  chatState.typingUsers = {};
+  const ti = document.getElementById('chatTypingIndicator');
+  if (ti) ti.classList.add('hidden');
+}
+
+// ---- load rooms / friends / DM requests ----
+async function chatLoadRooms() {
+  try {
+    const [roomsRaw, friendsRaw, dmReqRaw] = await Promise.all([
+      fetch(base() + '/api/v1/rooms', { headers: authHeaders() }).then(r => r.json()),
+      fetch(base() + '/api/v1/friends', { headers: authHeaders() }).then(r => r.json()),
+      fetch(base() + '/api/v1/rooms/requests', { headers: authHeaders() }).then(r => r.json()).catch(() => [])
+    ]);
+
+    // Friends lookup
+    const friends = Array.isArray(friendsRaw) ? friendsRaw : (friendsRaw.data || []);
+    chatState.friends = {};
+    friends.forEach(f => {
+      if (f.username) chatState.friends[f.username] = f;
+      if (f.id) chatState.friends[f.id] = f;
+    });
+
+    // Rooms
+    chatState.rooms = Array.isArray(roomsRaw) ? roomsRaw : (roomsRaw.data || []);
+    chatState.rooms.sort((a, b) => {
+      const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+      const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+      return tb - ta;
+    });
+    chatState.rooms.forEach(rm => {
+      chatState.roomMeta[rm.room_id] = {
+        name: rm.name || rm.room_id.substring(0, 8),
+        type: rm.type,
+        unread: rm.unread_count || 0
+      };
+    });
+
+    // DM requests
+    chatState.dmRequests = Array.isArray(dmReqRaw) ? dmReqRaw : (dmReqRaw.data || []);
+
+    chatRenderSidebar();
+    chatRenderDmRequests();
+  } catch (e) { console.error('chatLoadRooms', e); }
+}
+
+// ---- sidebar rendering ----
+function chatRenderSidebar() {
+  const el = document.getElementById('chatRoomList');
+  if (!chatState.rooms.length) {
+    el.innerHTML = '<div class="chat-empty-state" style="padding:40px 20px"><div class="icon">&#128172;</div><div>No conversations yet</div></div>';
+    return;
+  }
+  el.innerHTML = chatState.rooms.map(rm => {
+    const meta = chatState.roomMeta[rm.room_id] || {};
+    const isActive = rm.room_id === chatState.activeRoomId;
+    const unread = meta.unread || 0;
+    const name = rm.name || rm.room_id.substring(0, 8);
+    const initial = name.charAt(0).toUpperCase();
+    const preview = rm.last_message_preview || 'No messages yet';
+    const time = rm.last_message_at ? chatFormatTime(new Date(rm.last_message_at)) : '';
+    return `
+      <div class="chat-room-item ${isActive ? 'active' : ''}" onclick="chatSelectRoom('${escapeHtml(rm.room_id)}')" data-room-id="${escapeHtml(rm.room_id)}">
+        <div class="chat-room-avatar"><span>${escapeHtml(initial)}</span></div>
+        <div class="chat-room-details">
+          <div class="chat-room-name">${escapeHtml(name)}</div>
+          <div class="chat-room-preview" id="chatPreview_${rm.room_id}">${escapeHtml(preview)}</div>
+        </div>
+        <div class="chat-room-meta">
+          <span class="chat-room-time" id="chatTime_${rm.room_id}">${time}</span>
+          <span class="chat-unread-badge" id="chatUnread_${rm.room_id}" ${unread > 0 ? '' : 'style="display:none"'}>${unread}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ---- DM requests (collapsible) ----
+function chatRenderDmRequests() {
+  const section = document.getElementById('chatDmRequestsSection');
+  const listEl = document.getElementById('chatDmRequestsList');
+  const countEl = document.getElementById('chatDmReqCount');
+  if (!chatState.dmRequests.length) { section.classList.add('hidden'); return; }
+  section.classList.remove('hidden');
+  countEl.textContent = '(' + chatState.dmRequests.length + ')';
+  listEl.innerHTML = chatState.dmRequests.map(dm => `
+    <div class="chat-dm-req-item">
+      <div class="chat-room-avatar" style="width:32px;height:32px;font-size:.75rem">
+        ${dm.sender_avatar ? '<img src="' + escapeHtml(dm.sender_avatar) + '" />' : '<span>' + (dm.sender_name || 'U').charAt(0) + '</span>'}
+      </div>
+      <div>
+        <div style="font-weight:500">${escapeHtml(dm.sender_name || 'Unknown')}</div>
+        <div style="font-size:.7rem;color:var(--text-muted)">${escapeHtml(dm.last_message_preview || '')}</div>
+      </div>
+      <div class="dm-req-actions">
+        <button class="btn btn-success btn-sm" onclick="chatAcceptDmReq('${escapeHtml(dm.room_id)}')">Accept</button>
+        <button class="btn btn-danger btn-sm" onclick="chatRejectDmReq('${escapeHtml(dm.room_id)}')">Reject</button>
+      </div>
+    </div>`).join('');
+}
+
+function toggleChatDmRequests() {
+  const list = document.getElementById('chatDmRequestsList');
+  const arrow = document.getElementById('chatDmReqArrow');
+  list.classList.toggle('hidden');
+  arrow.innerHTML = list.classList.contains('hidden') ? '&#9654;' : '&#9660;';
+}
+
+async function chatAcceptDmReq(roomId) {
+  const r = await apiCall('POST', '/api/v1/rooms/' + encodeURIComponent(roomId) + '/accept', null, null);
+  if (r.status >= 200 && r.status < 300) { toast('DM request accepted!', 'success'); chatLoadRooms(); }
+}
+async function chatRejectDmReq(roomId) {
+  const r = await apiCall('POST', '/api/v1/rooms/' + encodeURIComponent(roomId) + '/reject', null, null);
+  if (r.status >= 200 && r.status < 300) { toast('DM request rejected', 'info'); chatLoadRooms(); }
+}
+
+// ---- select room & load messages ----
+async function chatSelectRoom(roomId) {
+  chatState.activeRoomId = roomId;
+  // Highlight active item
+  document.querySelectorAll('.chat-room-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.roomId === roomId);
+  });
+  // Show active view
+  document.getElementById('chatEmptyState').style.display = 'none';
+  const activeView = document.getElementById('chatActiveView');
+  activeView.classList.remove('hidden');
+  activeView.style.display = 'flex';
+  // Mobile back button
+  if (window.innerWidth <= 700) {
+    document.getElementById('chatBackBtn').style.display = 'inline-flex';
+    document.getElementById('chatContainer').classList.add('room-open');
+  }
+  // Header
+  const meta = chatState.roomMeta[roomId] || {};
+  const name = meta.name || roomId.substring(0, 8);
+  document.getElementById('chatHeaderName').textContent = name;
+  document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + name.charAt(0).toUpperCase() + '</span>';
+  // Clear unread
+  const unreadEl = document.getElementById('chatUnread_' + roomId);
+  if (unreadEl) { unreadEl.style.display = 'none'; unreadEl.textContent = '0'; }
+  if (chatState.roomMeta[roomId]) chatState.roomMeta[roomId].unread = 0;
+  // Mark read
+  if (ws && ws.readyState === 1) wsSend({ type: 'mark_read', roomId });
+  // Fetch messages
+  await chatFetchMessages(roomId, false);
+  chatRenderMessages(roomId);
+  chatScrollToBottom();
+  document.getElementById('chatInput').focus();
+}
+
+function chatBackToList() {
+  document.getElementById('chatContainer').classList.remove('room-open');
+}
+
+async function chatFetchMessages(roomId, olderPage) {
+  let path = '/api/v1/rooms/' + encodeURIComponent(roomId) + '/messages?limit=50';
+  if (olderPage && chatState.oldestCursor[roomId]) {
+    path += '&cursor=' + encodeURIComponent(chatState.oldestCursor[roomId]);
+  }
+  try {
+    const resp = await fetch(base() + path, { headers: authHeaders() });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const msgs = Array.isArray(data) ? data : (data.data || []);
+    if (!olderPage) {
+      chatState.messages[roomId] = msgs.reverse(); // API: newest-first → oldest-first
+    } else {
+      chatState.messages[roomId] = [...msgs.reverse(), ...(chatState.messages[roomId] || [])];
+    }
+    if (msgs.length > 0) {
+      chatState.oldestCursor[roomId] = chatState.messages[roomId][0].id;
+      chatState.hasMoreMessages[roomId] = msgs.length >= 50;
+    } else {
+      chatState.hasMoreMessages[roomId] = false;
+    }
+  } catch (e) { console.error('chatFetchMessages', e); }
+}
+
+async function chatLoadOlderMessages() {
+  if (!chatState.activeRoomId) return;
+  const roomId = chatState.activeRoomId;
+  const area = document.getElementById('chatMessagesArea');
+  const scrollBefore = area.scrollHeight;
+  await chatFetchMessages(roomId, true);
+  chatRenderMessages(roomId);
+  const scrollAfter = area.scrollHeight;
+  area.scrollTop = scrollAfter - scrollBefore;
+}
+
+// ---- render messages ----
+function chatRenderMessages(roomId) {
+  const area = document.getElementById('chatMessagesArea');
+  const msgs = chatState.messages[roomId] || [];
+  const myId = currentUserProfile?.id;
+  let html = '';
+
+  // Load more
+  if (chatState.hasMoreMessages[roomId]) {
+    html += '<div class="chat-load-more" onclick="chatLoadOlderMessages()">&uarr; Load older messages</div>';
+  }
+
+  let lastDate = '';
+  msgs.forEach(m => {
+    const msgDate = m.created_at ? new Date(m.created_at).toLocaleDateString() : '';
+    if (msgDate && msgDate !== lastDate) {
+      html += '<div class="chat-date-divider">' + msgDate + '</div>';
+      lastDate = msgDate;
+    }
+    const isMine = m.sender_id === myId;
+    const time = m.created_at ? new Date(m.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
+    let ticks = '';
+    if (isMine) {
+      if (m._pending) ticks = '<span class="bubble-ticks pending-tick">&#9203;</span>';
+      else if (m.status === 'read') ticks = '<span class="bubble-ticks read-tick">&#10003;&#10003;</span>';
+      else if (m.status === 'delivered') ticks = '<span class="bubble-ticks delivered-tick">&#10003;&#10003;</span>';
+      else ticks = '<span class="bubble-ticks sent-tick">&#10003;</span>';
+    }
+    html += '<div class="chat-bubble ' + (isMine ? 'sent' : 'received') + '" data-msg-id="' + (m.id || '') + '" data-temp-id="' + (m._tempId || '') + '">'
+      + '<div class="bubble-text">' + escapeHtml(m.content || m.text || '') + '</div>'
+      + '<div class="bubble-meta"><span>' + time + '</span>' + ticks + '</div>'
+      + '</div>';
+  });
+
+  if (!msgs.length) {
+    html += '<div class="chat-date-divider">No messages yet &mdash; say hello!</div>';
+  }
+  area.innerHTML = html;
+}
+
+function chatScrollToBottom() {
+  const area = document.getElementById('chatMessagesArea');
+  requestAnimationFrame(() => { area.scrollTop = area.scrollHeight; });
+}
+
+// ---- send message ----
+function chatSendMessage() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text || !chatState.activeRoomId) return;
+
+  const roomId = chatState.activeRoomId;
+  const tempId = 'tmp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+  const myId = currentUserProfile?.id;
+
+  // Optimistic append
+  const optimistic = {
+    id: null, sender_id: myId, content: text,
+    created_at: new Date().toISOString(), status: null,
+    _pending: true, _tempId: tempId
+  };
+  if (!chatState.messages[roomId]) chatState.messages[roomId] = [];
+  chatState.messages[roomId].push(optimistic);
+  chatRenderMessages(roomId);
+  chatScrollToBottom();
+
+  // Send over WS
+  wsSend({ type: 'send_message', roomId, text, tempId });
+  input.value = '';
+
+  // Stop typing indicator
+  if (chatState.amITyping) {
+    chatState.amITyping = false;
+    if (chatState.myTypingTimeout) clearTimeout(chatState.myTypingTimeout);
+    if (ws && ws.readyState === 1) wsSend({ type: 'typing_end', roomId });
+  }
+
+  // Update sidebar
+  chatUpdateSidebarPreview(roomId, text);
+}
+
+function chatUpdateSidebarPreview(roomId, text) {
+  const p = document.getElementById('chatPreview_' + roomId);
+  if (p) p.textContent = text;
+  const t = document.getElementById('chatTime_' + roomId);
+  if (t) t.textContent = chatFormatTime(new Date());
+  chatMoveRoomToTop(roomId);
+}
+
+function chatMoveRoomToTop(roomId) {
+  const list = document.getElementById('chatRoomList');
+  const items = list.querySelectorAll('.chat-room-item');
+  items.forEach(item => { if (item.dataset.roomId === roomId) list.prepend(item); });
+}
+
+// ---- handle inbound WS events for chat ----
+function chatHandleWsEvent(parsed) {
+  if (!parsed || !parsed.type) return;
+  switch (parsed.type) {
+    case 'send_message': chatHandleIncomingMessage(parsed); break;
+    case 'message_sent_confirm': chatHandleSentConfirm(parsed); break;
+    case 'message_delivered': chatHandleDelivered(parsed); break;
+    case 'message_read': chatHandleRead(parsed); break;
+    case 'typing_status': chatHandleTypingStatus(parsed); break;
+    case 'friend_accepted':
+    case 'dm_accepted':
+    case 'room_closed':
+    case 'dm_request':
+      chatLoadRooms(); break;
+  }
+}
+
+function chatHandleIncomingMessage(parsed) {
+  const roomId = parsed.roomId;
+  const myId = currentUserProfile?.id;
+  if (!roomId) return;
+  // Skip own messages (already added optimistically)
+  if (parsed.from === myId) return;
+
+  const msg = { id: parsed.id || null, sender_id: parsed.from, content: parsed.text,
+    created_at: new Date().toISOString(), status: null };
+  if (!chatState.messages[roomId]) chatState.messages[roomId] = [];
+  chatState.messages[roomId].push(msg);
+
+  if (roomId === chatState.activeRoomId) {
+    chatRenderMessages(roomId);
+    chatScrollToBottom();
+    if (ws && ws.readyState === 1) wsSend({ type: 'mark_read', roomId });
+  } else {
+    // Increment unread badge
+    if (chatState.roomMeta[roomId]) chatState.roomMeta[roomId].unread = (chatState.roomMeta[roomId].unread || 0) + 1;
+    const badge = document.getElementById('chatUnread_' + roomId);
+    if (badge) {
+      badge.textContent = chatState.roomMeta[roomId]?.unread || 1;
+      badge.style.display = '';
+    }
+  }
+  chatUpdateSidebarPreview(roomId, parsed.text || '');
+}
+
+function chatHandleSentConfirm(parsed) {
+  const tempId = parsed.tempId;
+  if (!tempId) return;
+  for (const roomId in chatState.messages) {
+    const msgs = chatState.messages[roomId];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i]._tempId === tempId) {
+        msgs[i]._pending = false;
+        msgs[i].status = 'sent';
+        if (roomId === chatState.activeRoomId) { chatRenderMessages(roomId); chatScrollToBottom(); }
+        return;
+      }
+    }
+  }
+}
+
+function chatHandleDelivered(parsed) {
+  const roomId = parsed.roomId;
+  if (!roomId || !chatState.messages[roomId]) return;
+  const myId = currentUserProfile?.id;
+  let changed = false;
+  chatState.messages[roomId].forEach(m => {
+    if (m.sender_id === myId && (m.status === 'sent' || m.status === null) && !m._pending) {
+      m.status = 'delivered'; changed = true;
+    }
+  });
+  if (changed && roomId === chatState.activeRoomId) { chatRenderMessages(roomId); chatScrollToBottom(); }
+}
+
+function chatHandleRead(parsed) {
+  const roomId = parsed.roomId;
+  if (!roomId || !chatState.messages[roomId]) return;
+  const myId = currentUserProfile?.id;
+  let changed = false;
+  chatState.messages[roomId].forEach(m => {
+    if (m.sender_id === myId && m.status !== 'read' && !m._pending) {
+      m.status = 'read'; changed = true;
+    }
+  });
+  if (changed && roomId === chatState.activeRoomId) { chatRenderMessages(roomId); chatScrollToBottom(); }
+}
+
+function chatHandleTypingStatus(parsed) {
+  const roomId = parsed.roomId;
+  const userIds = parsed.userIds || [];
+  const action = parsed.action;
+  const myId = currentUserProfile?.id;
+  if (!chatState.typingUsers[roomId]) chatState.typingUsers[roomId] = {};
+  userIds.forEach(uid => {
+    if (uid === myId) return;
+    if (action === 'typing_start') {
+      if (chatState.typingUsers[roomId][uid]) clearTimeout(chatState.typingUsers[roomId][uid]);
+      chatState.typingUsers[roomId][uid] = setTimeout(() => {
+        delete chatState.typingUsers[roomId][uid]; chatUpdateTypingIndicator();
+      }, 5000);
+    } else {
+      if (chatState.typingUsers[roomId][uid]) clearTimeout(chatState.typingUsers[roomId][uid]);
+      delete chatState.typingUsers[roomId][uid];
+    }
+  });
+  chatUpdateTypingIndicator();
+}
+
+function chatUpdateTypingIndicator() {
+  const roomId = chatState.activeRoomId;
+  const el = document.getElementById('chatTypingIndicator');
+  if (!el || !roomId) return;
+  const typers = chatState.typingUsers[roomId] || {};
+  const n = Object.keys(typers).length;
+  if (n > 0) {
+    el.textContent = n === 1 ? 'typing...' : n + ' people typing...';
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+
+// ---- outgoing typing indicator ----
+function chatHandleTypingInput() {
+  if (!chatState.activeRoomId || !ws || ws.readyState !== 1) return;
+  if (!chatState.amITyping) {
+    chatState.amITyping = true;
+    wsSend({ type: 'typing_start', roomId: chatState.activeRoomId });
+  }
+  if (chatState.myTypingTimeout) clearTimeout(chatState.myTypingTimeout);
+  chatState.myTypingTimeout = setTimeout(() => {
+    chatState.amITyping = false;
+    if (ws && ws.readyState === 1) wsSend({ type: 'typing_end', roomId: chatState.activeRoomId });
+  }, 3000);
+}
+
+// ---- time formatting ----
+function chatFormatTime(date) {
+  if (!date || isNaN(date.getTime())) return '';
+  const now = new Date();
+  const diff = now - date;
+  const day = 86400000;
+  if (diff < day && now.getDate() === date.getDate())
+    return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  if (diff < 2 * day) return 'Yesterday';
+  if (diff < 7 * day) return date.toLocaleDateString('en-US', { weekday: 'short' });
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' });
+}
+
+// ---- chat event listeners ----
+document.getElementById('chatInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); chatSendMessage(); }
+});
+document.getElementById('chatInput').addEventListener('input', chatHandleTypingInput);
 </script>
 
 </body>
