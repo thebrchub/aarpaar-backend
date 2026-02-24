@@ -460,11 +460,12 @@
       display: flex; align-items: center; justify-content: flex-end;
       gap: 4px; font-size: .65rem; color: rgba(255,255,255,.5); margin-top: 2px;
     }
-    .chat-bubble .bubble-ticks { font-size: .72rem; }
-    .chat-bubble .bubble-ticks.sent-tick { color: rgba(255,255,255,.45); }
-    .chat-bubble .bubble-ticks.delivered-tick { color: rgba(255,255,255,.45); }
-    .chat-bubble .bubble-ticks.read-tick { color: #53bdeb; }
-    .chat-bubble .bubble-ticks.pending-tick { color: rgba(255,255,255,.3); }
+    .chat-bubble .bubble-ticks { font-size: .72rem; display: inline-flex; align-items: center; margin-left: 3px; }
+    .chat-bubble .bubble-ticks svg { width: 16px; height: 11px; }
+    .chat-bubble .bubble-ticks.sent-tick svg { fill: rgba(255,255,255,.5); }
+    .chat-bubble .bubble-ticks.delivered-tick svg { fill: rgba(255,255,255,.5); }
+    .chat-bubble .bubble-ticks.read-tick svg { fill: #53bdeb; }
+    .chat-bubble .bubble-ticks.pending-tick svg { fill: rgba(255,255,255,.35); }
     .chat-date-divider {
       align-self: center; background: rgba(255,255,255,.08); color: var(--text-muted);
       font-size: .7rem; padding: 4px 14px; border-radius: 6px; margin: 8px 0;
@@ -2200,56 +2201,82 @@ function chatResolveDmRoomName(roomId) {
   return null;
 }
 
-// For DM rooms that still show truncated IDs, fetch 1 message to discover the friend
+// For DM rooms that still show truncated IDs, fetch messages to discover the friend
 async function chatResolvePendingDmNames() {
   const myId = currentUserProfile?.id;
   if (!myId) return;
+
+  // Track which friend IDs are already resolved to a room
+  const resolvedFriendIds = new Set();
+  const unresolvedRooms = [];
+
   for (const rm of chatState.rooms) {
     if (rm.type !== 'DM') continue;
     const meta = chatState.roomMeta[rm.room_id];
-    // If name is still a truncated UUID (8 chars of room_id), try to resolve
-    if (meta && meta.name === rm.room_id.substring(0, 8)) {
-      try {
-        const resp = await fetch(base() + '/api/v1/rooms/' + encodeURIComponent(rm.room_id) + '/messages?limit=1', { headers: authHeaders() });
-        if (!resp.ok) continue;
-        const data = await resp.json();
-        const msgs = Array.isArray(data) ? data : (data.data || []);
-        if (msgs.length > 0) {
-          const otherId = msgs[0].sender_id !== myId ? msgs[0].sender_id : myId;
-          // If the only message is from me, we need the other member — check all friends
-          let friendName = null;
-          if (msgs[0].sender_id !== myId && chatState.friends[msgs[0].sender_id]) {
-            friendName = chatState.friends[msgs[0].sender_id].name || chatState.friends[msgs[0].sender_id].username;
-          } else {
-            // Message is from me; find which friend this DM room belongs to
-            // by checking all friends and testing if any friend id maps to a room
-            for (const key of Object.keys(chatState.friends)) {
-              const f = chatState.friends[key];
-              if (f.id && f.id !== myId) {
-                // We'll accept the first friend not-me as a candidate
-                // and verify later when more messages arrive
-                friendName = f.name || f.username;
-                // Can't be sure this is the right friend without room-member info,
-                // so skip this fallback — name will resolve when a message from them arrives
-                friendName = null;
-                break;
-              }
-            }
-          }
-          if (friendName) {
-            meta.name = friendName;
-            // Update sidebar element
-            const sidebarItem = document.querySelector('.chat-room-item[data-room-id="' + rm.room_id + '"]');
-            if (sidebarItem) {
-              const nameEl = sidebarItem.querySelector('.chat-room-name');
-              if (nameEl) nameEl.textContent = friendName;
-              const avatarEl = sidebarItem.querySelector('.chat-room-avatar span');
-              if (avatarEl) avatarEl.textContent = friendName.charAt(0).toUpperCase();
-            }
-          }
+    if (!meta || meta.name !== rm.room_id.substring(0, 8)) {
+      // Already resolved — record which friend this maps to
+      for (const key of Object.keys(chatState.friends)) {
+        const f = chatState.friends[key];
+        if (f.id && (f.name === meta.name || f.username === meta.name)) {
+          resolvedFriendIds.add(f.id);
         }
-      } catch(e) { /* ignore */ }
+      }
+      continue;
     }
+    unresolvedRooms.push(rm);
+  }
+
+  // For each unresolved DM room, fetch a batch of messages to find the other person
+  for (const rm of unresolvedRooms) {
+    try {
+      const resp = await fetch(base() + '/api/v1/rooms/' + encodeURIComponent(rm.room_id) + '/messages?limit=10', { headers: authHeaders() });
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const msgs = Array.isArray(data) ? data : (data.data || []);
+      for (const m of msgs) {
+        if (m.sender_id && m.sender_id !== myId && chatState.friends[m.sender_id]) {
+          const f = chatState.friends[m.sender_id];
+          chatUpdateRoomName(rm.room_id, f.name || f.username);
+          resolvedFriendIds.add(m.sender_id);
+          break;
+        }
+      }
+    } catch(e) { /* ignore */ }
+  }
+
+  // Final pass: for any still-unresolved rooms, use elimination
+  const stillUnresolved = unresolvedRooms.filter(rm => {
+    const meta = chatState.roomMeta[rm.room_id];
+    return meta && meta.name === rm.room_id.substring(0, 8);
+  });
+  if (stillUnresolved.length > 0) {
+    const allFriendIds = new Set();
+    for (const key of Object.keys(chatState.friends)) {
+      const f = chatState.friends[key];
+      if (f.id && f.id !== myId) allFriendIds.add(f.id);
+    }
+    const unmatchedFriends = [...allFriendIds].filter(id => !resolvedFriendIds.has(id));
+    if (stillUnresolved.length === 1 && unmatchedFriends.length === 1) {
+      const f = chatState.friends[unmatchedFriends[0]];
+      if (f) chatUpdateRoomName(stillUnresolved[0].room_id, f.name || f.username);
+    }
+  }
+}
+
+// Helper: update a room's display name in meta, sidebar, and header
+function chatUpdateRoomName(roomId, friendName) {
+  const meta = chatState.roomMeta[roomId];
+  if (meta) meta.name = friendName;
+  const sidebarItem = document.querySelector('.chat-room-item[data-room-id="' + roomId + '"]');
+  if (sidebarItem) {
+    const nameEl = sidebarItem.querySelector('.chat-room-name');
+    if (nameEl) nameEl.textContent = friendName;
+    const avatarEl = sidebarItem.querySelector('.chat-room-avatar span');
+    if (avatarEl) avatarEl.textContent = friendName.charAt(0).toUpperCase();
+  }
+  if (roomId === chatState.activeRoomId) {
+    document.getElementById('chatHeaderName').textContent = friendName;
+    document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + friendName.charAt(0).toUpperCase() + '</span>';
   }
 }
 
@@ -2430,10 +2457,12 @@ function chatRenderMessages(roomId) {
     const time = m.created_at ? new Date(m.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '';
     let ticks = '';
     if (isMine) {
-      if (m._pending) ticks = '<span class="bubble-ticks pending-tick">&#9203;</span>';
-      else if (m.status === 'read') ticks = '<span class="bubble-ticks read-tick">&#10003;&#10003;</span>';
-      else if (m.status === 'delivered') ticks = '<span class="bubble-ticks delivered-tick">&#10003;&#10003;</span>';
-      else ticks = '<span class="bubble-ticks sent-tick">&#10003;</span>';
+      const singleTick = '<svg viewBox="0 0 16 11" xmlns="http://www.w3.org/2000/svg"><path d="M11.07.66 4.43 7.28 1.96 4.81a.36.36 0 0 0-.51 0l-.79.8a.36.36 0 0 0 0 .5L4.18 9.6a.36.36 0 0 0 .5 0l7.68-7.7a.36.36 0 0 0 0-.5l-.79-.74a.36.36 0 0 0-.5 0z"/></svg>';
+      const doubleTick = '<svg viewBox="0 0 16 11" xmlns="http://www.w3.org/2000/svg"><path d="M11.07.66 4.43 7.28 1.96 4.81a.36.36 0 0 0-.51 0l-.79.8a.36.36 0 0 0 0 .5L4.18 9.6a.36.36 0 0 0 .5 0l7.68-7.7a.36.36 0 0 0 0-.5l-.79-.74a.36.36 0 0 0-.5 0z"/><path d="M15.07.66 8.43 7.28 7.3 6.16l-.88.88 2 2.01a.36.36 0 0 0 .51 0l7.43-7.63a.36.36 0 0 0 0-.51l-.79-.74a.36.36 0 0 0-.5.49z"/></svg>';
+      if (m._pending) ticks = '<span class="bubble-ticks pending-tick">' + singleTick + '</span>';
+      else if (m.status === 'read') ticks = '<span class="bubble-ticks read-tick">' + doubleTick + '</span>';
+      else if (m.status === 'delivered') ticks = '<span class="bubble-ticks delivered-tick">' + doubleTick + '</span>';
+      else ticks = '<span class="bubble-ticks sent-tick">' + singleTick + '</span>';
     }
     html += '<div class="chat-bubble ' + (isMine ? 'sent' : 'received') + '" data-msg-id="' + (m.id || '') + '" data-temp-id="' + (m._tempId || '') + '">'
       + '<div class="bubble-text">' + escapeHtml(m.content || m.text || '') + '</div>'
