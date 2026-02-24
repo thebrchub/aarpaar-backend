@@ -132,7 +132,7 @@ func main() {
 	handler := mw.CORS(mw.BodyLimit(limiter.LimitHandler(mux)))
 
 	server := &http.Server{
-		Addr:         "0.0.0.0" + config.ServerPort,
+		Addr:         "0.0.0.0:" + config.ServerPort,
 		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 15 * time.Second,
