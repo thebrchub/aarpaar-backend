@@ -268,6 +268,18 @@
     .toast.info { background: #0984e3; }
     @keyframes slideIn { from { opacity:0; transform: translateX(40px); } to { opacity:1; transform: none; } }
 
+    /* Chat sidebar loading spinner */
+    .chat-loading {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 60px 20px; gap: 14px; color: var(--text-muted); font-size: .85rem;
+    }
+    .chat-loading .spinner {
+      width: 32px; height: 32px; border: 3px solid var(--border);
+      border-top-color: var(--accent); border-radius: 50%;
+      animation: chatSpin .7s linear infinite;
+    }
+    @keyframes chatSpin { to { transform: rotate(360deg); } }
+
     /* ------------------------------------------------------------------ */
     /*  Token display                                                     */
     /* ------------------------------------------------------------------ */
@@ -2120,7 +2132,17 @@ const chatState = {
   amITyping: false,
   oldestCursor: {},      // roomId → oldest msg id for pagination
   hasMoreMessages: {},   // roomId → bool
+  // Tracks rooms where the current user sent the last message.
+  // Used to suppress false unread badges caused by the flusher delay:
+  // mark_read runs instantly but the message is persisted ~3s later,
+  // so the backend briefly reports unread_count=1 for the sender.
+  sentRooms: new Set(JSON.parse(sessionStorage.getItem('chatSentRooms') || '[]')),
 };
+
+// Persist sentRooms to sessionStorage so the suppression survives page reloads
+function chatPersistSentRooms() {
+  try { sessionStorage.setItem('chatSentRooms', JSON.stringify([...chatState.sentRooms])); } catch(e) {}
+}
 
 // ---- lifecycle hooks (called from WS handlers) ----
 async function chatOnWsConnected() {
@@ -2139,6 +2161,9 @@ function chatOnWsDisconnected() {
 
 // ---- load rooms / friends / DM requests ----
 async function chatLoadRooms() {
+  // Show loading spinner immediately so users never see raw room IDs
+  const roomListEl = document.getElementById('chatRoomList');
+  if (roomListEl) roomListEl.innerHTML = '<div class="chat-loading"><div class="spinner"></div><div>Loading chats…</div></div>';
   try {
     const [roomsRaw, friendsRaw, dmReqRaw] = await Promise.all([
       fetch(base() + '/api/v1/rooms', { headers: authHeaders() }).then(r => r.json()),
@@ -2167,25 +2192,32 @@ async function chatLoadRooms() {
       if (rm.type === 'DM' && !resolvedName) {
         resolvedName = chatResolveDmRoomName(rm.room_id);
       }
+      // If we were the last sender in this room, the backend's unread_count
+      // is a false positive caused by flusher lag — suppress it to 0.
+      const suppressUnread = chatState.sentRooms.has(rm.room_id);
       chatState.roomMeta[rm.room_id] = {
         name: resolvedName || rm.room_id.substring(0, 8),
         type: rm.type,
-        unread: rm.unread_count || 0
+        unread: suppressUnread ? 0 : (rm.unread_count || 0)
       };
     });
 
     // DM requests
     chatState.dmRequests = Array.isArray(dmReqRaw) ? dmReqRaw : (dmReqRaw.data || []);
 
-    chatRenderSidebar();
     chatRenderDmRequests();
 
     // Acknowledge delivery for all rooms (so senders see double ticks)
     chatSendDeliveryAckForAllRooms();
 
-    // For DM rooms without resolved names, try fetching 1 message to discover the other user
-    chatResolvePendingDmNames();
-  } catch (e) { console.error('chatLoadRooms', e); }
+    // Resolve all DM names BEFORE rendering the sidebar so users never see room IDs
+    await chatResolvePendingDmNames();
+    chatRenderSidebar();
+  } catch (e) {
+    console.error('chatLoadRooms', e);
+    // On error, still render whatever we have so the UI isn't stuck on the spinner
+    chatRenderSidebar();
+  }
 }
 
 // Resolve DM room name from cached messages or friends list
@@ -2521,6 +2553,11 @@ function chatSendMessage() {
   // Mark room as read for the sender (so our own messages don't count as unread)
   if (ws && ws.readyState === 1) wsSend({ type: 'mark_read', roomId });
 
+  // Track that we were the last sender in this room so chatLoadRooms()
+  // suppresses the false unread_count the backend returns due to flusher lag.
+  chatState.sentRooms.add(roomId);
+  chatPersistSentRooms();
+
   // Stop typing indicator
   if (chatState.amITyping) {
     chatState.amITyping = false;
@@ -2568,6 +2605,11 @@ function chatHandleIncomingMessage(parsed) {
   if (!roomId) return;
   // Skip own messages (already added optimistically)
   if (parsed.from === myId) return;
+
+  // The other person sent a message → they are now the last sender,
+  // so future unread counts from the backend are legitimate for us.
+  chatState.sentRooms.delete(roomId);
+  chatPersistSentRooms();
 
   const msg = { id: parsed.id || null, sender_id: parsed.from, content: parsed.text,
     created_at: new Date().toISOString(), status: null };
