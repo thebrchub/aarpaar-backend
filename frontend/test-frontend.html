@@ -2180,6 +2180,9 @@ async function chatLoadRooms() {
     chatRenderSidebar();
     chatRenderDmRequests();
 
+    // Acknowledge delivery for all rooms (so senders see double ticks)
+    chatSendDeliveryAckForAllRooms();
+
     // For DM rooms without resolved names, try fetching 1 message to discover the other user
     chatResolvePendingDmNames();
   } catch (e) { console.error('chatLoadRooms', e); }
@@ -2278,6 +2281,15 @@ function chatUpdateRoomName(roomId, friendName) {
     document.getElementById('chatHeaderName').textContent = friendName;
     document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + friendName.charAt(0).toUpperCase() + '</span>';
   }
+}
+
+// Send mark_delivered for all rooms when coming online
+// This tells the sender their messages reached our device
+function chatSendDeliveryAckForAllRooms() {
+  if (!ws || ws.readyState !== 1) return;
+  chatState.rooms.forEach(rm => {
+    wsSend({ type: 'mark_delivered', roomId: rm.room_id });
+  });
 }
 
 // ---- sidebar rendering ----
@@ -2506,11 +2518,13 @@ function chatSendMessage() {
   wsSend({ type: 'send_message', roomId, text, tempId });
   input.value = '';
 
+  // Mark room as read for the sender (so our own messages don't count as unread)
+  if (ws && ws.readyState === 1) wsSend({ type: 'mark_read', roomId });
+
   // Stop typing indicator
   if (chatState.amITyping) {
     chatState.amITyping = false;
     if (chatState.myTypingTimeout) clearTimeout(chatState.myTypingTimeout);
-    if (ws && ws.readyState === 1) wsSend({ type: 'typing_end', roomId });
   }
 
   // Update sidebar
@@ -2581,6 +2595,8 @@ function chatHandleIncomingMessage(parsed) {
       badge.textContent = chatState.roomMeta[roomId]?.unread || 1;
       badge.style.display = '';
     }
+    // Acknowledge delivery for this room (message reached our device, but not read yet)
+    if (ws && ws.readyState === 1) wsSend({ type: 'mark_delivered', roomId });
   }
   chatUpdateSidebarPreview(roomId, parsed.text || '');
 }
@@ -2631,25 +2647,25 @@ function chatHandleRead(parsed) {
     }
   });
   if (changed && roomId === chatState.activeRoomId) { chatRenderMessages(roomId); chatScrollToBottom(); }
+  // Also clear any unread badge for this room (read implies we're caught up)
+  if (chatState.roomMeta[roomId]) chatState.roomMeta[roomId].unread = 0;
+  const badge = document.getElementById('chatUnread_' + roomId);
+  if (badge) { badge.style.display = 'none'; badge.textContent = '0'; }
 }
 
 function chatHandleTypingStatus(parsed) {
   const roomId = parsed.roomId;
   const userIds = parsed.userIds || [];
-  const action = parsed.action;
   const myId = currentUserProfile?.id;
   if (!chatState.typingUsers[roomId]) chatState.typingUsers[roomId] = {};
   userIds.forEach(uid => {
     if (uid === myId) return;
-    if (action === 'typing_start') {
-      if (chatState.typingUsers[roomId][uid]) clearTimeout(chatState.typingUsers[roomId][uid]);
-      chatState.typingUsers[roomId][uid] = setTimeout(() => {
-        delete chatState.typingUsers[roomId][uid]; chatUpdateTypingIndicator();
-      }, 5000);
-    } else {
-      if (chatState.typingUsers[roomId][uid]) clearTimeout(chatState.typingUsers[roomId][uid]);
-      delete chatState.typingUsers[roomId][uid];
-    }
+    // Clear any existing timeout for this user
+    if (chatState.typingUsers[roomId][uid]) clearTimeout(chatState.typingUsers[roomId][uid]);
+    // Auto-expire after 5 seconds if no new typing event arrives
+    chatState.typingUsers[roomId][uid] = setTimeout(() => {
+      delete chatState.typingUsers[roomId][uid]; chatUpdateTypingIndicator();
+    }, 5000);
   });
   chatUpdateTypingIndicator();
 }
@@ -2678,7 +2694,6 @@ function chatHandleTypingInput() {
   if (chatState.myTypingTimeout) clearTimeout(chatState.myTypingTimeout);
   chatState.myTypingTimeout = setTimeout(() => {
     chatState.amITyping = false;
-    if (ws && ws.readyState === 1) wsSend({ type: 'typing_end', roomId: chatState.activeRoomId });
   }, 3000);
 }
 

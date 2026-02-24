@@ -85,7 +85,7 @@ func sendError(c *Client, code string, message string) {
 //
 // readPump reads messages from the WebSocket and routes them:
 //   - join_room / leave_room / heartbeat → handled locally
-//   - send_message / typing_start / typing_end → published to Redis for all servers
+//   - send_message / typing_start → published to Redis for all servers
 //   - send_message also sanitized and buffered for Postgres persistence
 //
 // This function runs in its own goroutine per client.
@@ -168,9 +168,48 @@ func (c *Client) readPump() {
 			continue
 		}
 
+		// --- Mark Delivered: update last_delivered_at in Postgres ---
+		// Client sends: {"type":"mark_delivered","roomId":"<uuid>"}
+		// Used when a client reconnects after being offline to acknowledge
+		// that messages in this room have reached the device.
+		if msgType == config.MsgTypeMarkDelivered {
+			if roomID == "" {
+				sendError(c, "INVALID_PAYLOAD", "Missing roomId")
+				continue
+			}
+			if !c.JoinedRooms[roomID] {
+				sendError(c, "NOT_A_MEMBER", "You are not a member of this room")
+				continue
+			}
+			go func(uid, rid string) {
+				_, err := postgress.GetRawDB().Exec(
+					`UPDATE room_members SET last_delivered_at = NOW()
+					 WHERE room_id = $1 AND user_id = $2 AND last_delivered_at < NOW()`,
+					rid, uid,
+				)
+				if err != nil {
+					log.Printf("[client] mark_delivered failed for user=%s room=%s: %v", uid, rid, err)
+					return
+				}
+
+				// Broadcast delivery receipt so the sender sees double ticks
+				deliveryReceipt, err := json.Marshal(map[string]string{
+					config.FieldType:        config.MsgTypeMessageDelivered,
+					config.FieldRoomID:      rid,
+					config.FieldDeliveredAt: time.Now().UTC().Format(time.RFC3339),
+				})
+				if err == nil {
+					ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+					redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, deliveryReceipt)
+					cancel()
+				}
+			}(c.UserID, roomID)
+			continue
+		}
+
 		// --- Chat Messages & Typing (forwarded to Redis) ---
 
-		if msgType == config.MsgTypeSendMessage || msgType == config.MsgTypeTypingStart || msgType == config.MsgTypeTypingEnd {
+		if msgType == config.MsgTypeSendMessage || msgType == config.MsgTypeTypingStart {
 			if roomID == "" {
 				sendError(c, "INVALID_PAYLOAD", "Missing roomId")
 				continue
