@@ -11,6 +11,7 @@
 *.test
 *.bat
 *.sh
+*.ps1
 
 # Output of the go coverage tool
 *.out
