@@ -346,22 +346,33 @@ func (e *Engine) subscribeAndListen() {
 
 			payload := []byte(msg.Payload)
 
-			// Peek at the message type without full JSON unmarshalling
-			msgType := gjson.GetBytes(payload, config.FieldType).String()
+			// Single-pass extraction of all commonly needed fields.
+			// gjson.GetManyBytes scans the JSON once and returns all values,
+			// instead of rescanning per field.
+			fields := gjson.GetManyBytes(payload,
+				config.FieldType,   // [0] type
+				config.FieldRoomID, // [1] roomId
+				config.FieldFrom,   // [2] from
+				config.FieldTo,     // [3] to
+			)
+			msgType := fields[0].String()
+			roomID := fields[1].String()
+			senderID := fields[2].String()
+			targetUser := fields[3].String()
 
 			switch msgType {
 			case config.MsgTypePrivate, config.MsgTypeMatchFound, config.MsgTypeStrangerDisconnected:
 				// Private/system events targeted at a specific user
-				targetUser := gjson.GetBytes(payload, config.FieldTo).String()
 				if targetUser != "" {
 					e.deliverToUser(targetUser, payload)
 				}
 
 				// If this is a stranger_disconnected wrapped inside a private envelope,
-				// also extract the inner data for the room_closed handler
-				innerType := gjson.GetBytes(payload, "data.type").String()
-				if innerType == config.MsgTypeStrangerDisconnected {
-					innerRoom := gjson.GetBytes(payload, "data.roomId").String()
+				// also extract the inner data for the room_closed handler.
+				// These nested fields are rare, so a separate lookup is acceptable.
+				innerFields := gjson.GetManyBytes(payload, "data.type", "data.roomId")
+				if innerFields[0].String() == config.MsgTypeStrangerDisconnected {
+					innerRoom := innerFields[1].String()
 					if innerRoom != "" {
 						closedMsg, _ := json.Marshal(map[string]string{
 							config.FieldType:   config.MsgTypeRoomClosed,
@@ -373,32 +384,39 @@ func (e *Engine) subscribeAndListen() {
 
 			case config.MsgTypeRoomClosed:
 				// Close the room on this server: kick everyone + notify
-				targetRoom := gjson.GetBytes(payload, config.FieldRoomID).String()
-				if targetRoom != "" {
-					e.CloseRoom(targetRoom, payload)
+				if roomID != "" {
+					e.CloseRoom(roomID, payload)
 				}
 
 			case config.MsgTypeSendMessage:
 				// Room-level messages: deliver to everyone in the room on this server
-				targetRoom := gjson.GetBytes(payload, config.FieldRoomID).String()
-				if targetRoom != "" {
-					e.deliverToRoom(targetRoom, payload)
+				if roomID != "" {
+					e.deliverToRoom(roomID, payload)
+					// Generate delivery receipts: notify the sender that the message
+					// was delivered to online recipient(s) in this room.
+					if senderID != "" {
+						e.sendDeliveryReceipts(roomID, senderID)
+					}
 				}
 
 			case config.MsgTypeTypingStart, config.MsgTypeTypingEnd:
 				// Rewrite typing events to typing_status format with userIds array
-				targetRoom := gjson.GetBytes(payload, config.FieldRoomID).String()
-				senderID := gjson.GetBytes(payload, config.FieldFrom).String()
-				if targetRoom != "" && senderID != "" {
+				if roomID != "" && senderID != "" {
 					typingStatus := map[string]interface{}{
 						config.FieldType:    config.MsgTypeTypingStatus,
-						config.FieldRoomID:  targetRoom,
+						config.FieldRoomID:  roomID,
 						config.FieldUserIDs: []string{senderID},
 						"action":            msgType, // "typing_start" or "typing_end"
 					}
 					if rewritten, err := json.Marshal(typingStatus); err == nil {
-						e.deliverToRoom(targetRoom, rewritten)
+						e.deliverToRoom(roomID, rewritten)
 					}
+				}
+
+			case config.MsgTypeMessageRead:
+				// Broadcast read receipt to all room members so senders see blue ticks
+				if roomID != "" {
+					e.deliverToRoom(roomID, payload)
 				}
 			}
 		}
@@ -431,6 +449,58 @@ func (e *Engine) deliverToUser(userID string, payload []byte) {
 			// Client's buffer is full — drop to protect the server.
 			// The client will catch up or reconnect.
 		}
+	}
+}
+
+// sendDeliveryReceipts checks if any non-sender clients are online in the room
+// and sends a delivery receipt back to the sender. Also updates the recipient's
+// last_delivered_at in the database asynchronously.
+func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
+	shard := e.getShard(roomID)
+	shard.mu.RLock()
+	clients, ok := shard.rooms[roomID]
+	if !ok {
+		shard.mu.RUnlock()
+		return
+	}
+
+	// Collect unique recipient user IDs who are online in the room
+	recipientIDs := make(map[string]bool)
+	for c := range clients {
+		if c.UserID != senderID {
+			recipientIDs[c.UserID] = true
+		}
+	}
+	shard.mu.RUnlock()
+
+	if len(recipientIDs) == 0 {
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Send a delivery receipt event to the sender
+	receipt, err := json.Marshal(map[string]string{
+		config.FieldType:        config.MsgTypeMessageDelivered,
+		config.FieldRoomID:      roomID,
+		config.FieldDeliveredAt: now,
+	})
+	if err == nil {
+		e.deliverToUser(senderID, receipt)
+	}
+
+	// Update last_delivered_at for each online recipient (async, non-blocking)
+	for uid := range recipientIDs {
+		go func(userID, room string) {
+			_, err := postgress.GetRawDB().Exec(
+				`UPDATE room_members SET last_delivered_at = NOW()
+				 WHERE room_id = $1 AND user_id = $2 AND last_delivered_at < NOW()`,
+				room, userID,
+			)
+			if err != nil {
+				log.Printf("[engine] delivery receipt DB update failed user=%s room=%s: %v", userID, room, err)
+			}
+		}(uid, roomID)
 	}
 }
 

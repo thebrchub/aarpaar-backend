@@ -65,21 +65,41 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		limit = parsed
 	}
 
-	// 6. Zero-allocation SQL: Postgres builds the JSON array for us
+	// 6. Zero-allocation SQL: Postgres builds the JSON array for us.
+	//    For messages sent by the current user, we compute a receipt status:
+	//      "read"      = the other member has read past this message
+	//      "delivered"  = the message was delivered to the other member's device
+	//      "sent"       = server has the message but recipient hasn't received it yet
+	//    For messages received (from others), status is null.
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
-			SELECT id, sender_id, content, created_at 
-			FROM messages 
-			WHERE room_id = $1 AND id < $2 
-			ORDER BY id DESC
+			SELECT m.id, m.sender_id, m.content, m.created_at,
+				CASE
+					WHEN m.sender_id = $4 THEN
+						CASE
+							WHEN m.created_at <= (
+								SELECT MIN(rm2.last_read_at) FROM room_members rm2
+								WHERE rm2.room_id = $1 AND rm2.user_id != $4
+							) THEN 'read'
+							WHEN m.created_at <= (
+								SELECT MIN(rm2.last_delivered_at) FROM room_members rm2
+								WHERE rm2.room_id = $1 AND rm2.user_id != $4
+							) THEN 'delivered'
+							ELSE 'sent'
+						END
+					ELSE NULL
+				END AS status
+			FROM messages m
+			WHERE m.room_id = $1 AND m.id < $2
+			ORDER BY m.id DESC
 			LIMIT $3
 		) t;
 	`
 
 	// 7. Execute and pipe the raw JSON bytes to the response
 	var rawJSONBytes []byte
-	err = postgress.GetRawDB().QueryRow(query, roomID, cursor, limit).Scan(&rawJSONBytes)
+	err = postgress.GetRawDB().QueryRow(query, roomID, cursor, limit, userID).Scan(&rawJSONBytes)
 	if err != nil {
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return

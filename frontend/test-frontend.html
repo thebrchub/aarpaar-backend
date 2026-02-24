@@ -342,6 +342,12 @@
     .inline-form .form-row { margin-bottom: 0; flex: 1; }
     .scroll-box { max-height: 250px; overflow-y:auto; }
 
+    /* Receipt tick marks */
+    .receipt { font-size: .7rem; margin-left: 6px; font-weight: 600; }
+    .receipt.sent { color: var(--text-muted); }
+    .receipt.delivered { color: var(--text-muted); }
+    .receipt.read { color: var(--info); }
+
     /* Custom scrollbar */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -1252,7 +1258,7 @@ async function getMyProfile() {
 // ======================================================================
 async function fetchAndCacheProfile() {
   try {
-    const resp = await fetch(BASE + '/api/v1/users/me', { headers: authHeaders() });
+    const resp = await fetch(base() + '/api/v1/users/me', { headers: authHeaders() });
     if (resp.ok) {
       const json = await resp.json();
       currentUserProfile = json.data || json;
@@ -1275,7 +1281,7 @@ async function checkUsernameAvailability() {
   const resultEl = document.getElementById('usernameCheckResult');
   resultEl.textContent = 'Checking…';
   try {
-    const resp = await fetch(BASE + '/api/v1/users/check-username?username=' + encodeURIComponent(u), { headers: authHeaders() });
+    const resp = await fetch(base() + '/api/v1/users/check-username?username=' + encodeURIComponent(u), { headers: authHeaders() });
     const json = await resp.json();
     if (json.status === 'available') {
       resultEl.textContent = '✓ Available';
@@ -1297,7 +1303,7 @@ async function checkModalUsername() {
   statusEl.textContent = 'Checking…';
   statusEl.style.color = 'var(--text-muted)';
   try {
-    const resp = await fetch(BASE + '/api/v1/users/check-username?username=' + encodeURIComponent(u), { headers: authHeaders() });
+    const resp = await fetch(base() + '/api/v1/users/check-username?username=' + encodeURIComponent(u), { headers: authHeaders() });
     const json = await resp.json();
     if (json.status === 'available') {
       statusEl.textContent = '✓ Available';
@@ -1317,13 +1323,13 @@ async function submitModalUsername() {
   if (!u) return toast('Please enter a username', 'error');
   // Verify available first
   try {
-    const chk = await fetch(BASE + '/api/v1/users/check-username?username=' + encodeURIComponent(u), { headers: authHeaders() });
+    const chk = await fetch(base() + '/api/v1/users/check-username?username=' + encodeURIComponent(u), { headers: authHeaders() });
     const chkJson = await chk.json();
     if (chkJson.status !== 'available') return toast('Username is already taken', 'error');
   } catch(e) { return toast('Could not verify username', 'error'); }
   // Submit via PATCH
   try {
-    const resp = await fetch(BASE + '/api/v1/users/me', {
+    const resp = await fetch(base() + '/api/v1/users/me', {
       method: 'PATCH',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: u })
@@ -1419,14 +1425,21 @@ async function getRoomMessages() {
   const r = await apiCall('GET', path, null, 'messagesResponse');
   const el = document.getElementById('messagesResult');
   if (r.data && Array.isArray(r.data) && r.data.length > 0) {
-    el.innerHTML = '<div style="font-size:.78rem">' + r.data.map(m => `
+    el.innerHTML = '<div style="font-size:.78rem">' + r.data.map(m => {
+      let receiptHtml = '';
+      if (m.status === 'read') receiptHtml = '<span class="receipt read" title="Read">✓✓</span>';
+      else if (m.status === 'delivered') receiptHtml = '<span class="receipt delivered" title="Delivered">✓✓</span>';
+      else if (m.status === 'sent') receiptHtml = '<span class="receipt sent" title="Sent">✓</span>';
+      return `
       <div style="padding:6px 0;border-bottom:1px solid var(--border)">
         <span style="color:var(--accent);font-family:var(--mono);font-size:.7rem">${escapeHtml(String(m.id))}</span>
         <span style="color:var(--text-muted);font-size:.7rem;margin-left:8px">${m.created_at ? new Date(m.created_at).toLocaleString() : ''}</span>
+        ${receiptHtml}
         <br/>
         <span style="color:var(--info);font-size:.72rem">${escapeHtml(m.sender_id || '')}</span>
         <div style="margin-top:3px">${escapeHtml(m.content || '')}</div>
-      </div>`).join('') + '</div>';
+      </div>`;
+    }).join('') + '</div>';
     // Set cursor for next page
     const lastMsg = r.data[r.data.length - 1];
     if (lastMsg && lastMsg.id) document.getElementById('msgCursor').value = lastMsg.id;
@@ -1593,6 +1606,12 @@ function wsConnect() {
       if (parsed.type === 'dm_accepted') {
         toast('Your DM was accepted! Room: ' + (parsed.roomId || ''), 'success');
         getRooms();
+      }
+      if (parsed.type === 'message_delivered') {
+        wsLog('✓✓ Delivered in room ' + (parsed.roomId || ''), 'system');
+      }
+      if (parsed.type === 'message_read') {
+        wsLog('✓✓ Read by ' + (parsed.userId || 'peer') + ' in room ' + (parsed.roomId || ''), 'system');
       }
       if (parsed.type === 'error') {
         let errMsg = parsed.message || parsed.code;

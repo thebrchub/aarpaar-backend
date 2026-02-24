@@ -62,6 +62,12 @@ const (
 
 	// Client -> Server: Mark a room as read (resets unread count)
 	MsgTypeMarkRead = "mark_read"
+
+	// Server -> Client: Message was delivered to the recipient's device
+	MsgTypeMessageDelivered = "message_delivered"
+
+	// Server -> Client: Recipient has read your messages
+	MsgTypeMessageRead = "message_read"
 )
 
 // ---------------------------------------------------------------------------
@@ -138,6 +144,9 @@ const (
 	FieldCode            = "code"              // Error code for error events
 	FieldMessage         = "message"           // Human-readable error message
 	FieldUserIDs         = "userIds"           // Array of user IDs (typing status)
+	FieldUserID          = "userId"            // Single user ID (receipts)
+	FieldDeliveredAt     = "deliveredAt"       // Delivery receipt timestamp
+	FieldReadAt          = "readAt"            // Read receipt timestamp
 )
 
 // ---------------------------------------------------------------------------

@@ -204,6 +204,11 @@ var migrationStatements = []string{
 	`CREATE TRIGGER trg_users_updated_at
         BEFORE UPDATE ON users
         FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()`,
+
+	// ===================================================================
+	// COLUMN: room_members.last_delivered_at (delivery receipts)
+	// ===================================================================
+	`ALTER TABLE room_members ADD COLUMN IF NOT EXISTS last_delivered_at TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01T00:00:00Z'`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

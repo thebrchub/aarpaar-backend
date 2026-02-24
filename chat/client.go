@@ -110,8 +110,11 @@ func (c *Client) readPump() {
 			break // Connection closed or error — exit the loop
 		}
 
-		// Peek at the "type" field without parsing the entire JSON
-		msgType := gjson.GetBytes(payload, config.FieldType).String()
+		// Single-pass extraction of the two fields every message needs.
+		// gjson.GetManyBytes scans the JSON once instead of once per field.
+		common := gjson.GetManyBytes(payload, config.FieldType, config.FieldRoomID)
+		msgType := common[0].String()
+		roomID := common[1].String()
 
 		// --- Deprecated: join_room / leave_room ---
 		// Rooms are now auto-managed server-side. If old clients still send
@@ -130,7 +133,6 @@ func (c *Client) readPump() {
 		// --- Mark Read: update last_read_at in Postgres ---
 		// Client sends: {"type":"mark_read","roomId":"<uuid>"}
 		if msgType == config.MsgTypeMarkRead {
-			roomID := gjson.GetBytes(payload, config.FieldRoomID).String()
 			if roomID == "" {
 				sendError(c, "INVALID_PAYLOAD", "Missing roomId")
 				continue
@@ -146,6 +148,21 @@ func (c *Client) readPump() {
 				)
 				if err != nil {
 					log.Printf("[client] mark_read failed for user=%s room=%s: %v", uid, rid, err)
+					return
+				}
+
+				// Broadcast a read receipt to all room members via Redis Pub/Sub
+				// so the sender sees blue ticks on their messages.
+				readReceipt, err := json.Marshal(map[string]string{
+					config.FieldType:   config.MsgTypeMessageRead,
+					config.FieldRoomID: rid,
+					config.FieldUserID: uid,
+					config.FieldReadAt: time.Now().UTC().Format(time.RFC3339),
+				})
+				if err == nil {
+					ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+					redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, readReceipt)
+					cancel()
 				}
 			}(c.UserID, roomID)
 			continue
@@ -154,7 +171,6 @@ func (c *Client) readPump() {
 		// --- Chat Messages & Typing (forwarded to Redis) ---
 
 		if msgType == config.MsgTypeSendMessage || msgType == config.MsgTypeTypingStart || msgType == config.MsgTypeTypingEnd {
-			roomID := gjson.GetBytes(payload, config.FieldRoomID).String()
 			if roomID == "" {
 				sendError(c, "INVALID_PAYLOAD", "Missing roomId")
 				continue
