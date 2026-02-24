@@ -1978,7 +1978,7 @@ async function putProfile() {
 window.addEventListener('load', function() {
   deriveWsUrl();
   // If access token already exists (e.g. from previous session), run post-login flow
-  if (localStorage.getItem('access_token')) {
+  if (localStorage.getItem('aarpaar_access_token')) {
     postLoginFlow();
   }
 });
@@ -2122,7 +2122,11 @@ const chatState = {
 };
 
 // ---- lifecycle hooks (called from WS handlers) ----
-function chatOnWsConnected() {
+async function chatOnWsConnected() {
+  // Ensure profile is loaded before chat operations (defensive)
+  if (!currentUserProfile) {
+    try { await fetchAndCacheProfile(); } catch(e) { console.warn('chatOnWsConnected: profile fetch failed', e); }
+  }
   chatLoadRooms();
 }
 
@@ -2157,8 +2161,13 @@ async function chatLoadRooms() {
       return tb - ta;
     });
     chatState.rooms.forEach(rm => {
+      let resolvedName = rm.name || null;
+      // For DM rooms, try to resolve the friend's display name
+      if (rm.type === 'DM' && !resolvedName) {
+        resolvedName = chatResolveDmRoomName(rm.room_id);
+      }
       chatState.roomMeta[rm.room_id] = {
-        name: rm.name || rm.room_id.substring(0, 8),
+        name: resolvedName || rm.room_id.substring(0, 8),
         type: rm.type,
         unread: rm.unread_count || 0
       };
@@ -2169,7 +2178,79 @@ async function chatLoadRooms() {
 
     chatRenderSidebar();
     chatRenderDmRequests();
+
+    // For DM rooms without resolved names, try fetching 1 message to discover the other user
+    chatResolvePendingDmNames();
   } catch (e) { console.error('chatLoadRooms', e); }
+}
+
+// Resolve DM room name from cached messages or friends list
+function chatResolveDmRoomName(roomId) {
+  const myId = currentUserProfile?.id;
+  // Check if we already have messages cached for this room
+  const msgs = chatState.messages[roomId];
+  if (msgs && msgs.length > 0 && myId) {
+    for (const m of msgs) {
+      const otherId = m.sender_id !== myId ? m.sender_id : null;
+      if (otherId && chatState.friends[otherId]) {
+        return chatState.friends[otherId].name || chatState.friends[otherId].username;
+      }
+    }
+  }
+  return null;
+}
+
+// For DM rooms that still show truncated IDs, fetch 1 message to discover the friend
+async function chatResolvePendingDmNames() {
+  const myId = currentUserProfile?.id;
+  if (!myId) return;
+  for (const rm of chatState.rooms) {
+    if (rm.type !== 'DM') continue;
+    const meta = chatState.roomMeta[rm.room_id];
+    // If name is still a truncated UUID (8 chars of room_id), try to resolve
+    if (meta && meta.name === rm.room_id.substring(0, 8)) {
+      try {
+        const resp = await fetch(base() + '/api/v1/rooms/' + encodeURIComponent(rm.room_id) + '/messages?limit=1', { headers: authHeaders() });
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        const msgs = Array.isArray(data) ? data : (data.data || []);
+        if (msgs.length > 0) {
+          const otherId = msgs[0].sender_id !== myId ? msgs[0].sender_id : myId;
+          // If the only message is from me, we need the other member — check all friends
+          let friendName = null;
+          if (msgs[0].sender_id !== myId && chatState.friends[msgs[0].sender_id]) {
+            friendName = chatState.friends[msgs[0].sender_id].name || chatState.friends[msgs[0].sender_id].username;
+          } else {
+            // Message is from me; find which friend this DM room belongs to
+            // by checking all friends and testing if any friend id maps to a room
+            for (const key of Object.keys(chatState.friends)) {
+              const f = chatState.friends[key];
+              if (f.id && f.id !== myId) {
+                // We'll accept the first friend not-me as a candidate
+                // and verify later when more messages arrive
+                friendName = f.name || f.username;
+                // Can't be sure this is the right friend without room-member info,
+                // so skip this fallback — name will resolve when a message from them arrives
+                friendName = null;
+                break;
+              }
+            }
+          }
+          if (friendName) {
+            meta.name = friendName;
+            // Update sidebar element
+            const sidebarItem = document.querySelector('.chat-room-item[data-room-id="' + rm.room_id + '"]');
+            if (sidebarItem) {
+              const nameEl = sidebarItem.querySelector('.chat-room-name');
+              if (nameEl) nameEl.textContent = friendName;
+              const avatarEl = sidebarItem.querySelector('.chat-room-avatar span');
+              if (avatarEl) avatarEl.textContent = friendName.charAt(0).toUpperCase();
+            }
+          }
+        }
+      } catch(e) { /* ignore */ }
+    }
+  }
 }
 
 // ---- sidebar rendering ----
@@ -2259,9 +2340,9 @@ async function chatSelectRoom(roomId) {
     document.getElementById('chatBackBtn').style.display = 'inline-flex';
     document.getElementById('chatContainer').classList.add('room-open');
   }
-  // Header
+  // Header — resolve DM name from messages after fetch if still a truncated ID
   const meta = chatState.roomMeta[roomId] || {};
-  const name = meta.name || roomId.substring(0, 8);
+  let name = meta.name || roomId.substring(0, 8);
   document.getElementById('chatHeaderName').textContent = name;
   document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + name.charAt(0).toUpperCase() + '</span>';
   // Clear unread
@@ -2272,6 +2353,26 @@ async function chatSelectRoom(roomId) {
   if (ws && ws.readyState === 1) wsSend({ type: 'mark_read', roomId });
   // Fetch messages
   await chatFetchMessages(roomId, false);
+
+  // After fetching messages, try to resolve DM friend name if still unresolved
+  if (meta.type === 'DM' && meta.name === roomId.substring(0, 8)) {
+    const resolved = chatResolveDmRoomName(roomId);
+    if (resolved) {
+      meta.name = resolved;
+      name = resolved;
+      document.getElementById('chatHeaderName').textContent = name;
+      document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + name.charAt(0).toUpperCase() + '</span>';
+      // Update sidebar too
+      const sidebarItem = document.querySelector('.chat-room-item[data-room-id="' + roomId + '"]');
+      if (sidebarItem) {
+        const nameEl = sidebarItem.querySelector('.chat-room-name');
+        if (nameEl) nameEl.textContent = name;
+        const avatarEl = sidebarItem.querySelector('.chat-room-avatar span');
+        if (avatarEl) avatarEl.textContent = name.charAt(0).toUpperCase();
+      }
+    }
+  }
+
   chatRenderMessages(roomId);
   chatScrollToBottom();
   document.getElementById('chatInput').focus();
@@ -2440,6 +2541,27 @@ function chatHandleIncomingMessage(parsed) {
   if (!chatState.messages[roomId]) chatState.messages[roomId] = [];
   chatState.messages[roomId].push(msg);
 
+  // Resolve DM room name from incoming message sender if not yet resolved
+  if (parsed.from && chatState.roomMeta[roomId] && chatState.roomMeta[roomId].type === 'DM'
+      && chatState.roomMeta[roomId].name === roomId.substring(0, 8)) {
+    const friend = chatState.friends[parsed.from];
+    if (friend) {
+      const friendName = friend.name || friend.username;
+      chatState.roomMeta[roomId].name = friendName;
+      const sidebarItem = document.querySelector('.chat-room-item[data-room-id="' + roomId + '"]');
+      if (sidebarItem) {
+        const nameEl = sidebarItem.querySelector('.chat-room-name');
+        if (nameEl) nameEl.textContent = friendName;
+        const avatarEl = sidebarItem.querySelector('.chat-room-avatar span');
+        if (avatarEl) avatarEl.textContent = friendName.charAt(0).toUpperCase();
+      }
+      if (roomId === chatState.activeRoomId) {
+        document.getElementById('chatHeaderName').textContent = friendName;
+        document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + friendName.charAt(0).toUpperCase() + '</span>';
+      }
+    }
+  }
+
   if (roomId === chatState.activeRoomId) {
     chatRenderMessages(roomId);
     chatScrollToBottom();
@@ -2489,6 +2611,8 @@ function chatHandleRead(parsed) {
   const roomId = parsed.roomId;
   if (!roomId || !chatState.messages[roomId]) return;
   const myId = currentUserProfile?.id;
+  // Only process read receipts from the OTHER user (they read our messages)
+  if (parsed.userId === myId) return;
   let changed = false;
   chatState.messages[roomId].forEach(m => {
     if (m.sender_id === myId && m.status !== 'read' && !m._pending) {
