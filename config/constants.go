@@ -63,6 +63,9 @@ const (
 	// Client -> Server: Mark a room as read (resets unread count)
 	MsgTypeMarkRead = "mark_read"
 
+	// Client -> Server: Mark messages as delivered (recipient came online)
+	MsgTypeMarkDelivered = "mark_delivered"
+
 	// Server -> Client: Message was delivered to the recipient's device
 	MsgTypeMessageDelivered = "message_delivered"
 

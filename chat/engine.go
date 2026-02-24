@@ -399,22 +399,22 @@ func (e *Engine) subscribeAndListen() {
 					}
 				}
 
-			case config.MsgTypeTypingStart, config.MsgTypeTypingEnd:
-				// Rewrite typing events to typing_status format with userIds array
+			case config.MsgTypeTypingStart:
+				// Rewrite typing event to typing_status format with userIds array
 				if roomID != "" && senderID != "" {
 					typingStatus := map[string]interface{}{
 						config.FieldType:    config.MsgTypeTypingStatus,
 						config.FieldRoomID:  roomID,
 						config.FieldUserIDs: []string{senderID},
-						"action":            msgType, // "typing_start" or "typing_end"
 					}
 					if rewritten, err := json.Marshal(typingStatus); err == nil {
 						e.deliverToRoom(roomID, rewritten)
 					}
 				}
 
-			case config.MsgTypeMessageRead:
-				// Broadcast read receipt to all room members so senders see blue ticks
+			default:
+				// All other room-scoped events (message_read, message_delivered, etc.):
+				// pure pass-through broadcast to room members.
 				if roomID != "" {
 					e.deliverToRoom(roomID, payload)
 				}
