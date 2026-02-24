@@ -2264,7 +2264,7 @@ function chatRenderSidebar() {
     const meta = chatState.roomMeta[rm.room_id] || {};
     const isActive = rm.room_id === chatState.activeRoomId;
     const unread = meta.unread || 0;
-    const name = rm.name || rm.room_id.substring(0, 8);
+    const name = meta.name || rm.name || rm.room_id.substring(0, 8);
     const initial = name.charAt(0).toUpperCase();
     const preview = rm.last_message_preview || 'No messages yet';
     const time = rm.last_message_at ? chatFormatTime(new Date(rm.last_message_at)) : '';
@@ -2358,18 +2358,8 @@ async function chatSelectRoom(roomId) {
   if (meta.type === 'DM' && meta.name === roomId.substring(0, 8)) {
     const resolved = chatResolveDmRoomName(roomId);
     if (resolved) {
-      meta.name = resolved;
+      chatUpdateRoomName(roomId, resolved);
       name = resolved;
-      document.getElementById('chatHeaderName').textContent = name;
-      document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + name.charAt(0).toUpperCase() + '</span>';
-      // Update sidebar too
-      const sidebarItem = document.querySelector('.chat-room-item[data-room-id="' + roomId + '"]');
-      if (sidebarItem) {
-        const nameEl = sidebarItem.querySelector('.chat-room-name');
-        if (nameEl) nameEl.textContent = name;
-        const avatarEl = sidebarItem.querySelector('.chat-room-avatar span');
-        if (avatarEl) avatarEl.textContent = name.charAt(0).toUpperCase();
-      }
     }
   }
 
@@ -2546,19 +2536,7 @@ function chatHandleIncomingMessage(parsed) {
       && chatState.roomMeta[roomId].name === roomId.substring(0, 8)) {
     const friend = chatState.friends[parsed.from];
     if (friend) {
-      const friendName = friend.name || friend.username;
-      chatState.roomMeta[roomId].name = friendName;
-      const sidebarItem = document.querySelector('.chat-room-item[data-room-id="' + roomId + '"]');
-      if (sidebarItem) {
-        const nameEl = sidebarItem.querySelector('.chat-room-name');
-        if (nameEl) nameEl.textContent = friendName;
-        const avatarEl = sidebarItem.querySelector('.chat-room-avatar span');
-        if (avatarEl) avatarEl.textContent = friendName.charAt(0).toUpperCase();
-      }
-      if (roomId === chatState.activeRoomId) {
-        document.getElementById('chatHeaderName').textContent = friendName;
-        document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + friendName.charAt(0).toUpperCase() + '</span>';
-      }
+      chatUpdateRoomName(roomId, friend.name || friend.username);
     }
   }
 
@@ -2586,7 +2564,11 @@ function chatHandleSentConfirm(parsed) {
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (msgs[i]._tempId === tempId) {
         msgs[i]._pending = false;
-        msgs[i].status = 'sent';
+        if (parsed.id) msgs[i].id = parsed.id;
+        // Don't downgrade status if delivered/read already arrived before this confirm
+        if (!msgs[i].status || msgs[i].status === null) {
+          msgs[i].status = 'sent';
+        }
         if (roomId === chatState.activeRoomId) { chatRenderMessages(roomId); chatScrollToBottom(); }
         return;
       }
@@ -2600,8 +2582,8 @@ function chatHandleDelivered(parsed) {
   const myId = currentUserProfile?.id;
   let changed = false;
   chatState.messages[roomId].forEach(m => {
-    if (m.sender_id === myId && (m.status === 'sent' || m.status === null) && !m._pending) {
-      m.status = 'delivered'; changed = true;
+    if (m.sender_id === myId && (m.status === 'sent' || m.status === null || m.status === undefined)) {
+      m.status = 'delivered'; m._pending = false; changed = true;
     }
   });
   if (changed && roomId === chatState.activeRoomId) { chatRenderMessages(roomId); chatScrollToBottom(); }
@@ -2615,8 +2597,8 @@ function chatHandleRead(parsed) {
   if (parsed.userId === myId) return;
   let changed = false;
   chatState.messages[roomId].forEach(m => {
-    if (m.sender_id === myId && m.status !== 'read' && !m._pending) {
-      m.status = 'read'; changed = true;
+    if (m.sender_id === myId && m.status !== 'read') {
+      m.status = 'read'; m._pending = false; changed = true;
     }
   });
   if (changed && roomId === chatState.activeRoomId) { chatRenderMessages(roomId); chatScrollToBottom(); }
