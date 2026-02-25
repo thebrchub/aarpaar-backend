@@ -163,9 +163,10 @@ func (e *Engine) Unregister(c *Client) {
 	c.closeSend()
 
 	// If this was the user's last device, update last_seen_at, broadcast "offline",
-	// and remove from matchmaking queue.
+	// auto-end any active call, and remove from matchmaking queue.
 	if lastDevice {
 		go func() {
+			e.handleCallDisconnect(c.UserID)
 			e.handleUserWentOffline(c.UserID)
 			// Clean up match queue so offline users don't get matched
 			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
@@ -384,6 +385,25 @@ func (e *Engine) subscribeAndListen() {
 			targetUser := fields[3].String()
 
 			switch msgType {
+			// ---------------------------------------------------------
+			// Call signaling: relay to specific user by "to" field
+			// ---------------------------------------------------------
+			case config.MsgTypeCallRing, config.MsgTypeCallAccept, config.MsgTypeCallReject,
+				config.MsgTypeCallOffer, config.MsgTypeCallAnswer, config.MsgTypeICECandidate,
+				config.MsgTypeCallEnd, config.MsgTypeCallMissed, config.MsgTypeCallBusy,
+				config.MsgTypeCallLeave:
+				if targetUser != "" {
+					e.deliverToUser(targetUser, payload)
+				}
+
+			// Call events broadcast to entire room (group call started, participants list)
+			case config.MsgTypeCallStarted, config.MsgTypeCallParticipants, config.MsgTypeSFURedirect:
+				if targetUser != "" {
+					e.deliverToUser(targetUser, payload)
+				} else if roomID != "" {
+					e.deliverToRoom(roomID, payload)
+				}
+
 			case config.MsgTypePrivate, config.MsgTypeMatchFound, config.MsgTypeStrangerDisconnected:
 				// Private/system events targeted at a specific user or a list of targets (P1-1)
 				if targetUser != "" {

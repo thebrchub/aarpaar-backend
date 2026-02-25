@@ -77,6 +77,49 @@ const (
 
 	// Server -> Client: A friend went offline
 	MsgTypePresenceOffline = "presence_offline"
+
+	// ---------------------------------------------------------------------------
+	// Call Signaling Message Types (WebRTC)
+	// ---------------------------------------------------------------------------
+
+	// Caller -> Server -> Callee: Incoming call notification (ring)
+	MsgTypeCallRing = "call_ring"
+
+	// Callee -> Server -> Caller: Callee accepted the call
+	MsgTypeCallAccept = "call_accept"
+
+	// Callee -> Server -> Caller: Callee rejected / busy
+	MsgTypeCallReject = "call_reject"
+
+	// Peer -> Server -> Peer: WebRTC SDP offer
+	MsgTypeCallOffer = "call_offer"
+
+	// Peer -> Server -> Peer: WebRTC SDP answer
+	MsgTypeCallAnswer = "call_answer"
+
+	// Peer -> Server -> Peer: ICE candidate exchange
+	MsgTypeICECandidate = "ice_candidate"
+
+	// Either -> Server -> Other: Hang up
+	MsgTypeCallEnd = "call_end"
+
+	// Server -> Client: Callee was offline / didn't answer
+	MsgTypeCallMissed = "call_missed"
+
+	// Server -> Client: Callee is already on another call
+	MsgTypeCallBusy = "call_busy"
+
+	// Server -> Room: A group call has started (for late joiners)
+	MsgTypeCallStarted = "call_started"
+
+	// Server -> Client: Current participants in a call
+	MsgTypeCallParticipants = "call_participants"
+
+	// Participant -> Server: Leave a group call (without ending it)
+	MsgTypeCallLeave = "call_leave"
+
+	// Server -> Client: Redirect from P2P to SFU (when 3rd person joins)
+	MsgTypeSFURedirect = "sfu_redirect"
 )
 
 // ---------------------------------------------------------------------------
@@ -158,6 +201,11 @@ const (
 	FieldReadAt          = "readAt"            // Read receipt timestamp
 	FieldLastSeenAt      = "lastSeenAt"        // Last-seen timestamp for presence
 	FieldIsOnline        = "isOnline"          // Whether the user is currently online
+	FieldCallID          = "callId"            // Unique call identifier
+	FieldSDP             = "sdp"               // WebRTC SDP offer/answer
+	FieldCandidate       = "candidate"         // ICE candidate
+	FieldCallType        = "callType"          // "audio" or "video"
+	FieldHasVideo        = "hasVideo"          // Whether video is enabled
 )
 
 // ---------------------------------------------------------------------------
