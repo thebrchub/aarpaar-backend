@@ -28,7 +28,7 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT COALESCE(
 			(SELECT row_to_json(t)::text FROM (
-				SELECT id, email, name, username, avatar_url, mobile, gender, is_private, created_at
+				SELECT id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, created_at
 				FROM users WHERE id = $1 AND is_banned = false
 			) t),
 			''
@@ -140,18 +140,19 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Username  *string `json:"username"`
-		Name      *string `json:"name"`
-		Mobile    *string `json:"mobile"`
-		Gender    *string `json:"gender"`
-		IsPrivate *bool   `json:"is_private"`
+		Username     *string `json:"username"`
+		Name         *string `json:"name"`
+		Mobile       *string `json:"mobile"`
+		Gender       *string `json:"gender"`
+		IsPrivate    *bool   `json:"is_private"`
+		ShowLastSeen *bool   `json:"show_last_seen"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		JSONError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if body.Username == nil && body.Name == nil && body.Mobile == nil && body.Gender == nil && body.IsPrivate == nil {
+	if body.Username == nil && body.Name == nil && body.Mobile == nil && body.Gender == nil && body.IsPrivate == nil && body.ShowLastSeen == nil {
 		JSONError(w, "Nothing to update", http.StatusBadRequest)
 		return
 	}
@@ -202,13 +203,18 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		args = append(args, *body.IsPrivate)
 		i++
 	}
+	if body.ShowLastSeen != nil {
+		sets = append(sets, fmt.Sprintf("show_last_seen = $%d", i))
+		args = append(args, *body.ShowLastSeen)
+		i++
+	}
 
 	args = append(args, userID)
 	query := fmt.Sprintf(`
 		WITH updated AS (
 			UPDATE users SET %s
 			WHERE id = $%d AND is_banned = false
-			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, created_at
+			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, created_at
 		)
 		SELECT COALESCE(
 			(SELECT row_to_json(updated)::text FROM updated),
@@ -245,11 +251,12 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Username  string  `json:"username"`
-		Name      string  `json:"name"`
-		Mobile    *string `json:"mobile"`
-		Gender    *string `json:"gender"`
-		IsPrivate *bool   `json:"is_private"`
+		Username     string  `json:"username"`
+		Name         string  `json:"name"`
+		Mobile       *string `json:"mobile"`
+		Gender       *string `json:"gender"`
+		IsPrivate    *bool   `json:"is_private"`
+		ShowLastSeen *bool   `json:"show_last_seen"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		JSONError(w, "Invalid request body", http.StatusBadRequest)
@@ -280,6 +287,11 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 		isPrivate = *body.IsPrivate
 	}
 
+	showLastSeen := true
+	if body.ShowLastSeen != nil {
+		showLastSeen = *body.ShowLastSeen
+	}
+
 	mobile := ""
 	if body.Mobile != nil {
 		mobile = *body.Mobile
@@ -292,9 +304,9 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 
 	query := `
 		WITH updated AS (
-			UPDATE users SET username = $1, name = $2, is_private = $3, mobile = $4, gender = $5
-			WHERE id = $6 AND is_banned = false
-			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, created_at
+			UPDATE users SET username = $1, name = $2, is_private = $3, mobile = $4, gender = $5, show_last_seen = $6
+			WHERE id = $7 AND is_banned = false
+			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, created_at
 		)
 		SELECT COALESCE(
 			(SELECT row_to_json(updated)::text FROM updated),
@@ -303,7 +315,7 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	var rawJSON string
-	err = postgress.GetRawDB().QueryRow(query, body.Username, body.Name, isPrivate, mobile, gender, userID).Scan(&rawJSON)
+	err = postgress.GetRawDB().QueryRow(query, body.Username, body.Name, isPrivate, mobile, gender, showLastSeen, userID).Scan(&rawJSON)
 	if err != nil || rawJSON == "" {
 		log.Printf("[PutMe] DB error: %v", err)
 		JSONError(w, "Update failed", http.StatusInternalServerError)

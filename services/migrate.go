@@ -209,6 +209,16 @@ var migrationStatements = []string{
 	// COLUMN: room_members.last_delivered_at (delivery receipts)
 	// ===================================================================
 	`ALTER TABLE room_members ADD COLUMN IF NOT EXISTS last_delivered_at TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01T00:00:00Z'`,
+
+	// ===================================================================
+	// COLUMN: users.last_seen_at (presence / last-seen feature)
+	// ===================================================================
+	`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+
+	// ===================================================================
+	// COLUMN: users.show_last_seen (privacy toggle for online/last-seen)
+	// ===================================================================
+	`ALTER TABLE users ADD COLUMN IF NOT EXISTS show_last_seen BOOLEAN NOT NULL DEFAULT true`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

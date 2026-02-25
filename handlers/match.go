@@ -70,12 +70,22 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 		err = postgress.GetRawDB().QueryRow(query, userID, partnerID).Scan(&isBlocked)
 
 		if err == nil && !isBlocked {
-			// Found a clean match
-			matchedPartner = partnerID
-			break
+			// Check if we're already friends — friends shouldn't be matched as strangers
+			uid1, uid2 := sortUUIDs(userID, partnerID)
+			var areFriends bool
+			postgress.GetRawDB().QueryRow(
+				`SELECT EXISTS (SELECT 1 FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2)`,
+				uid1, uid2,
+			).Scan(&areFriends)
+
+			if !areFriends {
+				// Found a clean match
+				matchedPartner = partnerID
+				break
+			}
 		}
 
-		// Blocked — put them back for someone else to match with
+		// Blocked or already friends — put them back for someone else
 		rdb.SAdd(ctx, queue, partnerID)
 	}
 
@@ -249,7 +259,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 
 		if exists == 0 {
 			// One-sided: notify partner that we want to be friends
-			notifyUser(ctx, partnerID, map[string]interface{}{
+			notifyUser(ctx, partnerID, map[string]any{
 				config.FieldType:   config.MsgTypeFriendRequest,
 				config.FieldRoomID: req.RoomID,
 				config.FieldFrom:   userID,

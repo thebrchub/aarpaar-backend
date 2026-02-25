@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -12,18 +14,23 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// GetRoomsHandler returns all chat rooms for the authenticated user.
+// GetRoomsHandler returns paginated chat rooms for the authenticated user.
 //
 // Each room includes:
 //   - room_id, name, type
 //   - last_message_preview (content of the newest message)
 //   - last_message_at (timestamp of the newest message)
 //   - unread_count (messages since the user last read)
+//   - members (array of {id, username, name} for every member in the room)
+//
+// Uses cursor-based pagination:
+//   - cursor = RFC 3339 timestamp of the last room's last_message_at
+//   - limit  = how many rooms to return (default 50, max 50)
 //
 // The SQL uses json_agg so Postgres returns the JSON directly.
 // We pipe those bytes to the response — zero Go struct allocations.
 //
-// GET /api/v1/rooms (requires auth)
+// GET /api/v1/rooms?cursor=2025-01-01T00:00:00Z&limit=50 (requires auth)
 // ---------------------------------------------------------------------------
 
 func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
@@ -34,8 +41,26 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Build the JSON response entirely in Postgres using LATERAL JOINs
-	//    Uses rooms.last_message_at for fast sorting (updated via trigger)
+	// 2. Parse cursor: RFC 3339 timestamp to paginate from (default = now)
+	cursorStr := r.URL.Query().Get("cursor")
+	cursor := time.Now().UTC()
+	if cursorStr != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, cursorStr); err == nil {
+			cursor = parsed
+		}
+	}
+
+	// 3. Parse limit: how many rooms to return (default & max = 50)
+	limitStr := r.URL.Query().Get("limit")
+	limit := config.DefaultRoomLimit
+	if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= config.DefaultRoomLimit {
+		limit = parsed
+	}
+
+	// 4. Build the JSON response entirely in Postgres using LATERAL JOINs.
+	//    Uses rooms.last_message_at for fast sorting (updated via trigger).
+	//    Members sub-select returns each room participant's id, username, name.
+	//    For DM rooms, includes last_seen_at (respects show_last_seen privacy).
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
@@ -45,7 +70,8 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 				r.type,
 				lm.content AS last_message_preview,
 				r.last_message_at,
-				COALESCE(uc.unread_count, 0) AS unread_count
+				COALESCE(uc.unread_count, 0) AS unread_count,
+				COALESCE(mem.members, '[]'::json) AS members
 			FROM room_members rm
 			JOIN rooms r ON rm.room_id = r.id
 			LEFT JOIN LATERAL (
@@ -59,21 +85,38 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 				SELECT COUNT(id)::int AS unread_count 
 				FROM messages m 
 				WHERE m.room_id = r.id AND m.created_at > rm.last_read_at
+				  AND m.sender_id != $1
 			) uc ON true
+			LEFT JOIN LATERAL (
+				SELECT json_agg(json_build_object(
+					'id', u.id,
+					'username', u.username,
+					'name', u.name,
+					'last_seen_at', CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END
+				)) AS members
+				FROM room_members rm2
+				JOIN users u ON u.id = rm2.user_id
+				WHERE rm2.room_id = r.id AND rm2.status = 'active'
+			) mem ON true
 			WHERE rm.user_id = $1 AND rm.status = 'active'
+			  AND (r.last_message_at < $2 OR r.last_message_at IS NULL)
 			ORDER BY r.last_message_at DESC NULLS LAST
+			LIMIT $3
 		) t;
 	`
 
-	// 3. Execute and pipe the raw JSON bytes to the response
+	// 5. Execute and pipe the raw JSON bytes to the response
 	var rawJSONBytes []byte
-	err := postgress.GetRawDB().QueryRow(query, userID).Scan(&rawJSONBytes)
+	err := postgress.GetRawDB().QueryRow(query, userID, cursor, limit).Scan(&rawJSONBytes)
 	if err != nil {
 		JSONError(w, "Failed to fetch rooms", http.StatusInternalServerError)
 		return
 	}
 
-	// 4. Send directly to the client — zero struct allocations
+	// 6. Enrich DM room members with real-time is_online status from the engine
+	rawJSONBytes = enrichRoomsWithOnlineStatus(rawJSONBytes, userID)
+
+	// 7. Send directly to the client — zero struct allocations
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	w.Write(rawJSONBytes)
@@ -236,4 +279,44 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		"existing": false,
 		"pending":  isPending,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// enrichRoomsWithOnlineStatus adds an "is_online" field to each member of
+// every room in the JSON array. Uses the in-memory Engine for real-time status.
+// ---------------------------------------------------------------------------
+
+func enrichRoomsWithOnlineStatus(raw []byte, currentUserID string) []byte {
+	e := chat.GetEngine()
+	if e == nil {
+		return raw
+	}
+
+	var rooms []map[string]interface{}
+	if err := json.Unmarshal(raw, &rooms); err != nil {
+		return raw
+	}
+
+	for _, room := range rooms {
+		members, ok := room["members"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, m := range members {
+			member, ok := m.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			id, _ := member["id"].(string)
+			if id != "" {
+				member["is_online"] = e.IsUserOnline(id)
+			}
+		}
+	}
+
+	enriched, err := json.Marshal(rooms)
+	if err != nil {
+		return raw
+	}
+	return enriched
 }

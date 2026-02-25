@@ -360,6 +360,15 @@
     .receipt.delivered { color: var(--text-muted); }
     .receipt.read { color: var(--info); }
 
+    /* Online status dot (reusable) */
+    .presence-dot {
+      display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+      background: var(--text-muted); flex-shrink: 0;
+    }
+    .presence-dot.online { background: #25d366; box-shadow: 0 0 6px #25d366; }
+    .presence-dot.offline { background: var(--text-muted); }
+    .last-seen-text { font-size: .65rem; color: var(--text-muted); }
+
     /* Custom scrollbar */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -733,6 +742,14 @@
           <label>Private Account</label>
           <span style="font-size:.7rem;color:var(--text-muted)">(leave unchecked = no change)</span>
         </div>
+        <div class="toggle-row">
+          <label class="toggle">
+            <input type="checkbox" id="patchShowLastSeen" checked />
+            <span class="slider"></span>
+          </label>
+          <label>Show Last Seen / Online</label>
+          <span style="font-size:.7rem;color:var(--text-muted)">(visible to friends)</span>
+        </div>
         <button class="btn btn-primary" onclick="patchProfile()">Update (PATCH)</button>
         <div id="patchResponse" class="response-panel hidden"></div>
       </div>
@@ -770,6 +787,13 @@
           </label>
           <label>Private Account</label>
         </div>
+        <div class="toggle-row">
+          <label class="toggle">
+            <input type="checkbox" id="putShowLastSeen" checked />
+            <span class="slider"></span>
+          </label>
+          <label>Show Last Seen / Online</label>
+        </div>
         <button class="btn btn-primary" onclick="putProfile()">Replace (PUT)</button>
         <div id="putResponse" class="response-panel hidden"></div>
       </div>
@@ -781,11 +805,21 @@
     <div class="grid-2">
       <!-- Room List -->
       <div class="card">
-        <h3><span class="badge badge-get">GET</span> My Rooms</h3>
+        <h3><span class="badge badge-get">GET</span> My Rooms (Paginated)</h3>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-          <code>/api/v1/rooms</code> — List all active chat rooms (excludes pending DM requests).
+          <code>/api/v1/rooms?cursor=&amp;limit=50</code> — Cursor-based paginated room list. Each room includes a <code>members</code> array of {id, username, name}.
         </p>
-        <button class="btn btn-primary" onclick="getRooms()">Fetch Rooms</button>
+        <div class="inline-form">
+          <div class="form-row">
+            <label>Cursor (last_message_at timestamp)</label>
+            <input type="text" id="roomsCursor" placeholder="Optional — RFC3339 timestamp" />
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Limit</label>
+            <input type="number" id="roomsLimit" value="50" min="1" max="50" />
+          </div>
+          <button class="btn btn-primary" onclick="getRooms()">Fetch</button>
+        </div>
         <div id="roomList" class="scroll-box" style="margin-top:14px"></div>
         <div id="roomsResponse" class="response-panel hidden"></div>
       </div>
@@ -1432,6 +1466,7 @@ async function getMyProfile() {
           <h4>${escapeHtml(d.name || 'Unknown')} ${d.is_private ? '<span style="font-size:.7rem;color:var(--warn)">🔒 Private</span>' : '<span style="font-size:.7rem;color:var(--text-muted)">Public</span>'}</h4>
           <p>@${escapeHtml(d.username || '—')} &bull; ${escapeHtml(d.email || '')}</p>
           <p style="font-size:.72rem;color:var(--text-muted)">Gender: ${escapeHtml(d.gender || 'Any')} &bull; Mobile: ${escapeHtml(d.mobile || '—')}</p>
+          <p style="font-size:.72rem;color:var(--text-muted)">Last Seen: ${d.show_last_seen !== false ? '👁 Visible to friends' : '🔒 Hidden'}</p>
           <p style="font-family:var(--mono);font-size:.7rem;color:var(--text-muted)">${escapeHtml(d.id)}</p>
         </div>
       </div>`;
@@ -1440,6 +1475,9 @@ async function getMyProfile() {
       document.getElementById('patchIsPrivate').checked = d.is_private;
       document.getElementById('putIsPrivate').checked = d.is_private;
     }
+    // Sync show_last_seen toggle
+    document.getElementById('patchShowLastSeen').checked = d.show_last_seen !== false;
+    document.getElementById('putShowLastSeen').checked = d.show_last_seen !== false;
     // If username is already set, disable it in edit forms
     if (d.username) {
       document.getElementById('patchUsername').value = d.username;
@@ -1587,20 +1625,35 @@ async function searchUsers() {
 //  ROOMS
 // ======================================================================
 async function getRooms() {
-  const r = await apiCall('GET', '/api/v1/rooms', null, 'roomsResponse');
+  let path = '/api/v1/rooms';
+  const params = [];
+  const cursor = document.getElementById('roomsCursor').value.trim();
+  const limit = document.getElementById('roomsLimit').value.trim();
+  if (cursor) params.push('cursor=' + encodeURIComponent(cursor));
+  if (limit) params.push('limit=' + encodeURIComponent(limit));
+  if (params.length) path += '?' + params.join('&');
+
+  const r = await apiCall('GET', path, null, 'roomsResponse');
   const el = document.getElementById('roomList');
   if (r.data && Array.isArray(r.data) && r.data.length > 0) {
-    el.innerHTML = r.data.map(rm => `
+    el.innerHTML = r.data.map(rm => {
+      const members = (rm.members || []).map(m => escapeHtml(m.name || m.username || m.id)).join(', ');
+      return `
       <div class="room-item" onclick="document.getElementById('msgRoomId').value='${escapeHtml(rm.room_id)}';document.getElementById('wsRoomId').value='${escapeHtml(rm.room_id)}';document.getElementById('wsMsgRoomId').value='${escapeHtml(rm.room_id)}';wsMarkRead('${escapeHtml(rm.room_id)}');toast('Room ID set in message & WS fields','info');">
         <div class="room-info">
           <h4>${escapeHtml(rm.name || rm.room_id)}</h4>
           <p>${escapeHtml(rm.last_message_preview || 'No messages')}${rm.type ? ' &bull; ' + escapeHtml(rm.type) : ''}</p>
+          <p style="font-size:.68rem;color:var(--info)">Members: ${members || 'none'}</p>
         </div>
         <div class="room-meta">
           ${rm.unread_count > 0 ? '<span class="unread">' + rm.unread_count + '</span><br/>' : ''}
           <span>${rm.last_message_at ? new Date(rm.last_message_at).toLocaleString() : ''}</span>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
+    // Set cursor for next page
+    const lastRoom = r.data[r.data.length - 1];
+    if (lastRoom && lastRoom.last_message_at) document.getElementById('roomsCursor').value = lastRoom.last_message_at;
   } else {
     el.innerHTML = '<div class="empty-state">No rooms found</div>';
   }
@@ -1822,6 +1875,12 @@ function wsConnect() {
       if (parsed.type === 'message_read') {
         wsLog('✓✓ Read by ' + (parsed.userId || 'peer') + ' in room ' + (parsed.roomId || ''), 'system');
       }
+      if (parsed.type === 'presence_online') {
+        toast((parsed.userId || 'A friend') + ' is now online', 'info');
+      }
+      if (parsed.type === 'presence_offline') {
+        wsLog('Offline: ' + (parsed.userId || '') + (parsed.lastSeenAt ? ' (last seen ' + parsed.lastSeenAt + ')' : ''), 'system');
+      }
       if (parsed.type === 'error') {
         let errMsg = parsed.message || parsed.code;
         if (parsed.code === 'DEPRECATED') errMsg = '⚠ ' + errMsg + ' (join_room/leave_room removed)';
@@ -1946,12 +2005,14 @@ async function patchProfile() {
   const m = document.getElementById('patchMobile').value.trim();
   const g = document.getElementById('patchGender').value;
   const privCheckbox = document.getElementById('patchIsPrivate');
+  const lastSeenCheckbox = document.getElementById('patchShowLastSeen');
   if (u) body.username = u;
   if (n) body.name = n;
   if (m) body.mobile = m;
   if (g) body.gender = g;
   // Only send is_private if the checkbox was explicitly changed
   if (privCheckbox.dataset.changed === '1') body.is_private = privCheckbox.checked;
+  if (lastSeenCheckbox.dataset.changed === '1') body.show_last_seen = lastSeenCheckbox.checked;
   if (Object.keys(body).length === 0) return toast('Enter at least one field to update', 'error');
   const r = await apiCall('PATCH', '/api/v1/users/me', body, 'patchResponse');
   if (r.status >= 200 && r.status < 300) {
@@ -1962,9 +2023,11 @@ async function patchProfile() {
     toast('Username cannot be changed once set', 'error');
   }
   privCheckbox.dataset.changed = '';
+  lastSeenCheckbox.dataset.changed = '';
 }
-// Track if privacy toggle was explicitly changed
+// Track if privacy toggles were explicitly changed
 document.getElementById('patchIsPrivate').addEventListener('change', function() { this.dataset.changed = '1'; });
+document.getElementById('patchShowLastSeen').addEventListener('change', function() { this.dataset.changed = '1'; });
 
 // ======================================================================
 //  USERS: Replace Profile (PUT)
@@ -1974,7 +2037,8 @@ async function putProfile() {
   const n = document.getElementById('putName').value.trim();
   if (!u || !n) return toast('Both username and name are required', 'error');
   const p = document.getElementById('putIsPrivate').checked;
-  const body = { username: u, name: n, is_private: p };
+  const sls = document.getElementById('putShowLastSeen').checked;
+  const body = { username: u, name: n, is_private: p, show_last_seen: sls };
   const m = document.getElementById('putMobile').value.trim();
   if (m) body.mobile = m;
   body.gender = document.getElementById('putGender').value;
@@ -2003,20 +2067,26 @@ async function getFriends() {
   const r = await apiCall('GET', '/api/v1/friends', null, 'friendsResponse');
   const el = document.getElementById('friendsList');
   if (r.data && Array.isArray(r.data) && r.data.length > 0) {
-    el.innerHTML = r.data.map(f => `
+    el.innerHTML = r.data.map(f => {
+      const isOnline = f.is_online === true;
+      const lastSeenStr = f.last_seen_at ? formatLastSeen(new Date(f.last_seen_at)) : '';
+      const statusText = isOnline ? '<span style="color:#25d366;font-size:.7rem">online</span>'
+        : (lastSeenStr ? '<span class="last-seen-text">last seen ' + lastSeenStr + '</span>' : '');
+      return `
       <div class="req-item">
         <div class="req-info">
           <img src="${escapeHtml(f.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(f.name || 'U'))}" alt="" />
           <div>
-            <div class="req-name">${escapeHtml(f.name || 'Unknown')} <span style="color:var(--text-muted)">@${escapeHtml(f.username || '')}</span></div>
-            <div class="req-meta">Friends since ${f.friends_since ? new Date(f.friends_since).toLocaleDateString() : '—'}</div>
+            <div class="req-name"><span class="presence-dot ${isOnline ? 'online' : 'offline'}" style="margin-right:5px"></span>${escapeHtml(f.name || 'Unknown')} <span style="color:var(--text-muted)">@${escapeHtml(f.username || '')}</span></div>
+            <div class="req-meta">Friends since ${f.friends_since ? new Date(f.friends_since).toLocaleDateString() : '—'} ${statusText ? ' &bull; ' + statusText : ''}</div>
           </div>
         </div>
         <div class="req-actions">
           <button class="btn btn-outline btn-sm" onclick="document.getElementById('dmUsername').value='${escapeHtml(f.username || '')}'; document.querySelector('[data-tab=rooms]').click(); toast('Username set in DM field','info');">DM</button>
           <button class="btn btn-danger btn-sm" onclick="document.getElementById('friendActionUsername').value='${escapeHtml(f.username || '')}'; removeFriend();">Remove</button>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   } else {
     el.innerHTML = '<div class="empty-state">No friends yet</div>';
   }
@@ -2126,23 +2196,15 @@ const chatState = {
   dmRequests: [],
   activeRoomId: null,
   messages: {},          // roomId → [msg objects]
-  roomMeta: {},          // roomId → {name, type, unread}
+  roomMeta: {},          // roomId → {name, type, unread, members}
   typingUsers: {},       // roomId → {userId: timeoutId}
   myTypingTimeout: null,
   amITyping: false,
   oldestCursor: {},      // roomId → oldest msg id for pagination
   hasMoreMessages: {},   // roomId → bool
-  // Tracks rooms where the current user sent the last message.
-  // Used to suppress false unread badges caused by the flusher delay:
-  // mark_read runs instantly but the message is persisted ~3s later,
-  // so the backend briefly reports unread_count=1 for the sender.
-  sentRooms: new Set(JSON.parse(sessionStorage.getItem('chatSentRooms') || '[]')),
+  roomsCursor: null,     // RFC3339 timestamp for rooms pagination
+  hasMoreRooms: false,   // whether more rooms can be loaded
 };
-
-// Persist sentRooms to sessionStorage so the suppression survives page reloads
-function chatPersistSentRooms() {
-  try { sessionStorage.setItem('chatSentRooms', JSON.stringify([...chatState.sentRooms])); } catch(e) {}
-}
 
 // ---- lifecycle hooks (called from WS handlers) ----
 async function chatOnWsConnected() {
@@ -2161,17 +2223,18 @@ function chatOnWsDisconnected() {
 
 // ---- load rooms / friends / DM requests ----
 async function chatLoadRooms() {
-  // Show loading spinner immediately so users never see raw room IDs
+  // Show loading spinner immediately
   const roomListEl = document.getElementById('chatRoomList');
   if (roomListEl) roomListEl.innerHTML = '<div class="chat-loading"><div class="spinner"></div><div>Loading chats…</div></div>';
   try {
+    const myId = currentUserProfile?.id;
     const [roomsRaw, friendsRaw, dmReqRaw] = await Promise.all([
-      fetch(base() + '/api/v1/rooms', { headers: authHeaders() }).then(r => r.json()),
+      fetch(base() + '/api/v1/rooms?limit=50', { headers: authHeaders() }).then(r => r.json()),
       fetch(base() + '/api/v1/friends', { headers: authHeaders() }).then(r => r.json()),
       fetch(base() + '/api/v1/rooms/requests', { headers: authHeaders() }).then(r => r.json()).catch(() => [])
     ]);
 
-    // Friends lookup
+    // Friends lookup (still useful for incoming WS events)
     const friends = Array.isArray(friendsRaw) ? friendsRaw : (friendsRaw.data || []);
     chatState.friends = {};
     friends.forEach(f => {
@@ -2179,26 +2242,30 @@ async function chatLoadRooms() {
       if (f.id) chatState.friends[f.id] = f;
     });
 
-    // Rooms
+    // Rooms — backend returns them sorted by last_message_at DESC, with members included
     chatState.rooms = Array.isArray(roomsRaw) ? roomsRaw : (roomsRaw.data || []);
-    chatState.rooms.sort((a, b) => {
-      const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
-      const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
-      return tb - ta;
-    });
+
+    // Track pagination cursor
+    chatState.hasMoreRooms = chatState.rooms.length >= 50;
+    if (chatState.rooms.length > 0) {
+      const lastRoom = chatState.rooms[chatState.rooms.length - 1];
+      chatState.roomsCursor = lastRoom.last_message_at || null;
+    } else {
+      chatState.roomsCursor = null;
+    }
+
     chatState.rooms.forEach(rm => {
       let resolvedName = rm.name || null;
-      // For DM rooms, try to resolve the friend's display name
-      if (rm.type === 'DM' && !resolvedName) {
-        resolvedName = chatResolveDmRoomName(rm.room_id);
+      // For DM rooms, resolve name directly from the members array
+      if (rm.type === 'DM' && !resolvedName && rm.members && rm.members.length > 0 && myId) {
+        const other = rm.members.find(m => m.id !== myId);
+        if (other) resolvedName = other.name || other.username;
       }
-      // If we were the last sender in this room, the backend's unread_count
-      // is a false positive caused by flusher lag — suppress it to 0.
-      const suppressUnread = chatState.sentRooms.has(rm.room_id);
       chatState.roomMeta[rm.room_id] = {
         name: resolvedName || rm.room_id.substring(0, 8),
         type: rm.type,
-        unread: suppressUnread ? 0 : (rm.unread_count || 0)
+        unread: rm.unread_count || 0,
+        members: rm.members || []
       };
     });
 
@@ -2210,92 +2277,49 @@ async function chatLoadRooms() {
     // Acknowledge delivery for all rooms (so senders see double ticks)
     chatSendDeliveryAckForAllRooms();
 
-    // Resolve all DM names BEFORE rendering the sidebar so users never see room IDs
-    await chatResolvePendingDmNames();
     chatRenderSidebar();
   } catch (e) {
     console.error('chatLoadRooms', e);
-    // On error, still render whatever we have so the UI isn't stuck on the spinner
     chatRenderSidebar();
   }
 }
 
-// Resolve DM room name from cached messages or friends list
-function chatResolveDmRoomName(roomId) {
+// Load more rooms for sidebar pagination
+async function chatLoadMoreRooms() {
+  if (!chatState.roomsCursor || !chatState.hasMoreRooms) return;
   const myId = currentUserProfile?.id;
-  // Check if we already have messages cached for this room
-  const msgs = chatState.messages[roomId];
-  if (msgs && msgs.length > 0 && myId) {
-    for (const m of msgs) {
-      const otherId = m.sender_id !== myId ? m.sender_id : null;
-      if (otherId && chatState.friends[otherId]) {
-        return chatState.friends[otherId].name || chatState.friends[otherId].username;
+  try {
+    const resp = await fetch(base() + '/api/v1/rooms?cursor=' + encodeURIComponent(chatState.roomsCursor) + '&limit=50', { headers: authHeaders() });
+    const roomsRaw = await resp.json();
+    const newRooms = Array.isArray(roomsRaw) ? roomsRaw : (roomsRaw.data || []);
+
+    newRooms.forEach(rm => {
+      let resolvedName = rm.name || null;
+      if (rm.type === 'DM' && !resolvedName && rm.members && rm.members.length > 0 && myId) {
+        const other = rm.members.find(m => m.id !== myId);
+        if (other) resolvedName = other.name || other.username;
       }
+      chatState.roomMeta[rm.room_id] = {
+        name: resolvedName || rm.room_id.substring(0, 8),
+        type: rm.type,
+        unread: rm.unread_count || 0,
+        members: rm.members || []
+      };
+    });
+
+    chatState.rooms = [...chatState.rooms, ...newRooms];
+    chatState.hasMoreRooms = newRooms.length >= 50;
+    if (newRooms.length > 0) {
+      const lastRoom = newRooms[newRooms.length - 1];
+      chatState.roomsCursor = lastRoom.last_message_at || null;
     }
-  }
-  return null;
-}
+    chatRenderSidebar();
 
-// For DM rooms that still show truncated IDs, fetch messages to discover the friend
-async function chatResolvePendingDmNames() {
-  const myId = currentUserProfile?.id;
-  if (!myId) return;
-
-  // Track which friend IDs are already resolved to a room
-  const resolvedFriendIds = new Set();
-  const unresolvedRooms = [];
-
-  for (const rm of chatState.rooms) {
-    if (rm.type !== 'DM') continue;
-    const meta = chatState.roomMeta[rm.room_id];
-    if (!meta || meta.name !== rm.room_id.substring(0, 8)) {
-      // Already resolved — record which friend this maps to
-      for (const key of Object.keys(chatState.friends)) {
-        const f = chatState.friends[key];
-        if (f.id && (f.name === meta.name || f.username === meta.name)) {
-          resolvedFriendIds.add(f.id);
-        }
-      }
-      continue;
-    }
-    unresolvedRooms.push(rm);
-  }
-
-  // For each unresolved DM room, fetch a batch of messages to find the other person
-  for (const rm of unresolvedRooms) {
-    try {
-      const resp = await fetch(base() + '/api/v1/rooms/' + encodeURIComponent(rm.room_id) + '/messages?limit=10', { headers: authHeaders() });
-      if (!resp.ok) continue;
-      const data = await resp.json();
-      const msgs = Array.isArray(data) ? data : (data.data || []);
-      for (const m of msgs) {
-        if (m.sender_id && m.sender_id !== myId && chatState.friends[m.sender_id]) {
-          const f = chatState.friends[m.sender_id];
-          chatUpdateRoomName(rm.room_id, f.name || f.username);
-          resolvedFriendIds.add(m.sender_id);
-          break;
-        }
-      }
-    } catch(e) { /* ignore */ }
-  }
-
-  // Final pass: for any still-unresolved rooms, use elimination
-  const stillUnresolved = unresolvedRooms.filter(rm => {
-    const meta = chatState.roomMeta[rm.room_id];
-    return meta && meta.name === rm.room_id.substring(0, 8);
-  });
-  if (stillUnresolved.length > 0) {
-    const allFriendIds = new Set();
-    for (const key of Object.keys(chatState.friends)) {
-      const f = chatState.friends[key];
-      if (f.id && f.id !== myId) allFriendIds.add(f.id);
-    }
-    const unmatchedFriends = [...allFriendIds].filter(id => !resolvedFriendIds.has(id));
-    if (stillUnresolved.length === 1 && unmatchedFriends.length === 1) {
-      const f = chatState.friends[unmatchedFriends[0]];
-      if (f) chatUpdateRoomName(stillUnresolved[0].room_id, f.name || f.username);
-    }
-  }
+    // Send delivery acks for new rooms
+    newRooms.forEach(rm => {
+      if (ws && ws.readyState === 1) wsSend({ type: 'mark_delivered', roomId: rm.room_id });
+    });
+  } catch (e) { console.error('chatLoadMoreRooms', e); }
 }
 
 // Helper: update a room's display name in meta, sidebar, and header
@@ -2339,9 +2363,19 @@ function chatRenderSidebar() {
     const initial = name.charAt(0).toUpperCase();
     const preview = rm.last_message_preview || 'No messages yet';
     const time = rm.last_message_at ? chatFormatTime(new Date(rm.last_message_at)) : '';
+    // Presence for DM rooms
+    const myId = currentUserProfile?.id;
+    let presenceHtml = '';
+    if (rm.type === 'DM' && rm.members && myId) {
+      const other = rm.members.find(m => m.id !== myId);
+      if (other) {
+        const isOn = other.is_online === true;
+        presenceHtml = '<span class="presence-dot ' + (isOn ? 'online' : 'offline') + '" id="chatPresence_' + other.id + '" style="position:absolute;bottom:0;right:0;border:2px solid var(--surface)"></span>';
+      }
+    }
     return `
       <div class="chat-room-item ${isActive ? 'active' : ''}" onclick="chatSelectRoom('${escapeHtml(rm.room_id)}')" data-room-id="${escapeHtml(rm.room_id)}">
-        <div class="chat-room-avatar"><span>${escapeHtml(initial)}</span></div>
+        <div class="chat-room-avatar" style="position:relative"><span>${escapeHtml(initial)}</span>${presenceHtml}</div>
         <div class="chat-room-details">
           <div class="chat-room-name">${escapeHtml(name)}</div>
           <div class="chat-room-preview" id="chatPreview_${rm.room_id}">${escapeHtml(preview)}</div>
@@ -2352,6 +2386,10 @@ function chatRenderSidebar() {
         </div>
       </div>`;
   }).join('');
+  // Add "Load more" link if there are more rooms to fetch
+  if (chatState.hasMoreRooms) {
+    el.innerHTML += '<div class="chat-load-more" onclick="chatLoadMoreRooms()">&darr; Load older chats</div>';
+  }
 }
 
 // ---- DM requests (collapsible) ----
@@ -2416,6 +2454,8 @@ async function chatSelectRoom(roomId) {
   let name = meta.name || roomId.substring(0, 8);
   document.getElementById('chatHeaderName').textContent = name;
   document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + name.charAt(0).toUpperCase() + '</span>';
+  // Show online/last-seen status in header for DM rooms
+  chatUpdateHeaderPresence(roomId);
   // Clear unread
   const unreadEl = document.getElementById('chatUnread_' + roomId);
   if (unreadEl) { unreadEl.style.display = 'none'; unreadEl.textContent = '0'; }
@@ -2424,15 +2464,6 @@ async function chatSelectRoom(roomId) {
   if (ws && ws.readyState === 1) wsSend({ type: 'mark_read', roomId });
   // Fetch messages
   await chatFetchMessages(roomId, false);
-
-  // After fetching messages, try to resolve DM friend name if still unresolved
-  if (meta.type === 'DM' && meta.name === roomId.substring(0, 8)) {
-    const resolved = chatResolveDmRoomName(roomId);
-    if (resolved) {
-      chatUpdateRoomName(roomId, resolved);
-      name = resolved;
-    }
-  }
 
   chatRenderMessages(roomId);
   chatScrollToBottom();
@@ -2553,11 +2584,6 @@ function chatSendMessage() {
   // Mark room as read for the sender (so our own messages don't count as unread)
   if (ws && ws.readyState === 1) wsSend({ type: 'mark_read', roomId });
 
-  // Track that we were the last sender in this room so chatLoadRooms()
-  // suppresses the false unread_count the backend returns due to flusher lag.
-  chatState.sentRooms.add(roomId);
-  chatPersistSentRooms();
-
   // Stop typing indicator
   if (chatState.amITyping) {
     chatState.amITyping = false;
@@ -2596,6 +2622,8 @@ function chatHandleWsEvent(parsed) {
     case 'room_closed':
     case 'dm_request':
       chatLoadRooms(); break;
+    case 'presence_online':  chatHandlePresence(parsed, true);  break;
+    case 'presence_offline': chatHandlePresence(parsed, false); break;
   }
 }
 
@@ -2606,22 +2634,18 @@ function chatHandleIncomingMessage(parsed) {
   // Skip own messages (already added optimistically)
   if (parsed.from === myId) return;
 
-  // The other person sent a message → they are now the last sender,
-  // so future unread counts from the backend are legitimate for us.
-  chatState.sentRooms.delete(roomId);
-  chatPersistSentRooms();
-
   const msg = { id: parsed.id || null, sender_id: parsed.from, content: parsed.text,
     created_at: new Date().toISOString(), status: null };
   if (!chatState.messages[roomId]) chatState.messages[roomId] = [];
   chatState.messages[roomId].push(msg);
 
-  // Resolve DM room name from incoming message sender if not yet resolved
-  if (parsed.from && chatState.roomMeta[roomId] && chatState.roomMeta[roomId].type === 'DM'
+  // Resolve DM room name from members if not yet resolved
+  if (parsed.from && chatState.roomMeta[roomId]?.type === 'DM'
       && chatState.roomMeta[roomId].name === roomId.substring(0, 8)) {
-    const friend = chatState.friends[parsed.from];
-    if (friend) {
-      chatUpdateRoomName(roomId, friend.name || friend.username);
+    const members = chatState.roomMeta[roomId].members || [];
+    const sender = members.find(m => m.id === parsed.from);
+    if (sender) {
+      chatUpdateRoomName(roomId, sender.name || sender.username);
     }
   }
 
@@ -2757,6 +2781,110 @@ document.getElementById('chatInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); chatSendMessage(); }
 });
 document.getElementById('chatInput').addEventListener('input', chatHandleTypingInput);
+
+// ======================================================================
+//  PRESENCE — Online / Last Seen
+// ======================================================================
+
+// Format last seen timestamp into a human-readable string (like Telegram)
+function formatLastSeen(date) {
+  if (!date || isNaN(date.getTime())) return '';
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return 'just now';
+  if (diffMins < 60) return diffMins + ' min ago';
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24 && now.getDate() === date.getDate())
+    return 'today at ' + date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  if (date.getDate() === yesterday.getDate() && date.getMonth() === yesterday.getMonth())
+    return 'yesterday at ' + date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+    + ' at ' + date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+
+// Track online status of friends (userId → { online: bool, lastSeenAt: string|null })
+const presenceMap = {};
+
+// Handle inbound presence WS events
+function chatHandlePresence(parsed, isOnline) {
+  const userId = parsed.userId;
+  if (!userId) return;
+  presenceMap[userId] = { online: isOnline, lastSeenAt: isOnline ? null : (parsed.lastSeenAt || null) };
+
+  // Update sidebar presence dots
+  const dot = document.getElementById('chatPresence_' + userId);
+  if (dot) {
+    dot.className = 'presence-dot ' + (isOnline ? 'online' : 'offline');
+  }
+
+  // Update chat header if this user is the active DM partner
+  if (chatState.activeRoomId) {
+    const meta = chatState.roomMeta[chatState.activeRoomId];
+    if (meta && meta.type === 'DM') {
+      const myId = currentUserProfile?.id;
+      const other = (meta.members || []).find(m => m.id !== myId);
+      if (other && other.id === userId) {
+        // Update the member's cached online status
+        other.is_online = isOnline;
+        if (!isOnline && parsed.lastSeenAt) other.last_seen_at = parsed.lastSeenAt;
+        chatUpdateHeaderPresence(chatState.activeRoomId);
+      }
+    }
+  }
+
+  // Also update cached room members for sidebar re-renders
+  for (const roomId in chatState.roomMeta) {
+    const meta = chatState.roomMeta[roomId];
+    if (meta && meta.members) {
+      meta.members.forEach(m => {
+        if (m.id === userId) {
+          m.is_online = isOnline;
+          if (!isOnline && parsed.lastSeenAt) m.last_seen_at = parsed.lastSeenAt;
+        }
+      });
+    }
+  }
+}
+
+// Show online/last-seen below contact name in chat header
+function chatUpdateHeaderPresence(roomId) {
+  const meta = chatState.roomMeta[roomId];
+  if (!meta || meta.type !== 'DM') return;
+  const myId = currentUserProfile?.id;
+  const other = (meta.members || []).find(m => m.id !== myId);
+  if (!other) return;
+
+  // Check real-time presence from presenceMap first, then fall back to REST data
+  const presInfo = presenceMap[other.id];
+  const isOnline = presInfo ? presInfo.online : (other.is_online === true);
+  const lastSeenAt = presInfo?.lastSeenAt || other.last_seen_at;
+
+  const typingEl = document.getElementById('chatTypingIndicator');
+  // Only show presence when not typing
+  if (typingEl && !typingEl.classList.contains('hidden')) return;
+
+  let statusHtml = '';
+  if (isOnline) {
+    statusHtml = '<span style="color:#25d366;font-size:.72rem">online</span>';
+  } else if (lastSeenAt) {
+    statusHtml = '<span class="last-seen-text">last seen ' + formatLastSeen(new Date(lastSeenAt)) + '</span>';
+  }
+
+  // Insert/update a status line below the name
+  let statusEl = document.getElementById('chatHeaderPresence');
+  if (!statusEl) {
+    const nameEl = document.querySelector('.chat-contact-name');
+    if (nameEl && nameEl.parentElement) {
+      statusEl = document.createElement('div');
+      statusEl.id = 'chatHeaderPresence';
+      statusEl.style.fontSize = '.72rem';
+      nameEl.parentElement.insertBefore(statusEl, nameEl.nextSibling);
+    }
+  }
+  if (statusEl) statusEl.innerHTML = statusHtml;
+}
 </script>
 
 </body>

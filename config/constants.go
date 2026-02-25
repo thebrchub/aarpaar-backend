@@ -71,6 +71,12 @@ const (
 
 	// Server -> Client: Recipient has read your messages
 	MsgTypeMessageRead = "message_read"
+
+	// Server -> Client: A friend came online
+	MsgTypePresenceOnline = "presence_online"
+
+	// Server -> Client: A friend went offline
+	MsgTypePresenceOffline = "presence_offline"
 )
 
 // ---------------------------------------------------------------------------
@@ -150,6 +156,8 @@ const (
 	FieldUserID          = "userId"            // Single user ID (receipts)
 	FieldDeliveredAt     = "deliveredAt"       // Delivery receipt timestamp
 	FieldReadAt          = "readAt"            // Read receipt timestamp
+	FieldLastSeenAt      = "lastSeenAt"        // Last-seen timestamp for presence
+	FieldIsOnline        = "isOnline"          // Whether the user is currently online
 )
 
 // ---------------------------------------------------------------------------
@@ -174,6 +182,9 @@ const (
 
 	// MaxMessageLimit is the maximum number of messages a client can request
 	MaxMessageLimit = 100
+
+	// DefaultRoomLimit is the default (and max) number of rooms returned per page
+	DefaultRoomLimit = 50
 
 	// ClientSendBuffer is the size of each WebSocket client's outbound channel
 	ClientSendBuffer = 128

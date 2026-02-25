@@ -219,7 +219,8 @@ func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
-			SELECT u.id, u.name, u.username, u.avatar_url, u.is_private, f.created_at AS friends_since
+			SELECT u.id, u.name, u.username, u.avatar_url, u.is_private, f.created_at AS friends_since,
+			       CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END AS last_seen_at
 			FROM friendships f
 			JOIN users u ON u.id = CASE
 				WHEN f.user_id_1 = $1 THEN f.user_id_2
@@ -237,6 +238,9 @@ func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Failed to fetch friends", http.StatusInternalServerError)
 		return
 	}
+
+	// Enrich each friend with real-time is_online status from the engine
+	raw = enrichFriendsWithOnlineStatus(raw)
 
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
@@ -461,4 +465,34 @@ func acceptFriendship(w http.ResponseWriter, accepterID, requesterID string, req
 		"message":    "You are now friends!",
 		"dm_room_id": dmRoomID,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// enrichFriendsWithOnlineStatus adds an "is_online" field to each friend
+// in the JSON array. Uses the in-memory Engine for real-time status.
+// ---------------------------------------------------------------------------
+
+func enrichFriendsWithOnlineStatus(raw []byte) []byte {
+	e := chat.GetEngine()
+	if e == nil {
+		return raw
+	}
+
+	var friends []map[string]interface{}
+	if err := json.Unmarshal(raw, &friends); err != nil {
+		return raw
+	}
+
+	for _, friend := range friends {
+		id, _ := friend["id"].(string)
+		if id != "" {
+			friend["is_online"] = e.IsUserOnline(id)
+		}
+	}
+
+	enriched, err := json.Marshal(friends)
+	if err != nil {
+		return raw
+	}
+	return enriched
 }

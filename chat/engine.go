@@ -109,6 +109,7 @@ func (e *Engine) getShard(roomID string) *roomShard {
 // rooms from the database so the frontend doesn't need to send join_room.
 func (e *Engine) Register(c *Client) {
 	e.userMu.Lock()
+	firstDevice := e.users[c.UserID] == nil || len(e.users[c.UserID]) == 0
 	if e.users[c.UserID] == nil {
 		e.users[c.UserID] = make(map[*Client]bool)
 	}
@@ -120,6 +121,11 @@ func (e *Engine) Register(c *Client) {
 	for _, roomID := range roomIDs {
 		e.JoinRoom(c, roomID)
 	}
+
+	// If this is the user's first device, broadcast "online" to friends
+	if firstDevice {
+		go e.broadcastPresence(c.UserID, true)
+	}
 }
 
 // Unregister removes a client when they disconnect (close tab / app).
@@ -127,10 +133,12 @@ func (e *Engine) Register(c *Client) {
 func (e *Engine) Unregister(c *Client) {
 	// Remove from users map
 	e.userMu.Lock()
+	lastDevice := false
 	if clients, ok := e.users[c.UserID]; ok {
 		delete(clients, c)
 		if len(clients) == 0 {
 			delete(e.users, c.UserID)
+			lastDevice = true
 		}
 	}
 	e.userMu.Unlock()
@@ -150,6 +158,11 @@ func (e *Engine) Unregister(c *Client) {
 
 	// Close the outbound channel so writePump exits cleanly
 	close(c.Send)
+
+	// If this was the user's last device, update last_seen_at and broadcast "offline"
+	if lastDevice {
+		go e.handleUserWentOffline(c.UserID)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -502,6 +515,106 @@ func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 			}
 		}(uid, roomID)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Presence Helpers
+// ---------------------------------------------------------------------------
+
+// IsUserOnline checks whether a user has at least one connected device.
+func (e *Engine) IsUserOnline(userID string) bool {
+	e.userMu.RLock()
+	clients, ok := e.users[userID]
+	online := ok && len(clients) > 0
+	e.userMu.RUnlock()
+	return online
+}
+
+// getFriendIDs queries all friend user IDs for the given user.
+func getFriendIDs(userID string) []string {
+	rows, err := postgress.GetRawDB().Query(
+		`SELECT CASE WHEN user_id_1 = $1 THEN user_id_2 ELSE user_id_1 END
+		 FROM friendships
+		 WHERE user_id_1 = $1 OR user_id_2 = $1`,
+		userID,
+	)
+	if err != nil {
+		log.Printf("[engine] Failed to query friends for presence user=%s: %v", userID, err)
+		return nil
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// broadcastPresence publishes a presence event to all online friends via Redis.
+// If the user has show_last_seen disabled, we skip broadcasting.
+func (e *Engine) broadcastPresence(userID string, online bool) {
+	// Check if the user allows presence visibility
+	var showLastSeen bool
+	err := postgress.GetRawDB().QueryRow(
+		`SELECT show_last_seen FROM users WHERE id = $1`, userID,
+	).Scan(&showLastSeen)
+	if err != nil || !showLastSeen {
+		return // User has presence hidden
+	}
+
+	friendIDs := getFriendIDs(userID)
+	if len(friendIDs) == 0 {
+		return
+	}
+
+	msgType := config.MsgTypePresenceOnline
+	payload := map[string]interface{}{
+		config.FieldType:   msgType,
+		config.FieldUserID: userID,
+	}
+	if !online {
+		msgType = config.MsgTypePresenceOffline
+		now := time.Now().UTC().Format(time.RFC3339)
+		payload = map[string]interface{}{
+			config.FieldType:       msgType,
+			config.FieldUserID:     userID,
+			config.FieldLastSeenAt: now,
+		}
+	}
+
+	ctx := context.Background()
+	for _, friendID := range friendIDs {
+		// Wrap in a private envelope so cross-server routing works
+		envelope := map[string]interface{}{
+			config.FieldType: config.MsgTypePrivate,
+			config.FieldTo:   friendID,
+			config.FieldFrom: config.SystemSender,
+			config.FieldData: payload,
+		}
+		envBytes, err := json.Marshal(envelope)
+		if err != nil {
+			continue
+		}
+		redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, envBytes)
+	}
+}
+
+// handleUserWentOffline updates last_seen_at in Postgres and broadcasts offline presence.
+func (e *Engine) handleUserWentOffline(userID string) {
+	// Update last_seen_at in the database
+	_, err := postgress.GetRawDB().Exec(
+		`UPDATE users SET last_seen_at = NOW() WHERE id = $1`, userID,
+	)
+	if err != nil {
+		log.Printf("[engine] Failed to update last_seen_at for user=%s: %v", userID, err)
+	}
+
+	// Broadcast offline status to friends
+	e.broadcastPresence(userID, false)
 }
 
 // deliverToRoom sends raw bytes to everyone subscribed to a room on this server.
