@@ -119,6 +119,10 @@ func main() {
 	mux.HandleFunc("POST /api/v1/match/action", mw.Auth(handlers.MatchActionHandler))
 	mux.HandleFunc("POST /api/v1/match/report", mw.Auth(handlers.ReportUserHandler))
 
+	// --- Calls (protected) ---
+	mux.HandleFunc("GET /api/v1/calls/config", mw.Auth(handlers.GetCallConfigHandler))
+	mux.HandleFunc("GET /api/v1/calls/history", mw.Auth(handlers.GetCallHistoryHandler))
+
 	// --- WebSocket (protected) ---
 	mux.HandleFunc("GET /ws", mw.Auth(func(w http.ResponseWriter, r *http.Request) {
 		userID := r.Context().Value(config.UserIDKey).(string)

@@ -219,6 +219,25 @@ var migrationStatements = []string{
 	// COLUMN: users.show_last_seen (privacy toggle for online/last-seen)
 	// ===================================================================
 	`ALTER TABLE users ADD COLUMN IF NOT EXISTS show_last_seen BOOLEAN NOT NULL DEFAULT true`,
+
+	// ===================================================================
+	// TABLE: call_logs (call history for rooms)
+	// ===================================================================
+	`CREATE TABLE IF NOT EXISTS call_logs (
+        id               BIGSERIAL PRIMARY KEY,
+        call_id          UUID NOT NULL,
+        room_id          UUID REFERENCES rooms(id) ON DELETE CASCADE,
+        initiated_by     UUID REFERENCES users(id) ON DELETE CASCADE,
+        call_type        TEXT NOT NULL DEFAULT 'video',
+        tier             TEXT NOT NULL DEFAULT 'p2p',
+        max_participants INT NOT NULL DEFAULT 2,
+        started_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ended_at         TIMESTAMPTZ,
+        duration_seconds INT
+    )`,
+
+	`CREATE INDEX IF NOT EXISTS idx_call_logs_room_id ON call_logs (room_id, started_at DESC)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_call_logs_call_id ON call_logs (call_id)`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

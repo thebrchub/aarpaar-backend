@@ -24,7 +24,7 @@ const (
 	writeWait  = 10 * time.Second    // Max time to write a message to the client
 	pongWait   = 60 * time.Second    // Max time to wait for a pong from the client
 	pingPeriod = (pongWait * 9) / 10 // How often we ping (slightly less than pongWait)
-	maxMsgSize = 4096                // 4KB — prevents clients from sending huge payloads
+	maxMsgSize = 16384               // 16KB — accommodates large WebRTC SDP offers + ICE candidates
 )
 
 // upgrader promotes an HTTP connection to a WebSocket connection.
@@ -199,6 +199,23 @@ func (c *Client) readPump() {
 			}
 			cancel()
 			continue
+		}
+
+		// --- Call Signaling (with server-side state management) ---
+		// Authorization, busy detection, timeout, and call logging are handled
+		// by processCallSignaling before relaying via Redis Pub/Sub.
+		if msgType == config.MsgTypeCallRing ||
+			msgType == config.MsgTypeCallAccept ||
+			msgType == config.MsgTypeCallReject ||
+			msgType == config.MsgTypeCallOffer ||
+			msgType == config.MsgTypeCallAnswer ||
+			msgType == config.MsgTypeICECandidate ||
+			msgType == config.MsgTypeCallEnd ||
+			msgType == config.MsgTypeCallLeave {
+
+			if c.Engine.processCallSignaling(c, msgType, payload) {
+				continue
+			}
 		}
 
 		// --- Chat Messages & Typing (forwarded to Redis) ---
