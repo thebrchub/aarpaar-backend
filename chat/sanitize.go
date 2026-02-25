@@ -17,7 +17,11 @@ var htmlTagRegex = regexp.MustCompile(`<[^>]*>`)
 
 // StripHTMLTags removes all HTML/XML tags from the input string.
 // Example: "<b>hello</b><script>alert(1)</script>" → "helloalert(1)"
+// Fast-path: skip regex entirely when there's no '<' character (P3-2 fix).
 func StripHTMLTags(s string) string {
+	if strings.IndexByte(s, '<') == -1 {
+		return s
+	}
 	return htmlTagRegex.ReplaceAllString(s, "")
 }
 
@@ -36,25 +40,22 @@ var profanityWords = []string{
 	"nigger", "faggot", "retard", "cunt", "whore", "slut",
 }
 
-// profanityRegexes are compiled once at startup for performance.
-var profanityRegexes []*regexp.Regexp
+// Single compiled alternation regex — scans the string once instead of
+// 12 separate full passes. ~12x faster on hot path. (P2-2 fix)
+var profanityRegex *regexp.Regexp
 
 func init() {
-	for _, word := range profanityWords {
-		// \b ensures we match whole words, not substrings
-		pattern := `(?i)\b` + regexp.QuoteMeta(word) + `\b`
-		profanityRegexes = append(profanityRegexes, regexp.MustCompile(pattern))
+	// Build a single alternation: (?i)\b(?:fuck|shit|bitch|...)\b
+	quoted := make([]string, len(profanityWords))
+	for i, word := range profanityWords {
+		quoted[i] = regexp.QuoteMeta(word)
 	}
+	pattern := `(?i)\b(?:` + strings.Join(quoted, "|") + `)\b`
+	profanityRegex = regexp.MustCompile(pattern)
 }
 
 // ContainsProfanity checks if the text contains any profane words.
 // Used only for stranger match rooms, not DM/channel messages.
 func ContainsProfanity(s string) bool {
-	lower := strings.ToLower(s)
-	for _, re := range profanityRegexes {
-		if re.MatchString(lower) {
-			return true
-		}
-	}
-	return false
+	return profanityRegex.MatchString(strings.ToLower(s))
 }

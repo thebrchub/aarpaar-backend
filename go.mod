@@ -2,7 +2,10 @@ module github.com/thebrchub/aarpaar
 
 go 1.25.5
 
-require google.golang.org/api v0.267.0
+require (
+	github.com/tidwall/sjson v1.2.5
+	google.golang.org/api v0.267.0
+)
 
 require (
 	github.com/tidwall/match v1.1.1 // indirect
@@ -30,7 +33,7 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.8.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/redis/go-redis/v9 v9.17.2 // indirect
+	github.com/redis/go-redis/v9 v9.17.2
 	github.com/shivanand-burli/go-starter-kit v0.0.0-20260210201258-930cfbcb52b0
 	github.com/tidwall/gjson v1.18.0
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

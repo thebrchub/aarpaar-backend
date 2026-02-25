@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/goccy/go-json"
@@ -10,6 +12,8 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // ---------------------------------------------------------------------------
@@ -56,11 +60,14 @@ func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check if blocked
 	var blocked bool
-	postgress.GetRawDB().QueryRow(
+	if err := postgress.GetRawDB().QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM blocked_users WHERE
 			(blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1))`,
 		userID, targetID,
-	).Scan(&blocked)
+	).Scan(&blocked); err != nil {
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
 	if blocked {
 		JSONError(w, "User not found", http.StatusNotFound)
 		return
@@ -69,10 +76,13 @@ func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	// Check if already friends
 	uid1, uid2 := sortUUIDs(userID, targetID)
 	var alreadyFriends bool
-	postgress.GetRawDB().QueryRow(
+	if err := postgress.GetRawDB().QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2)`,
 		uid1, uid2,
-	).Scan(&alreadyFriends)
+	).Scan(&alreadyFriends); err != nil {
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
 	if alreadyFriends {
 		JSONMessage(w, "already_friends", "You are already friends")
 		return
@@ -134,10 +144,9 @@ func AcceptFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var senderID string
-	postgress.GetRawDB().QueryRow(
+	if err := postgress.GetRawDB().QueryRow(
 		`SELECT id FROM users WHERE username = $1`, body.Username,
-	).Scan(&senderID)
-	if senderID == "" {
+	).Scan(&senderID); err != nil || senderID == "" {
 		JSONError(w, "User not found", http.StatusNotFound)
 		return
 	}
@@ -177,10 +186,9 @@ func RejectFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var senderID string
-	postgress.GetRawDB().QueryRow(
+	if err := postgress.GetRawDB().QueryRow(
 		`SELECT id FROM users WHERE username = $1`, body.Username,
-	).Scan(&senderID)
-	if senderID == "" {
+	).Scan(&senderID); err != nil || senderID == "" {
 		JSONError(w, "User not found", http.StatusNotFound)
 		return
 	}
@@ -325,10 +333,9 @@ func RemoveFriendHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var targetID string
-	postgress.GetRawDB().QueryRow(
+	if err := postgress.GetRawDB().QueryRow(
 		`SELECT id FROM users WHERE username = $1`, username,
-	).Scan(&targetID)
-	if targetID == "" {
+	).Scan(&targetID); err != nil || targetID == "" {
 		JSONError(w, "User not found", http.StatusNotFound)
 		return
 	}
@@ -428,10 +435,12 @@ func acceptFriendship(w http.ResponseWriter, accepterID, requesterID string, req
 		}
 	} else {
 		// Room exists — make sure both members are active (upgrade pending → active)
-		tx.Exec(
+		if _, err := tx.Exec(
 			`UPDATE room_members SET status = $1 WHERE room_id = $2 AND user_id IN ($3, $4)`,
 			config.RoomMemberActive, dmRoomID, accepterID, requesterID,
-		)
+		); err != nil {
+			log.Printf("[friends] Failed to activate room members room=%s: %v", dmRoomID, err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -468,8 +477,9 @@ func acceptFriendship(w http.ResponseWriter, accepterID, requesterID string, req
 }
 
 // ---------------------------------------------------------------------------
-// enrichFriendsWithOnlineStatus adds an "is_online" field to each friend
-// in the JSON array. Uses the in-memory Engine for real-time status.
+// enrichFriendsWithOnlineStatus injects "is_online" into each friend in the
+// JSON array using gjson/sjson for surgical byte-level modification. This
+// avoids the full deserialize→re-serialize cycle. (P2-3 fix)
 // ---------------------------------------------------------------------------
 
 func enrichFriendsWithOnlineStatus(raw []byte) []byte {
@@ -478,21 +488,22 @@ func enrichFriendsWithOnlineStatus(raw []byte) []byte {
 		return raw
 	}
 
-	var friends []map[string]interface{}
-	if err := json.Unmarshal(raw, &friends); err != nil {
+	result := raw
+	friends := gjson.ParseBytes(raw)
+	if !friends.IsArray() {
 		return raw
 	}
 
-	for _, friend := range friends {
-		id, _ := friend["id"].(string)
+	var idx int64
+	friends.ForEach(func(_, friend gjson.Result) bool {
+		id := friend.Get("id").String()
 		if id != "" {
-			friend["is_online"] = e.IsUserOnline(id)
+			path := fmt.Sprintf("%d.is_online", idx)
+			result, _ = sjson.SetBytes(result, path, e.IsUserOnline(id))
 		}
-	}
+		idx++
+		return true
+	})
 
-	enriched, err := json.Marshal(friends)
-	if err != nil {
-		return raw
-	}
-	return enriched
+	return result
 }

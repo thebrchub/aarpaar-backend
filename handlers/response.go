@@ -22,10 +22,13 @@ type statusMessage struct {
 
 // JSONSuccess writes a 200 OK response with a JSON-encoded body.
 // Pass any struct or map — it will be marshalled automatically.
+// Uses json.Marshal + w.Write to avoid the trailing newline and per-call
+// encoder allocation from json.NewEncoder (P3-1 fix).
 func JSONSuccess(w http.ResponseWriter, data any) {
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(data)
+	bytes, _ := json.Marshal(data)
+	w.Write(bytes)
 }
 
 // JSONMessage writes a simple {"status":"...", "message":"..."} response.
@@ -33,10 +36,11 @@ func JSONSuccess(w http.ResponseWriter, data any) {
 func JSONMessage(w http.ResponseWriter, status string, message string) {
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(statusMessage{
+	bytes, _ := json.Marshal(statusMessage{
 		Status:  status,
 		Message: message,
 	})
+	w.Write(bytes)
 }
 
 // JSONError writes an error response with the given HTTP status code.
@@ -45,8 +49,9 @@ func JSONMessage(w http.ResponseWriter, status string, message string) {
 func JSONError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(statusMessage{
+	bytes, _ := json.Marshal(statusMessage{
 		Status:  "error",
 		Message: message,
 	})
+	w.Write(bytes)
 }

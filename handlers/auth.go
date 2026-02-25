@@ -108,11 +108,15 @@ func upsertUser(googleID, email, name, avatar string) (string, bool, error) {
 
 	// ON CONFLICT requires a UNIQUE constraint on the google_id column.
 	// Username is NULL on first signup — the user sets it later via PATCH/PUT.
+	// Preserve user-set name: only overwrite if current name is empty/NULL.
 	query := `
 		INSERT INTO users (google_id, email, name, avatar_url)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (google_id) DO UPDATE 
-		SET email = EXCLUDED.email, name = EXCLUDED.name, avatar_url = EXCLUDED.avatar_url, updated_at = NOW()
+		SET email = EXCLUDED.email,
+		    name = CASE WHEN users.name = '' OR users.name IS NULL THEN EXCLUDED.name ELSE users.name END,
+		    avatar_url = EXCLUDED.avatar_url,
+		    updated_at = NOW()
 		RETURNING id, is_banned;
 	`
 	err := db.QueryRow(query, googleID, email, name, avatar).Scan(&userID, &isBanned)

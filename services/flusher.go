@@ -2,12 +2,13 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
@@ -26,6 +27,8 @@ import (
 //   2. We fan them out to a pool of FlushWorkerCount (10) goroutines
 //   3. Each worker: Rename buffer → Read → Bulk INSERT → Delete
 //   4. On failure: put the data back so nothing is lost
+//   5. Receipt updates (mark_read, mark_delivered, delivery receipts) are
+//      also flushed from Redis hashes to Postgres in batch UPDATEs.
 //
 // This scales to thousands of active rooms because we process them in
 // parallel instead of one-at-a-time.
@@ -34,61 +37,89 @@ import (
 // flusherDone is used to signal the flusher to stop gracefully.
 var flusherDone = make(chan struct{})
 
+// flusherWg tracks the flusher goroutine for clean shutdown.
+var flusherWg sync.WaitGroup
+
+// atomicSMembersAndDel is a Lua script that atomically reads all members
+// of a set and deletes it in a single Redis operation. This prevents the
+// race where an SAdd between SMembers and Del would lose a room ID.
+// Compiled once via redis.NewScript — subsequent calls use EVALSHA (SHA1 cache).
+var atomicSMembersAndDel = goredis.NewScript(`
+local members = redis.call('SMEMBERS', KEYS[1])
+if #members > 0 then
+    redis.call('DEL', KEYS[1])
+end
+return members
+`)
+
+// atomicHGetAllAndDel is a Lua script that atomically reads all fields
+// of a hash and deletes it. Used for receipt flushing.
+// Compiled once via redis.NewScript — subsequent calls use EVALSHA (SHA1 cache).
+var atomicHGetAllAndDel = goredis.NewScript(`
+local data = redis.call('HGETALL', KEYS[1])
+if #data > 0 then
+    redis.call('DEL', KEYS[1])
+end
+return data
+`)
+
 // StartFlusher kicks off the background flush loop.
 // Call this once during application startup.
 func StartFlusher() {
 	ticker := time.NewTicker(config.FlushInterval)
+	flusherWg.Add(1)
 	go func() {
+		defer flusherWg.Done()
 		for {
 			select {
 			case <-flusherDone:
 				ticker.Stop()
-				// Final flush to persist any remaining buffered messages
+				// Final flush to persist any remaining buffered messages and receipts
 				log.Println("[flusher] Final flush before shutdown...")
 				FlushAllDirtyRooms()
+				flushReceipts()
 				return
 			case <-ticker.C:
 				FlushAllDirtyRooms()
+				flushReceipts()
 			}
 		}
 	}()
 }
 
-// StopFlusher signals the flusher to stop and waits for the final flush.
+// StopFlusher signals the flusher to stop and waits for the final flush to complete.
 func StopFlusher() {
 	close(flusherDone)
-	// Give the final flush a moment to complete
-	time.Sleep(config.FlushInterval + 2*time.Second)
+	flusherWg.Wait()
 }
 
 // FlushAllDirtyRooms grabs every dirty room ID and processes them concurrently.
-// Uses a Redis pipeline to atomically read and clear the dirty set.
+// Uses a Lua script to atomically read and clear the dirty set.
 func FlushAllDirtyRooms() {
-	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	rdb := redis.GetRawClient()
 
-	// Atomically grab all dirty room IDs and clear the set in one pipeline.
-	// This prevents the race condition where IDs added between SMembers and Del
-	// would be lost.
-	pipe := rdb.Pipeline()
-	membersCmd := pipe.SMembers(ctx, config.CHAT_DIRTY_TARGETS)
-	pipe.Del(ctx, config.CHAT_DIRTY_TARGETS)
-
-	if _, err := pipe.Exec(ctx); err != nil {
-		log.Printf("[flusher] Pipeline error reading dirty targets: %v", err)
+	// Atomically grab all dirty room IDs and clear the set using Lua script.
+	// This prevents the race where IDs added between SMembers and Del would be lost.
+	// Uses EVALSHA — script is sent once, then referenced by SHA1 hash.
+	result, err := atomicSMembersAndDel.Run(ctx, rdb, []string{config.CHAT_DIRTY_TARGETS}).StringSlice()
+	if err != nil {
+		// redis.Nil means the key doesn't exist (nothing to flush)
+		if err.Error() != "redis: nil" {
+			log.Printf("[flusher] Lua script error reading dirty targets: %v", err)
+		}
 		return
 	}
 
-	dirtyIDs, err := membersCmd.Result()
-	if err != nil || len(dirtyIDs) == 0 {
+	if len(result) == 0 {
 		return // Nothing to flush
 	}
 
 	// Feed the room IDs into a bounded worker pool
-	jobs := make(chan string, len(dirtyIDs))
-	for _, id := range dirtyIDs {
+	jobs := make(chan string, len(result))
+	for _, id := range result {
 		jobs <- id
 	}
 	close(jobs)
@@ -138,7 +169,7 @@ func flushOneRoom(targetID string) {
 		return
 	}
 
-	// Bulk insert into Postgres
+	// Bulk insert into Postgres (chunked to avoid giant SQL statements)
 	err = bulkInsertToPostgres(targetID, rawMessages)
 	if err != nil {
 		log.Printf("[flusher] DB save failed for %s: %v. Re-queueing...", targetID, err)
@@ -161,24 +192,33 @@ func flushOneRoom(targetID string) {
 }
 
 // ---------------------------------------------------------------------------
-// bulkInsertToPostgres builds a single INSERT statement for all messages.
-//
-// Example output:
-//   INSERT INTO messages (room_id, sender_id, content)
-//   VALUES ($1,$2,$3), ($4,$5,$6), ...
-//
-// We use gjson to extract fields from the raw JSON without allocating
-// Go structs. A strings.Builder is used to minimize memory allocations
-// when constructing the query string.
+// bulkInsertToPostgres builds INSERT statements for messages, chunked to
+// avoid exceeding Postgres max query size on busy rooms.
+// Uses strconv.Itoa instead of fmt.Sprintf for performance in the hot path.
 // ---------------------------------------------------------------------------
 
 func bulkInsertToPostgres(roomID string, rawMessages []string) error {
+	// Process in chunks to avoid giant SQL statements
+	const chunkSize = 500
+	for i := 0; i < len(rawMessages); i += chunkSize {
+		end := i + chunkSize
+		if end > len(rawMessages) {
+			end = len(rawMessages)
+		}
+		if err := insertMessageChunk(roomID, rawMessages[i:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func insertMessageChunk(roomID string, chunk []string) error {
 	var b strings.Builder
 	var valueArgs []interface{}
 	argID := 1
 	first := true
 
-	for _, rawMsg := range rawMessages {
+	for _, rawMsg := range chunk {
 		// Extract sender and content from the raw JSON
 		senderID := gjson.Get(rawMsg, config.FieldFrom).String()
 		content := gjson.Get(rawMsg, config.FieldText).String()
@@ -193,7 +233,14 @@ func bulkInsertToPostgres(roomID string, rawMessages []string) error {
 		}
 		first = false
 
-		b.WriteString(fmt.Sprintf("($%d,$%d,$%d)", argID, argID+1, argID+2))
+		// strconv.Itoa is significantly faster than fmt.Sprintf for int→string
+		b.WriteString("($")
+		b.WriteString(strconv.Itoa(argID))
+		b.WriteString(",$")
+		b.WriteString(strconv.Itoa(argID + 1))
+		b.WriteString(",$")
+		b.WriteString(strconv.Itoa(argID + 2))
+		b.WriteByte(')')
 		valueArgs = append(valueArgs, roomID, senderID, content)
 		argID += 3
 	}
@@ -203,11 +250,114 @@ func bulkInsertToPostgres(roomID string, rawMessages []string) error {
 		return nil
 	}
 
-	query := fmt.Sprintf(
-		`INSERT INTO messages (room_id, sender_id, content) VALUES %s`,
-		b.String(),
-	)
+	query := "INSERT INTO messages (room_id, sender_id, content) VALUES " + b.String()
 
 	_, err := postgress.Exec(query, valueArgs...)
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// Receipt Flushing
+//
+// mark_read, mark_delivered, and delivery receipts are buffered in Redis
+// hashes during the real-time WebSocket path. This function atomically grabs
+// all pending receipts and batch-UPDATEs them to Postgres.
+//
+// Multiple reads/deliveries for the same user+room within one flush interval
+// collapse into a single UPDATE thanks to GREATEST() — no wasted writes.
+// ---------------------------------------------------------------------------
+
+func flushReceipts() {
+	flushReceiptHash(config.CHAT_READ_RECEIPTS, "last_read_at")
+	flushReceiptHash(config.CHAT_DELIVERY_RECEIPTS, "last_delivered_at")
+}
+
+func flushReceiptHash(redisKey string, column string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	rdb := redis.GetRawClient()
+
+	// Atomically grab all receipt entries and clear the hash.
+	// Uses EVALSHA — script is sent once, then referenced by SHA1 hash.
+	result, err := atomicHGetAllAndDel.Run(ctx, rdb, []string{redisKey}).Result()
+	if err != nil {
+		if err.Error() != "redis: nil" {
+			log.Printf("[flusher] Lua script error reading %s: %v", redisKey, err)
+		}
+		return
+	}
+
+	// HGETALL returns a flat slice: [field1, value1, field2, value2, ...]
+	flat, ok := result.([]interface{})
+	if !ok || len(flat) == 0 {
+		return
+	}
+
+	// Parse the flat list into room_id, user_id, timestamp triples
+	type receiptEntry struct {
+		roomID string
+		userID string
+		ts     string
+	}
+	entries := make([]receiptEntry, 0, len(flat)/2)
+	for i := 0; i+1 < len(flat); i += 2 {
+		fieldStr, _ := flat[i].(string)
+		valueStr, _ := flat[i+1].(string)
+		if fieldStr == "" || valueStr == "" {
+			continue
+		}
+		// Field format: "roomID:userID"
+		sepIdx := strings.LastIndex(fieldStr, ":")
+		if sepIdx <= 0 {
+			continue
+		}
+		entries = append(entries, receiptEntry{
+			roomID: fieldStr[:sepIdx],
+			userID: fieldStr[sepIdx+1:],
+			ts:     valueStr,
+		})
+	}
+
+	if len(entries) == 0 {
+		return
+	}
+
+	// Batch UPDATE in chunks
+	for i := 0; i < len(entries); i += config.ReceiptFlushBatchSize {
+		end := i + config.ReceiptFlushBatchSize
+		if end > len(entries) {
+			end = len(entries)
+		}
+		chunk := entries[i:end]
+
+		// Build: UPDATE room_members SET <column> = GREATEST(<column>, v.ts)
+		//        FROM (VALUES ($1::uuid,$2::uuid,$3::timestamptz), ...) AS v(room_id, user_id, ts)
+		//        WHERE room_members.room_id = v.room_id AND room_members.user_id = v.user_id
+		var b strings.Builder
+		args := make([]interface{}, 0, len(chunk)*3)
+		argID := 1
+		for j, e := range chunk {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString("($")
+			b.WriteString(strconv.Itoa(argID))
+			b.WriteString("::uuid,$")
+			b.WriteString(strconv.Itoa(argID + 1))
+			b.WriteString("::uuid,$")
+			b.WriteString(strconv.Itoa(argID + 2))
+			b.WriteString("::timestamptz)")
+			args = append(args, e.roomID, e.userID, e.ts)
+			argID += 3
+		}
+
+		query := "UPDATE room_members SET " + column + " = GREATEST(room_members." + column + ", v.ts) " +
+			"FROM (VALUES " + b.String() + ") AS v(room_id, user_id, ts) " +
+			"WHERE room_members.room_id = v.room_id AND room_members.user_id = v.user_id"
+
+		if _, err := postgress.Exec(query, args...); err != nil {
+			log.Printf("[flusher] Receipt flush failed for %s: %v", column, err)
+		}
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // ---------------------------------------------------------------------------
@@ -109,7 +110,7 @@ func (e *Engine) getShard(roomID string) *roomShard {
 // rooms from the database so the frontend doesn't need to send join_room.
 func (e *Engine) Register(c *Client) {
 	e.userMu.Lock()
-	firstDevice := e.users[c.UserID] == nil || len(e.users[c.UserID]) == 0
+	firstDevice := len(e.users[c.UserID]) == 0
 	if e.users[c.UserID] == nil {
 		e.users[c.UserID] = make(map[*Client]bool)
 	}
@@ -144,7 +145,8 @@ func (e *Engine) Unregister(c *Client) {
 	e.userMu.Unlock()
 
 	// Remove from every room they joined (using the correct shard for each)
-	for roomID := range c.JoinedRooms {
+	c.JoinedRooms.Range(func(key, _ any) bool {
+		roomID := key.(string)
 		shard := e.getShard(roomID)
 		shard.mu.Lock()
 		if roomClients, ok := shard.rooms[roomID]; ok {
@@ -154,14 +156,22 @@ func (e *Engine) Unregister(c *Client) {
 			}
 		}
 		shard.mu.Unlock()
-	}
+		return true
+	})
 
-	// Close the outbound channel so writePump exits cleanly
-	close(c.Send)
+	// Close the outbound channel so writePump exits cleanly (exactly once)
+	c.closeSend()
 
-	// If this was the user's last device, update last_seen_at and broadcast "offline"
+	// If this was the user's last device, update last_seen_at, broadcast "offline",
+	// and remove from matchmaking queue.
 	if lastDevice {
-		go e.handleUserWentOffline(c.UserID)
+		go func() {
+			e.handleUserWentOffline(c.UserID)
+			// Clean up match queue so offline users don't get matched
+			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+			redis.GetRawClient().SRem(ctx, config.DefaultMatchQueue, c.UserID)
+			cancel()
+		}()
 	}
 }
 
@@ -175,7 +185,7 @@ func (e *Engine) JoinRoom(c *Client, roomID string) {
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
-	c.JoinedRooms[roomID] = true
+	c.JoinedRooms.Store(roomID, true)
 	if shard.rooms[roomID] == nil {
 		shard.rooms[roomID] = make(map[*Client]bool)
 	}
@@ -188,7 +198,7 @@ func (e *Engine) LeaveRoom(c *Client, roomID string) {
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 
-	delete(c.JoinedRooms, roomID)
+	c.JoinedRooms.Delete(roomID)
 	if roomClients, ok := shard.rooms[roomID]; ok {
 		delete(roomClients, c)
 		if len(roomClients) == 0 {
@@ -293,7 +303,7 @@ func (e *Engine) CloseRoom(roomID string, payload []byte) {
 
 	// Notify each client and remove the room from their local set
 	for _, c := range targets {
-		delete(c.JoinedRooms, roomID)
+		c.JoinedRooms.Delete(roomID)
 		select {
 		case c.Send <- payload:
 		default:
@@ -375,9 +385,20 @@ func (e *Engine) subscribeAndListen() {
 
 			switch msgType {
 			case config.MsgTypePrivate, config.MsgTypeMatchFound, config.MsgTypeStrangerDisconnected:
-				// Private/system events targeted at a specific user
+				// Private/system events targeted at a specific user or a list of targets (P1-1)
 				if targetUser != "" {
 					e.deliverToUser(targetUser, payload)
+				} else {
+					// Presence events use a "targets" list — deliver to each locally-connected target
+					targets := gjson.GetBytes(payload, "targets")
+					if targets.Exists() && targets.IsArray() {
+						// Build per-user payload without the targets array (strip it for the client)
+						cleanPayload, _ := sjson.DeleteBytes(payload, "targets")
+						targets.ForEach(func(_, target gjson.Result) bool {
+							e.deliverToUser(target.String(), cleanPayload)
+							return true
+						})
+					}
 				}
 
 				// If this is a stranger_disconnected wrapped inside a private envelope,
@@ -466,8 +487,8 @@ func (e *Engine) deliverToUser(userID string, payload []byte) {
 }
 
 // sendDeliveryReceipts checks if any non-sender clients are online in the room
-// and sends a delivery receipt back to the sender. Also updates the recipient's
-// last_delivered_at in the database asynchronously.
+// and sends a delivery receipt back to the sender. Also buffers the recipient's
+// last_delivered_at in Redis for the flusher to batch-UPDATE to Postgres.
 func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 	shard := e.getShard(roomID)
 	shard.mu.RLock()
@@ -502,18 +523,16 @@ func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 		e.deliverToUser(senderID, receipt)
 	}
 
-	// Update last_delivered_at for each online recipient (async, non-blocking)
+	// Buffer last_delivered_at for each online recipient in Redis hash
+	// The flusher will batch-UPDATE them to Postgres every FlushInterval.
+	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+	defer cancel()
+	pipe := redis.GetRawClient().Pipeline()
 	for uid := range recipientIDs {
-		go func(userID, room string) {
-			_, err := postgress.GetRawDB().Exec(
-				`UPDATE room_members SET last_delivered_at = NOW()
-				 WHERE room_id = $1 AND user_id = $2 AND last_delivered_at < NOW()`,
-				room, userID,
-			)
-			if err != nil {
-				log.Printf("[engine] delivery receipt DB update failed user=%s room=%s: %v", userID, room, err)
-			}
-		}(uid, roomID)
+		pipe.HSet(ctx, config.CHAT_DELIVERY_RECEIPTS, roomID+":"+uid, now)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Printf("[engine] delivery receipt buffer failed room=%s: %v", roomID, err)
 	}
 }
 
@@ -531,11 +550,13 @@ func (e *Engine) IsUserOnline(userID string) bool {
 }
 
 // getFriendIDs queries all friend user IDs for the given user.
+// Uses UNION ALL to enable efficient index-only scans on both directions
+// of the friendships table instead of a single OR query.
 func getFriendIDs(userID string) []string {
 	rows, err := postgress.GetRawDB().Query(
-		`SELECT CASE WHEN user_id_1 = $1 THEN user_id_2 ELSE user_id_1 END
-		 FROM friendships
-		 WHERE user_id_1 = $1 OR user_id_2 = $1`,
+		`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
+		 UNION ALL
+		 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`,
 		userID,
 	)
 	if err != nil {
@@ -586,20 +607,25 @@ func (e *Engine) broadcastPresence(userID string, online bool) {
 		}
 	}
 
-	ctx := context.Background()
-	for _, friendID := range friendIDs {
-		// Wrap in a private envelope so cross-server routing works
-		envelope := map[string]interface{}{
-			config.FieldType: config.MsgTypePrivate,
-			config.FieldTo:   friendID,
-			config.FieldFrom: config.SystemSender,
-			config.FieldData: payload,
-		}
-		envBytes, err := json.Marshal(envelope)
-		if err != nil {
-			continue
-		}
-		redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, envBytes)
+	// Publish a SINGLE presence event with a target list instead of N separate
+	// publishes. Each server filters locally to deliver only to connected targets.
+	// This reduces O(N) marshal calls to O(1). (P1-1 fix)
+	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+	defer cancel()
+
+	envelope := map[string]interface{}{
+		config.FieldType: config.MsgTypePrivate,
+		config.FieldFrom: config.SystemSender,
+		"targets":        friendIDs,
+		config.FieldData: payload,
+	}
+	envBytes, err := json.Marshal(envelope)
+	if err != nil {
+		log.Printf("[engine] presence broadcast marshal failed for user=%s: %v", userID, err)
+		return
+	}
+	if err := redis.GetRawClient().Publish(ctx, config.CHAT_GLOBAL_CHANNEL, envBytes).Err(); err != nil {
+		log.Printf("[engine] presence broadcast failed for user=%s: %v", userID, err)
 	}
 }
 

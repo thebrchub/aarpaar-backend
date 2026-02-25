@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // ---------------------------------------------------------------------------
@@ -175,11 +178,14 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check if blocked
 	var blocked bool
-	postgress.GetRawDB().QueryRow(
+	if err := postgress.GetRawDB().QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM blocked_users WHERE
 			(blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1))`,
 		userID, targetUserID,
-	).Scan(&blocked)
+	).Scan(&blocked); err != nil {
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
 	if blocked {
 		JSONError(w, "User not found", http.StatusNotFound)
 		return
@@ -209,10 +215,13 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 	// Check friendship
 	uid1, uid2 := sortUUIDs(userID, targetUserID)
 	var areFriends bool
-	postgress.GetRawDB().QueryRow(
+	if err := postgress.GetRawDB().QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2)`,
 		uid1, uid2,
-	).Scan(&areFriends)
+	).Scan(&areFriends); err != nil {
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
 
 	// Determine target's room member status:
 	// - Public account OR friends → active (instant DM)
@@ -282,8 +291,10 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// enrichRoomsWithOnlineStatus adds an "is_online" field to each member of
-// every room in the JSON array. Uses the in-memory Engine for real-time status.
+// enrichRoomsWithOnlineStatus injects "is_online" into each member of every
+// room using gjson/sjson for surgical byte-level modification. This avoids
+// the full deserialize→re-serialize cycle that negated the zero-alloc SQL
+// pattern. (P0-2 fix)
 // ---------------------------------------------------------------------------
 
 func enrichRoomsWithOnlineStatus(raw []byte, currentUserID string) []byte {
@@ -292,31 +303,30 @@ func enrichRoomsWithOnlineStatus(raw []byte, currentUserID string) []byte {
 		return raw
 	}
 
-	var rooms []map[string]interface{}
-	if err := json.Unmarshal(raw, &rooms); err != nil {
+	result := raw
+	rooms := gjson.ParseBytes(raw)
+	if !rooms.IsArray() {
 		return raw
 	}
 
-	for _, room := range rooms {
-		members, ok := room["members"].([]interface{})
-		if !ok {
-			continue
+	var roomIdx int64
+	rooms.ForEach(func(_, room gjson.Result) bool {
+		members := room.Get("members")
+		if members.Exists() && members.IsArray() {
+			var memberIdx int64
+			members.ForEach(func(_, member gjson.Result) bool {
+				id := member.Get("id").String()
+				if id != "" {
+					path := fmt.Sprintf("%d.members.%d.is_online", roomIdx, memberIdx)
+					result, _ = sjson.SetBytes(result, path, e.IsUserOnline(id))
+				}
+				memberIdx++
+				return true
+			})
 		}
-		for _, m := range members {
-			member, ok := m.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			id, _ := member["id"].(string)
-			if id != "" {
-				member["is_online"] = e.IsUserOnline(id)
-			}
-		}
-	}
+		roomIdx++
+		return true
+	})
 
-	enriched, err := json.Marshal(rooms)
-	if err != nil {
-		return raw
-	}
-	return enriched
+	return result
 }

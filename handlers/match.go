@@ -43,6 +43,13 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	// Single queue for all users (no gender preference)
 	queue := config.DefaultMatchQueue
 
+	// Idempotency guard: if the user is already in the queue, don't process again
+	alreadyQueued, _ := rdb.SIsMember(ctx, queue, userID).Result()
+	if alreadyQueued {
+		JSONMessage(w, "already_queued", "You are already in the queue")
+		return
+	}
+
 	// Try to find a partner who hasn't blocked us (and vice versa)
 	var matchedPartner string
 
@@ -215,9 +222,12 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Fallback: resolve from partner_username if Redis lookup didn't find it
 	if partnerID == "" && req.PartnerUsername != "" {
-		postgress.GetRawDB().QueryRow(
+		err := postgress.GetRawDB().QueryRow(
 			`SELECT id FROM users WHERE username = $1`, req.PartnerUsername,
 		).Scan(&partnerID)
+		if err != nil {
+			log.Printf("[match] Failed to resolve partner username %s: %v", req.PartnerUsername, err)
+		}
 	}
 
 	// ---- Friend request (mutual opt-in) ----

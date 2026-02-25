@@ -40,13 +40,15 @@ const UserIDKey contextKey = "user_id"
 const (
 	STRANGER_PREFIX = "stranger_" // Prefix for anonymous stranger room IDs
 
-	CHAT_GLOBAL_CHANNEL    = "chat:global"        // Global Pub/Sub channel for cross-server message broadcasting
-	CHAT_BUFFER_COLON      = "chat:buffer:"       // chat:buffer:{room_id} -> List of messages to be saved to Postgres
-	CHAT_PROCESSING_COLON  = "chat:processing:"   // chat:processing:{room_id} -> Temporary key for the flusher to process messages
-	CHAT_DIRTY_TARGETS     = "chat:dirty_targets" // Set of room_ids that have pending messages in the buffer
-	CHAT_CLOSED_COLON      = "chat:closed:"       // chat:closed:{room_id} -> Marker that a stranger room is closed
-	FRIEND_REQUEST_COLON   = "friend_req:"        // friend_req:{room_id}:{user_id} -> One-sided friend request marker
-	STRANGER_MEMBERS_COLON = "stranger_members:"  // stranger_members:{room_id} -> Set of both user IDs in a stranger room
+	CHAT_GLOBAL_CHANNEL    = "chat:global"            // Global Pub/Sub channel for cross-server message broadcasting
+	CHAT_BUFFER_COLON      = "chat:buffer:"           // chat:buffer:{room_id} -> List of messages to be saved to Postgres
+	CHAT_PROCESSING_COLON  = "chat:processing:"       // chat:processing:{room_id} -> Temporary key for the flusher to process messages
+	CHAT_DIRTY_TARGETS     = "chat:dirty_targets"     // Set of room_ids that have pending messages in the buffer
+	CHAT_CLOSED_COLON      = "chat:closed:"           // chat:closed:{room_id} -> Marker that a stranger room is closed
+	CHAT_READ_RECEIPTS     = "chat:read_receipts"     // Hash: {room_id}:{user_id} -> RFC3339 timestamp (batched to Postgres)
+	CHAT_DELIVERY_RECEIPTS = "chat:delivery_receipts" // Hash: {room_id}:{user_id} -> RFC3339 timestamp (batched to Postgres)
+	FRIEND_REQUEST_COLON   = "friend_req:"            // friend_req:{room_id}:{user_id} -> One-sided friend request marker
+	STRANGER_MEMBERS_COLON = "stranger_members:"      // stranger_members:{room_id} -> Set of both user IDs in a stranger room
 )
 
 // ---------------------------------------------------------------------------

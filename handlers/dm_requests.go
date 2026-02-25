@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"log"
 	"net/http"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -45,6 +46,7 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 			) lm ON true
 			WHERE my_rm.user_id = $1 AND my_rm.status = 'pending'
 			ORDER BY r.last_message_at DESC NULLS LAST
+			LIMIT 50
 		) t
 	`
 
@@ -96,10 +98,13 @@ func AcceptDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Notify the sender that their DM was accepted
 	var senderID string
-	postgress.GetRawDB().QueryRow(
+	err = postgress.GetRawDB().QueryRow(
 		`SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2 LIMIT 1`,
 		roomID, userID,
 	).Scan(&senderID)
+	if err != nil {
+		log.Printf("[dm] Failed to find sender for room=%s: %v", roomID, err)
+	}
 
 	// Auto-subscribe the accepting user to the now-active room
 	if e := chat.GetEngine(); e != nil {
@@ -138,10 +143,14 @@ func RejectDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verify the caller has a pending membership in this room
 	var exists bool
-	postgress.GetRawDB().QueryRow(
+	err := postgress.GetRawDB().QueryRow(
 		`SELECT EXISTS (SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2 AND status = $3)`,
 		roomID, userID, config.RoomMemberPending,
 	).Scan(&exists)
+	if err != nil {
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
 
 	if !exists {
 		JSONError(w, "No pending DM request for this room", http.StatusNotFound)
@@ -152,10 +161,12 @@ func RejectDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 	if e := chat.GetEngine(); e != nil {
 		// Find the other member to unsubscribe them too
 		var otherUserID string
-		postgress.GetRawDB().QueryRow(
+		if qErr := postgress.GetRawDB().QueryRow(
 			`SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2 LIMIT 1`,
 			roomID, userID,
-		).Scan(&otherUserID)
+		).Scan(&otherUserID); qErr != nil {
+			log.Printf("[dm] Failed to find other member for room=%s: %v", roomID, qErr)
+		}
 		e.LeaveRoomForUser(userID, roomID)
 		if otherUserID != "" {
 			e.LeaveRoomForUser(otherUserID, roomID)
@@ -163,7 +174,11 @@ func RejectDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete the room (cascades to room_members and messages)
-	postgress.Exec(`DELETE FROM rooms WHERE id = $1`, roomID)
+	if _, err := postgress.Exec(`DELETE FROM rooms WHERE id = $1`, roomID); err != nil {
+		log.Printf("[dm] Failed to delete room %s: %v", roomID, err)
+		JSONError(w, "Failed to reject DM request", http.StatusInternalServerError)
+		return
+	}
 
 	JSONMessage(w, "success", "DM request rejected")
 }

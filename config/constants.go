@@ -203,4 +203,7 @@ const (
 
 	// FlushWorkerCount is the number of parallel flush goroutines
 	FlushWorkerCount = 10
+
+	// ReceiptFlushBatchSize is the max number of receipt updates per SQL statement
+	ReceiptFlushBatchSize = 500
 )

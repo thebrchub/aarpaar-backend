@@ -5,14 +5,15 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
 	"github.com/gorilla/websocket"
-	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // ---------------------------------------------------------------------------
@@ -47,7 +48,14 @@ type Client struct {
 	UserID      string          // The authenticated user who owns this connection
 	Conn        *websocket.Conn // The underlying WebSocket connection
 	Send        chan []byte     // Outbound message queue (buffered channel)
-	JoinedRooms map[string]bool // Set of room IDs this client is subscribed to
+	JoinedRooms sync.Map        // Set of room IDs this client is subscribed to (concurrent-safe)
+	closeOnce   sync.Once       // Ensures c.Send is closed exactly once
+	fromPrefix  []byte          // Pre-computed `{"from":"<userID>",` prefix (zero-alloc per message)
+}
+
+// closeSend safely closes the Send channel exactly once, preventing double-close panics.
+func (c *Client) closeSend() {
+	c.closeOnce.Do(func() { close(c.Send) })
 }
 
 // confirmMessage is the JSON shape for delivery confirmations.
@@ -130,45 +138,38 @@ func (c *Client) readPump() {
 			continue
 		}
 
-		// --- Mark Read: update last_read_at in Postgres ---
+		// --- Mark Read: buffer in Redis, flush to Postgres periodically ---
 		// Client sends: {"type":"mark_read","roomId":"<uuid>"}
 		if msgType == config.MsgTypeMarkRead {
 			if roomID == "" {
 				sendError(c, "INVALID_PAYLOAD", "Missing roomId")
 				continue
 			}
-			if !c.JoinedRooms[roomID] {
+			if _, ok := c.JoinedRooms.Load(roomID); !ok {
 				sendError(c, "NOT_A_MEMBER", "You are not a member of this room")
 				continue
 			}
-			go func(uid, rid string) {
-				_, err := postgress.GetRawDB().Exec(
-					`UPDATE room_members SET last_read_at = NOW() WHERE room_id = $1 AND user_id = $2`,
-					rid, uid,
-				)
-				if err != nil {
-					log.Printf("[client] mark_read failed for user=%s room=%s: %v", uid, rid, err)
-					return
-				}
-
-				// Broadcast a read receipt to all room members via Redis Pub/Sub
-				// so the sender sees blue ticks on their messages.
-				readReceipt, err := json.Marshal(map[string]string{
-					config.FieldType:   config.MsgTypeMessageRead,
-					config.FieldRoomID: rid,
-					config.FieldUserID: uid,
-					config.FieldReadAt: time.Now().UTC().Format(time.RFC3339),
-				})
-				if err == nil {
-					ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
-					redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, readReceipt)
-					cancel()
-				}
-			}(c.UserID, roomID)
+			now := time.Now().UTC().Format(time.RFC3339)
+			// Buffer the read receipt in Redis hash — flusher will batch-UPDATE Postgres
+			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+			pipe := redis.GetRawClient().Pipeline()
+			pipe.HSet(ctx, config.CHAT_READ_RECEIPTS, roomID+":"+c.UserID, now)
+			// Broadcast read receipt to room members for real-time blue ticks
+			readReceipt, _ := json.Marshal(map[string]string{
+				config.FieldType:   config.MsgTypeMessageRead,
+				config.FieldRoomID: roomID,
+				config.FieldUserID: c.UserID,
+				config.FieldReadAt: now,
+			})
+			pipe.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, readReceipt)
+			if _, err := pipe.Exec(ctx); err != nil {
+				log.Printf("[client] mark_read buffer failed for user=%s room=%s: %v", c.UserID, roomID, err)
+			}
+			cancel()
 			continue
 		}
 
-		// --- Mark Delivered: update last_delivered_at in Postgres ---
+		// --- Mark Delivered: buffer in Redis, flush to Postgres periodically ---
 		// Client sends: {"type":"mark_delivered","roomId":"<uuid>"}
 		// Used when a client reconnects after being offline to acknowledge
 		// that messages in this room have reached the device.
@@ -177,33 +178,26 @@ func (c *Client) readPump() {
 				sendError(c, "INVALID_PAYLOAD", "Missing roomId")
 				continue
 			}
-			if !c.JoinedRooms[roomID] {
+			if _, ok := c.JoinedRooms.Load(roomID); !ok {
 				sendError(c, "NOT_A_MEMBER", "You are not a member of this room")
 				continue
 			}
-			go func(uid, rid string) {
-				_, err := postgress.GetRawDB().Exec(
-					`UPDATE room_members SET last_delivered_at = NOW()
-					 WHERE room_id = $1 AND user_id = $2 AND last_delivered_at < NOW()`,
-					rid, uid,
-				)
-				if err != nil {
-					log.Printf("[client] mark_delivered failed for user=%s room=%s: %v", uid, rid, err)
-					return
-				}
-
-				// Broadcast delivery receipt so the sender sees double ticks
-				deliveryReceipt, err := json.Marshal(map[string]string{
-					config.FieldType:        config.MsgTypeMessageDelivered,
-					config.FieldRoomID:      rid,
-					config.FieldDeliveredAt: time.Now().UTC().Format(time.RFC3339),
-				})
-				if err == nil {
-					ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
-					redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, deliveryReceipt)
-					cancel()
-				}
-			}(c.UserID, roomID)
+			now := time.Now().UTC().Format(time.RFC3339)
+			// Buffer the delivery receipt in Redis hash — flusher will batch-UPDATE Postgres
+			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+			pipe := redis.GetRawClient().Pipeline()
+			pipe.HSet(ctx, config.CHAT_DELIVERY_RECEIPTS, roomID+":"+c.UserID, now)
+			// Broadcast delivery receipt so the sender sees double ticks
+			deliveryReceipt, _ := json.Marshal(map[string]string{
+				config.FieldType:        config.MsgTypeMessageDelivered,
+				config.FieldRoomID:      roomID,
+				config.FieldDeliveredAt: now,
+			})
+			pipe.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, deliveryReceipt)
+			if _, err := pipe.Exec(ctx); err != nil {
+				log.Printf("[client] mark_delivered buffer failed for user=%s room=%s: %v", c.UserID, roomID, err)
+			}
+			cancel()
 			continue
 		}
 
@@ -218,7 +212,7 @@ func (c *Client) readPump() {
 			// Membership check: reject if client is not subscribed to this room.
 			// Since rooms are auto-subscribed on connect and dynamically managed
 			// by the server, JoinedRooms is the source of truth.
-			if !c.JoinedRooms[roomID] {
+			if _, ok := c.JoinedRooms.Load(roomID); !ok {
 				sendError(c, "NOT_A_MEMBER", "You are not a member of this room")
 				continue
 			}
@@ -250,28 +244,17 @@ func (c *Client) readPump() {
 				}
 
 				// Replace the text field in the payload with sanitized content
+				// Uses sjson for surgical replacement — avoids full JSON rebuild (P2-4 fix)
 				if sanitized != rawText {
-					// Rebuild JSON with sanitized text
-					parsed := gjson.ParseBytes(payload)
-					fields := make(map[string]interface{})
-					parsed.ForEach(func(key, value gjson.Result) bool {
-						if key.String() == config.FieldText {
-							fields[config.FieldText] = sanitized
-						} else {
-							fields[key.String()] = value.Value()
-						}
-						return true
-					})
-					if rebuilt, err := json.Marshal(fields); err == nil {
-						payload = rebuilt
+					if patched, err := sjson.SetBytes(payload, config.FieldText, sanitized); err == nil {
+						payload = patched
 					}
 				}
 			}
 
-			// Stamp the authenticated sender onto the payload (zero-alloc byte splice).
+			// Stamp the authenticated sender onto the payload (pre-computed prefix).
 			// Turns {"type":...} into {"from":"<userID>","type":...}
-			fromPrefix := []byte(`{"from":"` + c.UserID + `",`)
-			payload = append(fromPrefix, payload[1:]...) // skip the leading '{'
+			payload = append(c.fromPrefix, payload[1:]...) // skip the leading '{'
 
 			// Broadcast to all servers via Redis Pub/Sub (with timeout)
 			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
@@ -280,7 +263,7 @@ func (c *Client) readPump() {
 
 			// Only persist actual messages (skip typing indicators)
 			if msgType == config.MsgTypeSendMessage {
-				// Send an instant delivery confirmation back to the sender
+				// Send an instant delivery confirmation back to the sender (non-blocking)
 				tempID := gjson.GetBytes(payload, config.FieldTempID).String()
 				if tempID != "" {
 					confirm, err := json.Marshal(confirmMessage{
@@ -288,22 +271,32 @@ func (c *Client) readPump() {
 						TempID: tempID,
 					})
 					if err == nil {
-						c.Send <- confirm
+						select {
+						case c.Send <- confirm:
+						default:
+							// Client buffer full — drop confirmation to protect server
+						}
 					}
 				}
 
 				// Buffer the message in Redis for the flusher to persist to Postgres
-				ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
-				pipe := redis.GetRawClient().Pipeline()
-				pipe.RPush(ctx, config.CHAT_BUFFER_COLON+roomID, payload)
-				pipe.SAdd(ctx, config.CHAT_DIRTY_TARGETS, roomID)
-
-				if _, err := pipe.Exec(ctx); err != nil {
-					log.Printf("[client] Failed to buffer message: %v", err)
-				}
-				cancel()
+				c.bufferMessage(roomID, payload)
 			}
 		}
+	}
+}
+
+// bufferMessage pushes a message into the Redis buffer for later flushing to Postgres.
+// Extracted to its own function so that defer cancel() runs immediately after the
+// Redis pipeline completes, instead of leaking until readPump returns (P0-1 fix).
+func (c *Client) bufferMessage(roomID string, payload []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+	defer cancel()
+	pipe := redis.GetRawClient().Pipeline()
+	pipe.RPush(ctx, config.CHAT_BUFFER_COLON+roomID, payload)
+	pipe.SAdd(ctx, config.CHAT_DIRTY_TARGETS, roomID)
+	if _, err := pipe.Exec(ctx); err != nil {
+		log.Printf("[client] Failed to buffer message: %v", err)
 	}
 }
 
@@ -376,11 +369,11 @@ func ServeWs(engine *Engine, w http.ResponseWriter, r *http.Request, userID stri
 	}
 
 	client := &Client{
-		Engine:      engine,
-		UserID:      userID,
-		Conn:        conn,
-		Send:        make(chan []byte, config.ClientSendBuffer),
-		JoinedRooms: make(map[string]bool),
+		Engine:     engine,
+		UserID:     userID,
+		Conn:       conn,
+		Send:       make(chan []byte, config.ClientSendBuffer),
+		fromPrefix: []byte(`{"from":"` + userID + `",`),
 	}
 
 	engine.Register(client)

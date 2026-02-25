@@ -66,6 +66,9 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Escape LIKE metacharacters to prevent wildcard injection (DoS via pathological patterns)
+	q = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
+
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
