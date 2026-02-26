@@ -225,7 +225,7 @@ var migrationStatements = []string{
 	// ===================================================================
 	`CREATE TABLE IF NOT EXISTS call_logs (
         id               BIGSERIAL PRIMARY KEY,
-        call_id          UUID NOT NULL,
+        call_id          TEXT NOT NULL,
         room_id          UUID REFERENCES rooms(id) ON DELETE CASCADE,
         initiated_by     UUID REFERENCES users(id) ON DELETE CASCADE,
         call_type        TEXT NOT NULL DEFAULT 'video',
@@ -238,6 +238,9 @@ var migrationStatements = []string{
 
 	`CREATE INDEX IF NOT EXISTS idx_call_logs_room_id ON call_logs (room_id, started_at DESC)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_call_logs_call_id ON call_logs (call_id)`,
+
+	// --- Migrations / Alterations ---
+	`DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='call_logs' AND column_name='call_id' AND data_type='uuid') THEN ALTER TABLE call_logs ALTER COLUMN call_id TYPE TEXT; END IF; END $$`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

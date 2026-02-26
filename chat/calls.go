@@ -238,7 +238,7 @@ func logCall(callID, roomID, initiatedBy string, hasVideo bool, status string, d
 	defer cancel()
 	_, err := postgress.GetRawDB().ExecContext(ctx,
 		`INSERT INTO call_logs (call_id, room_id, initiated_by, call_type, tier, max_participants, ended_at, duration_seconds)
-		 VALUES ($1::uuid, $2, $3::uuid, $4, 'p2p', 2, $5, $6)
+		 VALUES ($1, $2, $3::uuid, $4, 'p2p', 2, $5, $6)
 		 ON CONFLICT (call_id) DO UPDATE SET ended_at = COALESCE($5, call_logs.ended_at), duration_seconds = COALESCE($6, call_logs.duration_seconds)`,
 		callID, roomIDPtr, initiatedBy, callType, endedAt, durationPtr,
 	)
@@ -418,7 +418,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 			defer cancel()
 			_, err := postgress.GetRawDB().ExecContext(ctx,
-				`UPDATE call_logs SET started_at = NOW() WHERE call_id = $1::uuid`, callID,
+				`UPDATE call_logs SET started_at = NOW() WHERE call_id = $1`, callID,
 			)
 			if err != nil {
 				log.Printf("[calls] Failed to update call start time call=%s: %v", callID, err)
