@@ -3428,6 +3428,24 @@ async function callCreatePeerConnection() {
     }
   };
 
+  // Auto-renegotiate when tracks are added/removed mid-call (e.g. camera
+  // toggled on during an audio-only call, or screen share started).
+  pc.onnegotiationneeded = async () => {
+    try {
+      console.log('[call] negotiationneeded — sending new offer');
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      wsSend({
+        type: 'call_offer',
+        to: callState.peerId,
+        callId: callState.callId,
+        sdp: JSON.stringify(pc.localDescription)
+      });
+    } catch (e) {
+      console.error('[call] renegotiation failed', e);
+    }
+  };
+
   // Add local tracks
   if (callState.localStream) {
     callState.localStream.getTracks().forEach(track => {
@@ -3572,7 +3590,9 @@ function callHandleReject(parsed) {
 async function callHandleOffer(parsed) {
   if (!callState.active) return;
 
-  const pc = await callCreatePeerConnection();
+  // Re-use existing peer connection for renegotiation (e.g. mid-call
+  // camera toggle), only create a new one for the initial offer.
+  const pc = callState.pc || await callCreatePeerConnection();
   const offer = JSON.parse(parsed.sdp);
   await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
