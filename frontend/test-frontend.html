@@ -3242,6 +3242,7 @@ const callState = {
   callStartTime: null,
   ringing: false,       // incoming call ringing
   incomingData: null,   // stored incoming call_ring data
+  negotiationReady: false, // true after initial SDP exchange completes (allows mid-call renegotiation)
 };
 
 // ---- Fetch ICE config from server (cached) ----
@@ -3403,13 +3404,17 @@ async function callCreatePeerConnection() {
 
   pc.ontrack = (e) => {
     const remoteVid = document.getElementById('remoteVideo');
-    if (remoteVid.srcObject !== e.streams[0]) {
+    if (e.streams && e.streams[0]) {
       remoteVid.srcObject = e.streams[0];
-      // If video enabled, show video elements
-      if (e.track.kind === 'video') {
-        document.getElementById('callAudioPlaceholder').classList.add('hidden');
-        remoteVid.style.display = '';
-      }
+    } else {
+      // Track arrived without a stream (renegotiation) — append to existing
+      if (!remoteVid.srcObject) remoteVid.srcObject = new MediaStream();
+      remoteVid.srcObject.addTrack(e.track);
+    }
+    // If video track, show the video element
+    if (e.track.kind === 'video') {
+      document.getElementById('callAudioPlaceholder').classList.add('hidden');
+      remoteVid.style.display = '';
     }
   };
 
@@ -3418,6 +3423,7 @@ async function callCreatePeerConnection() {
     console.log('ICE state:', state);
     if (state === 'connected' || state === 'completed') {
       document.getElementById('callStatus').textContent = 'Connected';
+      callState.negotiationReady = true; // allow mid-call renegotiation from now on
       callStartTimer();
       updateActiveCallInfo();
     } else if (state === 'disconnected') {
@@ -3430,9 +3436,15 @@ async function callCreatePeerConnection() {
 
   // Auto-renegotiate when tracks are added/removed mid-call (e.g. camera
   // toggled on during an audio-only call, or screen share started).
+  // IMPORTANT: Skip during initial setup — only fire after the first
+  // SDP exchange completes (negotiationReady flag).
   pc.onnegotiationneeded = async () => {
+    if (!callState.negotiationReady) {
+      console.log('[call] negotiationneeded skipped (initial setup)');
+      return;
+    }
     try {
-      console.log('[call] negotiationneeded — sending new offer');
+      console.log('[call] negotiationneeded — sending renegotiation offer');
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       wsSend({
@@ -3819,6 +3831,7 @@ function callCleanup() {
   callState.isScreenSharing = false;
   callState.ringing = false;
   callState.incomingData = null;
+  callState.negotiationReady = false;
 
   callHideOverlay();
   document.getElementById('incomingCallOverlay').classList.add('hidden');
