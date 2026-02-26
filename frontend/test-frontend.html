@@ -3506,16 +3506,12 @@ async function callAcceptIncoming() {
   callState.isMuted = false;
   callState.isCamOff = !callState.hasVideo;
 
-  // Send accept signal
-  wsSend({
-    type: 'call_accept',
-    to: parsed.from,
-    callId: parsed.callId
-  });
-
   callShowOverlay(callState.hasVideo, 'Connecting...');
 
-  // Get local media
+  // Get local media FIRST — must be ready before we send call_accept,
+  // otherwise the caller's call_offer can arrive before getUserMedia
+  // resolves, causing callCreatePeerConnection() to add zero local tracks
+  // (one-way audio bug).
   try {
     callState.localStream = await navigator.mediaDevices.getUserMedia({
       audio: true,
@@ -3529,6 +3525,13 @@ async function callAcceptIncoming() {
     callCleanup();
     return;
   }
+
+  // NOW send accept signal (local stream is ready for WebRTC)
+  wsSend({
+    type: 'call_accept',
+    to: parsed.from,
+    callId: parsed.callId
+  });
 
   // Wait for the offer from the caller
 }
