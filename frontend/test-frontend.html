@@ -3236,6 +3236,7 @@ const callState = {
   pc: null,             // RTCPeerConnection
   localStream: null,    // getUserMedia stream
   screenStream: null,   // getDisplayMedia stream
+  screenSender: null,   // RTCRtpSender for screen track (so we can reliably replace/remove it)
   iceServers: null,     // cached ICE config
   iceCandidateQueue: [], // queue ICE candidates before remote description set
   timerInterval: null,
@@ -3416,6 +3417,30 @@ async function callCreatePeerConnection() {
       document.getElementById('callAudioPlaceholder').classList.add('hidden');
       remoteVid.style.display = '';
     }
+
+    // When the remote peer stops a track (e.g. screen share ended),
+    // detect it so we don't show a frozen last frame.
+    e.track.onended = () => {
+      console.log('[call] remote track ended:', e.track.kind);
+      if (e.track.kind === 'video') {
+        remoteVid.style.display = 'none';
+        document.getElementById('callAudioPlaceholder').classList.remove('hidden');
+      }
+    };
+    e.track.onmute = () => {
+      console.log('[call] remote track muted:', e.track.kind);
+      if (e.track.kind === 'video') {
+        remoteVid.style.display = 'none';
+        document.getElementById('callAudioPlaceholder').classList.remove('hidden');
+      }
+    };
+    e.track.onunmute = () => {
+      console.log('[call] remote track unmuted:', e.track.kind);
+      if (e.track.kind === 'video') {
+        remoteVid.style.display = '';
+        document.getElementById('callAudioPlaceholder').classList.add('hidden');
+      }
+    };
   };
 
   pc.oniceconnectionstatechange = () => {
@@ -3740,12 +3765,19 @@ async function callToggleScreenShare() {
       callState.screenStream.getTracks().forEach(t => t.stop());
       callState.screenStream = null;
     }
-    // Remove screen track from peer connection
-    if (callState.pc) {
-      const senders = callState.pc.getSenders();
-      const screenSender = senders.find(s => s.track && s.track.label && s.track.label.includes('screen'));
-      if (screenSender) callState.pc.removeTrack(screenSender);
+    // Replace screen track back to camera (or null if no camera)
+    if (callState.screenSender && callState.pc) {
+      const camTrack = callState.localStream
+        ? callState.localStream.getVideoTracks()[0] || null
+        : null;
+      await callState.screenSender.replaceTrack(camTrack);
+      // If no camera track, remove the sender to trigger renegotiation
+      // so the remote side knows video stopped.
+      if (!camTrack) {
+        callState.pc.removeTrack(callState.screenSender);
+      }
     }
+    callState.screenSender = null;
     document.getElementById('screenVideo').classList.add('hidden');
     document.getElementById('screenVideo').srcObject = null;
     callState.isScreenSharing = false;
@@ -3758,14 +3790,15 @@ async function callToggleScreenShare() {
       });
       const screenTrack = callState.screenStream.getVideoTracks()[0];
 
-      // Replace video track or add screen track
+      // Replace existing video sender's track, or add a new sender
       if (callState.pc) {
         const senders = callState.pc.getSenders();
         const videoSender = senders.find(s => s.track && s.track.kind === 'video');
         if (videoSender) {
+          callState.screenSender = videoSender;
           videoSender.replaceTrack(screenTrack);
         } else {
-          callState.pc.addTrack(screenTrack, callState.screenStream);
+          callState.screenSender = callState.pc.addTrack(screenTrack, callState.screenStream);
         }
       }
 
@@ -3829,6 +3862,7 @@ function callCleanup() {
   callState.callStartTime = null;
   callState.iceCandidateQueue = [];
   callState.isScreenSharing = false;
+  callState.screenSender = null;
   callState.ringing = false;
   callState.incomingData = null;
   callState.negotiationReady = false;
