@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,41 +172,33 @@ func cancelRingTimeout(callID string) {
 
 // canUserCall checks if the caller is allowed to call the target user.
 // Returns true if they share a friendship or an active room membership.
+// Combined into a single query with UNION ALL for short-circuit behavior (P2-7 fix).
 func canUserCall(callerID, targetID string) bool {
 	var exists bool
-
-	// Check friendship (either direction due to user_id_1 < user_id_2 constraint)
-	err := postgress.GetRawDB().QueryRow(
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT EXISTS(
 			SELECT 1 FROM friendships
 			WHERE (user_id_1 = $1 AND user_id_2 = $2)
 			   OR (user_id_1 = $2 AND user_id_2 = $1)
-		)`, callerID, targetID,
-	).Scan(&exists)
-	if err == nil && exists {
-		return true
-	}
-
-	// Check if they share any active DM room
-	err = postgress.GetRawDB().QueryRow(
-		`SELECT EXISTS(
+			UNION ALL
 			SELECT 1 FROM room_members rm1
 			JOIN room_members rm2 ON rm1.room_id = rm2.room_id
 			WHERE rm1.user_id = $1 AND rm2.user_id = $2
 			  AND rm1.status = 'active' AND rm2.status = 'active'
+			LIMIT 1
 		)`, callerID, targetID,
 	).Scan(&exists)
-	if err == nil && exists {
-		return true
-	}
-
-	return false
+	return err == nil && exists
 }
 
 // isUserBlocked checks if target has blocked the caller (or vice versa).
 func isUserBlocked(callerID, targetID string) bool {
 	var exists bool
-	err := postgress.GetRawDB().QueryRow(
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT EXISTS(
 			SELECT 1 FROM blocked_users
 			WHERE (blocker_id = $1 AND blocked_id = $2)
@@ -241,7 +234,9 @@ func logCall(callID, roomID, initiatedBy string, hasVideo bool, status string, d
 		durationPtr = &durationSecs
 	}
 
-	_, err := postgress.GetRawDB().Exec(
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	_, err := postgress.GetRawDB().ExecContext(ctx,
 		`INSERT INTO call_logs (call_id, room_id, initiated_by, call_type, tier, max_participants, ended_at, duration_seconds)
 		 VALUES ($1::uuid, $2, $3::uuid, $4, 'p2p', 2, $5, $6)
 		 ON CONFLICT (call_id) DO UPDATE SET ended_at = COALESCE($5, call_logs.ended_at), duration_seconds = COALESCE($6, call_logs.duration_seconds)`,
@@ -260,8 +255,11 @@ func logCall(callID, roomID, initiatedBy string, hasVideo bool, status string, d
 // when they receive an incoming call. This ensures the call rings even if
 // the app is in the background.
 func sendCallPushNotification(calleeID, callerID, callID string, hasVideo bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+
 	// Query device tokens for the callee
-	rows, err := postgress.GetRawDB().Query(
+	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT token, device_type FROM device_tokens WHERE user_id = $1`, calleeID,
 	)
 	if err != nil {
@@ -272,7 +270,7 @@ func sendCallPushNotification(calleeID, callerID, callID string, hasVideo bool) 
 
 	// Get caller's name for the notification
 	var callerName string
-	err = postgress.GetRawDB().QueryRow(
+	err = postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT COALESCE(name, 'Unknown') FROM users WHERE id = $1`, callerID,
 	).Scan(&callerName)
 	if err != nil {
@@ -354,6 +352,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			select {
 			case c.Send <- busyMsg:
 			default:
+				droppedMessages.Add(1)
 			}
 			return true
 		}
@@ -370,13 +369,14 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			select {
 			case c.Send <- missedMsg:
 			default:
+				droppedMessages.Add(1)
 			}
 
 			// Send push notification so callee sees the missed call
-			go sendCallPushNotification(targetUser, c.UserID, callID, hasVideo)
+			runBackground(func() { sendCallPushNotification(targetUser, c.UserID, callID, hasVideo) })
 
 			// Log as missed call
-			go logCall(callID, "", c.UserID, hasVideo, "missed", 0)
+			runBackground(func() { logCall(callID, "", c.UserID, hasVideo, "missed", 0) })
 			return true
 		}
 
@@ -400,10 +400,10 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		e.startRingTimeout(callID, c.UserID, targetUser, hasVideo)
 
 		// --- Send push notification to callee ---
-		go sendCallPushNotification(targetUser, c.UserID, callID, hasVideo)
+		runBackground(func() { sendCallPushNotification(targetUser, c.UserID, callID, hasVideo) })
 
 		// --- Log call initiation ---
-		go logCall(callID, "", c.UserID, hasVideo, "ringing", 0)
+		runBackground(func() { logCall(callID, "", c.UserID, hasVideo, "ringing", 0) })
 
 	case config.MsgTypeCallAccept:
 		// Cancel the ring timeout
@@ -414,14 +414,16 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		markCallAnswered(targetUser)
 
 		// Update call log
-		go func() {
-			_, err := postgress.GetRawDB().Exec(
+		runBackground(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+			defer cancel()
+			_, err := postgress.GetRawDB().ExecContext(ctx,
 				`UPDATE call_logs SET started_at = NOW() WHERE call_id = $1::uuid`, callID,
 			)
 			if err != nil {
 				log.Printf("[calls] Failed to update call start time call=%s: %v", callID, err)
 			}
-		}()
+		})
 
 	case config.MsgTypeCallReject:
 		// Cancel the ring timeout
@@ -432,7 +434,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		clearActiveCall(targetUser)
 
 		// Log rejected call
-		go logCall(callID, "", targetUser, hasVideo, "rejected", 0)
+		runBackground(func() { logCall(callID, "", targetUser, hasVideo, "rejected", 0) })
 
 	case config.MsgTypeCallEnd:
 		// Cancel any pending ring timeout
@@ -454,7 +456,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		if callerCall != nil && !callerCall.Answered {
 			status = "cancelled"
 		}
-		go logCall(callID, "", c.UserID, hasVideo, status, duration)
+		runBackground(func() { logCall(callID, "", c.UserID, hasVideo, status, duration) })
 
 	case config.MsgTypeCallLeave:
 		// For future group calls — treat like call_end for 1:1
@@ -537,4 +539,73 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ---------------------------------------------------------------------------
+// Orphan Call State Scanner
+//
+// Periodically scans Redis for call:active:* keys that have been ringing
+// longer than CallRingTimeout without being answered. This handles the case
+// where a server crashes and its local time.AfterFunc timers are lost,
+// which would otherwise leave users stuck in "busy" state for up to 2 hours
+// (the callActiveTTL). Runs every 60 seconds.
+// ---------------------------------------------------------------------------
+
+// startOrphanCallScanner starts the background scanner goroutine.
+// Stops when the done channel is closed (engine shutdown).
+func startOrphanCallScanner(done <-chan struct{}) {
+	ticker := time.NewTicker(60 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				scanOrphanCalls()
+			}
+		}
+	}()
+}
+
+// scanOrphanCalls checks all active call states and cleans up orphans.
+func scanOrphanCalls() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rdb := redis.GetRawClient()
+	pattern := config.CALL_ACTIVE_COLON + "*"
+
+	var cursor uint64
+	for {
+		keys, nextCursor, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			log.Printf("[calls] Orphan call scan error: %v", err)
+			return
+		}
+
+		for _, key := range keys {
+			val, err := rdb.Get(ctx, key).Result()
+			if err != nil {
+				continue
+			}
+			var call activeCall
+			if err := json.Unmarshal([]byte(val), &call); err != nil {
+				continue
+			}
+
+			// Clean up calls that have been ringing longer than timeout + grace period
+			if !call.Answered && time.Since(call.StartedAt) > CallRingTimeout+30*time.Second {
+				userID := strings.TrimPrefix(key, config.CALL_ACTIVE_COLON)
+				log.Printf("[calls] Cleaning orphan call state: user=%s call=%s (ringing for %v)",
+					userID, call.CallID, time.Since(call.StartedAt).Round(time.Second))
+				rdb.Del(ctx, key)
+			}
+		}
+
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
 }

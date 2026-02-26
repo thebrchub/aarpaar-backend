@@ -37,7 +37,8 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
 	rdb := redis.GetRawClient()
 
 	// Single queue for all users (no gender preference)
@@ -170,7 +171,9 @@ func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove from the single matchmaking queue
-	redis.GetRawClient().SRem(context.Background(), config.DefaultMatchQueue, userID)
+	ctx, cancel := context.WithTimeout(r.Context(), config.RedisOpTimeout)
+	defer cancel()
+	redis.GetRawClient().SRem(ctx, config.DefaultMatchQueue, userID)
 
 	JSONMessage(w, "success", "Removed from queue")
 }

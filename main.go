@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	_ "go.uber.org/automaxprocs" // Automatically set GOMAXPROCS to match container CPU quota
+
 	"github.com/shivanand-burli/go-starter-kit/jwt"
 	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -139,6 +141,7 @@ func main() {
 		Addr:              "0.0.0.0:" + config.ServerPort,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -183,6 +186,12 @@ func main() {
 	// Stop the flusher (runs one final flush before returning)
 	services.StopFlusher()
 	log.Println("[shutdown] Message flusher stopped")
+
+	// Close Redis connection cleanly
+	if err := redis.GetRawClient().Close(); err != nil {
+		log.Printf("[shutdown] Redis close error: %v", err)
+	}
+	log.Println("[shutdown] Redis connection closed")
 
 	// Close database connection
 	if err := postgress.Close(); err != nil {

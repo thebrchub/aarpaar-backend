@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/config"
@@ -91,7 +93,9 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	rows, err := postgress.GetRawDB().Query(
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT
 			cl.call_id,
 			cl.call_type,
@@ -105,12 +109,12 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		FROM call_logs cl
 		LEFT JOIN users u ON u.id = cl.initiated_by
 		WHERE cl.initiated_by = $1
-		   OR cl.call_id IN (
-				SELECT call_id FROM call_logs
-				WHERE room_id IN (
-					SELECT room_id FROM room_members WHERE user_id = $1 AND status = 'active'
-				)
-			)
+		   OR EXISTS (
+				SELECT 1 FROM room_members rm
+				WHERE rm.room_id = cl.room_id
+				AND rm.user_id = $1
+				AND rm.status = 'active'
+		   )
 		ORDER BY cl.started_at DESC
 		LIMIT $2 OFFSET $3`,
 		userID, limit, offset,

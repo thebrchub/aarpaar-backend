@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"math"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/config"
@@ -39,8 +41,10 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Verify the caller is an active member of this room
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
 	var isMember bool
-	err := postgress.GetRawDB().QueryRow(
+	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2 AND status = 'active')`,
 		roomID, userID,
 	).Scan(&isMember)
@@ -96,7 +100,7 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 7. Execute and pipe the raw JSON bytes to the response
 	var rawJSONBytes []byte
-	err = postgress.GetRawDB().QueryRow(query, roomID, cursor, limit, userID).Scan(&rawJSONBytes)
+	err = postgress.GetRawDB().QueryRowContext(ctx, query, roomID, cursor, limit, userID).Scan(&rawJSONBytes)
 	if err != nil {
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return

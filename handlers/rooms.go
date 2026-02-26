@@ -16,6 +16,12 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// pgCtx creates a context from an HTTP request with PGTimeout.
+// Cancels when either the request is cancelled or PGTimeout expires.
+func pgCtx(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
+}
+
 // ---------------------------------------------------------------------------
 // GetRoomsHandler returns paginated chat rooms for the authenticated user.
 //
@@ -109,8 +115,10 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	// 5. Execute and pipe the raw JSON bytes to the response
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
 	var rawJSONBytes []byte
-	err := postgress.GetRawDB().QueryRow(query, userID, cursor, limit).Scan(&rawJSONBytes)
+	err := postgress.GetRawDB().QueryRowContext(ctx, query, userID, cursor, limit).Scan(&rawJSONBytes)
 	if err != nil {
 		JSONError(w, "Failed to fetch rooms", http.StatusInternalServerError)
 		return

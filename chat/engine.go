@@ -76,6 +76,30 @@ func NewEngine() *Engine {
 
 	// Start listening to the global Redis Pub/Sub channel
 	go e.listenToRedis()
+
+	// Start orphan call state scanner (cleans up after server crashes)
+	startOrphanCallScanner(e.done)
+
+	// Start periodic metrics logging for observability
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-e.done:
+				return
+			case <-ticker.C:
+				log.Printf("[engine] Active connections: %d / %d", activeConns.Load(), maxConnections)
+				if n := droppedMessages.Swap(0); n > 0 {
+					log.Printf("[engine] Dropped %d messages (client buffers full) in last 30s", n)
+				}
+				if n := droppedBackgroundTasks.Swap(0); n > 0 {
+					log.Printf("[engine] Dropped %d background tasks (pool exhausted) in last 30s", n)
+				}
+			}
+		}
+	}()
+
 	return e
 }
 
@@ -125,7 +149,7 @@ func (e *Engine) Register(c *Client) {
 
 	// If this is the user's first device, broadcast "online" to friends
 	if firstDevice {
-		go e.broadcastPresence(c.UserID, true)
+		runBackground(func() { e.broadcastPresence(c.UserID, true) })
 	}
 }
 
@@ -164,15 +188,20 @@ func (e *Engine) Unregister(c *Client) {
 
 	// If this was the user's last device, update last_seen_at, broadcast "offline",
 	// auto-end any active call, and remove from matchmaking queue.
+	// Split into separate background tasks for better parallelism during mass-disconnect.
 	if lastDevice {
-		go func() {
+		runBackground(func() {
 			e.handleCallDisconnect(c.UserID)
+		})
+		runBackground(func() {
 			e.handleUserWentOffline(c.UserID)
+		})
+		runBackground(func() {
 			// Clean up match queue so offline users don't get matched
 			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
 			redis.GetRawClient().SRem(ctx, config.DefaultMatchQueue, c.UserID)
 			cancel()
-		}()
+		})
 	}
 }
 
@@ -260,7 +289,9 @@ func (e *Engine) LeaveRoomForUser(userID string, roomID string) {
 // getUserActiveRoomIDs queries Postgres for all room IDs where the user
 // has an active membership. Used during WebSocket registration.
 func getUserActiveRoomIDs(userID string) []string {
-	rows, err := postgress.GetRawDB().Query(
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT room_id FROM room_members WHERE user_id = $1 AND status = 'active'`,
 		userID,
 	)
@@ -308,6 +339,7 @@ func (e *Engine) CloseRoom(roomID string, payload []byte) {
 		select {
 		case c.Send <- payload:
 		default:
+			droppedMessages.Add(1)
 		}
 	}
 }
@@ -502,6 +534,7 @@ func (e *Engine) deliverToUser(userID string, payload []byte) {
 		default:
 			// Client's buffer is full — drop to protect the server.
 			// The client will catch up or reconnect.
+			droppedMessages.Add(1)
 		}
 	}
 }
@@ -573,7 +606,9 @@ func (e *Engine) IsUserOnline(userID string) bool {
 // Uses UNION ALL to enable efficient index-only scans on both directions
 // of the friendships table instead of a single OR query.
 func getFriendIDs(userID string) []string {
-	rows, err := postgress.GetRawDB().Query(
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
 		 UNION ALL
 		 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`,
@@ -600,7 +635,9 @@ func getFriendIDs(userID string) []string {
 func (e *Engine) broadcastPresence(userID string, online bool) {
 	// Check if the user allows presence visibility
 	var showLastSeen bool
-	err := postgress.GetRawDB().QueryRow(
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT show_last_seen FROM users WHERE id = $1`, userID,
 	).Scan(&showLastSeen)
 	if err != nil || !showLastSeen {
@@ -630,7 +667,7 @@ func (e *Engine) broadcastPresence(userID string, online bool) {
 	// Publish a SINGLE presence event with a target list instead of N separate
 	// publishes. Each server filters locally to deliver only to connected targets.
 	// This reduces O(N) marshal calls to O(1). (P1-1 fix)
-	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+	ctx, cancel = context.WithTimeout(context.Background(), config.RedisOpTimeout)
 	defer cancel()
 
 	envelope := map[string]interface{}{
@@ -652,7 +689,9 @@ func (e *Engine) broadcastPresence(userID string, online bool) {
 // handleUserWentOffline updates last_seen_at in Postgres and broadcasts offline presence.
 func (e *Engine) handleUserWentOffline(userID string) {
 	// Update last_seen_at in the database
-	_, err := postgress.GetRawDB().Exec(
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	_, err := postgress.GetRawDB().ExecContext(ctx,
 		`UPDATE users SET last_seen_at = NOW() WHERE id = $1`, userID,
 	)
 	if err != nil {
@@ -684,6 +723,7 @@ func (e *Engine) deliverToRoom(roomID string, payload []byte) {
 		case c.Send <- payload:
 		default:
 			// Client's buffer is full — drop to protect the server
+			droppedMessages.Add(1)
 		}
 	}
 }

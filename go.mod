@@ -4,6 +4,7 @@ go 1.25.5
 
 require (
 	github.com/tidwall/sjson v1.2.5
+	go.uber.org/automaxprocs v1.6.0
 	google.golang.org/api v0.267.0
 )
 

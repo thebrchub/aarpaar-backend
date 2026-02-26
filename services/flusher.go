@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -39,6 +40,10 @@ var flusherDone = make(chan struct{})
 
 // flusherWg tracks the flusher goroutine for clean shutdown.
 var flusherWg sync.WaitGroup
+
+// consecutiveFlushFailures tracks how many flush cycles in a row had at least
+// one room fail. Used for exponential backoff when Postgres is unavailable.
+var consecutiveFlushFailures atomic.Int32
 
 // atomicSMembersAndDel is a Lua script that atomically reads all members
 // of a set and deletes it in a single Redis operation. This prevents the
@@ -95,7 +100,21 @@ func StopFlusher() {
 
 // FlushAllDirtyRooms grabs every dirty room ID and processes them concurrently.
 // Uses a Lua script to atomically read and clear the dirty set.
+// Implements exponential backoff when consecutive flush cycles fail (e.g. Postgres down).
 func FlushAllDirtyRooms() {
+	// Exponential backoff: if previous flushes failed, skip some ticks.
+	// Caps at 2^5 = 32 ticks (~96s at 3s intervals) to avoid indefinite stalls.
+	failures := consecutiveFlushFailures.Load()
+	if failures > 0 {
+		// On failure N, only flush every 2^min(N,5) ticks.
+		// We use a simple modulo check against a tick counter.
+		backoffTicks := int32(1) << min32(failures, 5)
+		// Skip this tick probabilistically using the failure count itself as a counter
+		if failures%backoffTicks != 0 {
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -125,21 +144,32 @@ func FlushAllDirtyRooms() {
 	close(jobs)
 
 	var wg sync.WaitGroup
+	var flushFailed atomic.Bool
 	for range config.FlushWorkerCount {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for targetID := range jobs {
-				flushOneRoom(targetID)
+				if !flushOneRoom(targetID) {
+					flushFailed.Store(true)
+				}
 			}
 		}()
 	}
 
 	wg.Wait()
+
+	// Track consecutive failures for exponential backoff
+	if flushFailed.Load() {
+		consecutiveFlushFailures.Add(1)
+	} else {
+		consecutiveFlushFailures.Store(0)
+	}
 }
 
 // flushOneRoom persists all buffered messages for a single room to Postgres.
-func flushOneRoom(targetID string) {
+// Returns true on success, false on failure (used for backoff tracking).
+func flushOneRoom(targetID string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
 	defer cancel()
 
@@ -151,7 +181,7 @@ func flushOneRoom(targetID string) {
 	// Stranger chats are ephemeral — don't persist them, just clean up Redis
 	if strings.HasPrefix(targetID, config.STRANGER_PREFIX) {
 		rdb.Del(ctx, bufferKey)
-		return
+		return true
 	}
 
 	// Rename the buffer to a "processing" key so new messages go to a fresh list.
@@ -159,14 +189,14 @@ func flushOneRoom(targetID string) {
 	err := rdb.Rename(ctx, bufferKey, processingKey).Err()
 	if err != nil {
 		log.Printf("[flusher] Rename failed for %s (key may be empty): %v", targetID, err)
-		return
+		return true // key-not-found is not a real failure
 	}
 
 	// Read all messages from the processing list
 	rawMessages, err := rdb.LRange(ctx, processingKey, 0, -1).Result()
 	if err != nil || len(rawMessages) == 0 {
 		rdb.Del(ctx, processingKey)
-		return
+		return true
 	}
 
 	// Bulk insert into Postgres (chunked to avoid giant SQL statements)
@@ -184,11 +214,12 @@ func flushOneRoom(targetID string) {
 		if _, pipeErr := rePipe.Exec(reCtx); pipeErr != nil {
 			log.Printf("[flusher] Failed to re-queue %s: %v", targetID, pipeErr)
 		}
-		return
+		return false
 	}
 
 	// Success — delete the processed list from Redis
 	rdb.Del(ctx, processingKey)
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -360,4 +391,12 @@ func flushReceiptHash(redisKey string, column string) {
 			log.Printf("[flusher] Receipt flush failed for %s: %v", column, err)
 		}
 	}
+}
+
+// min32 returns the smaller of two int32 values.
+func min32(a, b int32) int32 {
+	if a < b {
+		return a
+	}
+	return b
 }

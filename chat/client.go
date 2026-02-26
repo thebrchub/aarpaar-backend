@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -27,10 +28,25 @@ const (
 	maxMsgSize = 16384               // 16KB — accommodates large WebRTC SDP offers + ICE candidates
 )
 
+// wsWriteBufferPool reuses WebSocket write buffers across connections.
+// Without this, each of the 10K connections allocates its own 4KB write buffer
+// that lives for the connection lifetime (~80MB total). With pooling, only
+// concurrently-writing connections need buffers, reducing memory by ~90%.
+var wsWriteBufferPool = &sync.Pool{}
+
+// activeConns tracks the current number of WebSocket connections.
+// Used to enforce maxConnections and prevent OOM under spike load.
+var activeConns atomic.Int64
+
+// maxConnections is the hard limit on concurrent WebSocket connections.
+// Set to 8000 to leave ~20% memory headroom on a 1GB Railway container.
+const maxConnections = 8000
+
 // upgrader promotes an HTTP connection to a WebSocket connection.
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  config.WSReadBufferSize,
 	WriteBufferSize: config.WSWriteBufferSize,
+	WriteBufferPool: wsWriteBufferPool,
 	// Restrict WebSocket origins to the configured CORS_ORIGIN
 	CheckOrigin: func(r *http.Request) bool {
 		if config.CORSOrigin == "*" {
@@ -85,6 +101,7 @@ func sendError(c *Client, code string, message string) {
 	select {
 	case c.Send <- errMsg:
 	default:
+		droppedMessages.Add(1)
 	}
 }
 
@@ -101,6 +118,7 @@ func sendError(c *Client, code string, message string) {
 
 func (c *Client) readPump() {
 	defer func() {
+		activeConns.Add(-1)
 		c.Engine.Unregister(c)
 		c.Conn.Close()
 	}()
@@ -236,9 +254,11 @@ func (c *Client) readPump() {
 
 			// Block messages to closed stranger rooms
 			if strings.HasPrefix(roomID, config.STRANGER_PREFIX) {
+				sctx, scancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
 				closed, _ := redis.GetRawClient().Exists(
-					context.Background(), config.CHAT_CLOSED_COLON+roomID,
+					sctx, config.CHAT_CLOSED_COLON+roomID,
 				).Result()
+				scancel()
 				if closed > 0 {
 					sendError(c, "ROOM_CLOSED", "This stranger chat has ended")
 					continue
@@ -292,6 +312,7 @@ func (c *Client) readPump() {
 						case c.Send <- confirm:
 						default:
 							// Client buffer full — drop confirmation to protect server
+							droppedMessages.Add(1)
 						}
 					}
 				}
@@ -379,11 +400,19 @@ func (c *Client) writePump() {
 // ---------------------------------------------------------------------------
 
 func ServeWs(engine *Engine, w http.ResponseWriter, r *http.Request, userID string) {
+	// Enforce connection limit to prevent OOM under spike load
+	if activeConns.Load() >= maxConnections {
+		http.Error(w, "Server at capacity", http.StatusServiceUnavailable)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("[ws] Upgrade error:", err)
 		return
 	}
+
+	activeConns.Add(1)
 
 	client := &Client{
 		Engine:     engine,

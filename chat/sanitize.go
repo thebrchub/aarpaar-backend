@@ -56,6 +56,8 @@ func init() {
 
 // ContainsProfanity checks if the text contains any profane words.
 // Used only for stranger match rooms, not DM/channel messages.
+// The regex already uses (?i) for case-insensitive matching,
+// so no need for strings.ToLower pre-processing.
 func ContainsProfanity(s string) bool {
-	return profanityRegex.MatchString(strings.ToLower(s))
+	return profanityRegex.MatchString(s)
 }
