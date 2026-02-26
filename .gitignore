@@ -13,6 +13,13 @@
 *.sh
 *.ps1
 
+*.log
+*.out
+*.coverage
+*.coverprofile
+*.md
+!README.md
+
 # Output of the go coverage tool
 *.out
 
