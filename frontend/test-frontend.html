@@ -1237,34 +1237,78 @@
 
   <!-- ========== GROUPS TAB ========== -->
   <div id="tab-groups" class="tab-panel">
+
+    <!-- ===== DISCOVER PUBLIC GROUPS ===== -->
+    <div class="card">
+      <h3><span class="badge badge-get">GET</span> Discover Public Groups</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+        <code>/api/v1/groups</code> — Browse and search public groups. Join with one click.
+      </p>
+      <div class="inline-form">
+        <div class="form-row" style="flex:1">
+          <label>Search by name (optional)</label>
+          <input type="text" id="grpSearchQuery" placeholder="Search groups..." />
+        </div>
+        <button class="btn btn-primary" style="margin-top:19px" onclick="grpListPublic()">Search</button>
+      </div>
+      <div id="grpListResult" style="margin-top:12px"></div>
+      <div id="grpListResponse" class="response-panel hidden"></div>
+    </div>
+
+    <!-- ===== JOIN BY INVITE LINK ===== -->
+    <div class="card">
+      <h3><span class="badge badge-post">POST</span> Join by Invite Code</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+        <code>/api/v1/groups/join/{inviteCode}</code> — Join any group (public or private) using an invite code shared by an admin.
+      </p>
+      <div class="inline-form">
+        <div class="form-row" style="flex:1">
+          <label>Invite Code</label>
+          <input type="text" id="grpInviteCode" placeholder="e.g. a1b2c3d4e5f6g7h8" />
+        </div>
+        <button class="btn btn-success" style="margin-top:19px" onclick="grpJoinByInvite()">Join</button>
+      </div>
+      <div id="grpJoinInviteResponse" class="response-panel hidden"></div>
+    </div>
+
+    <hr class="divider" />
+
     <div class="grid-2">
       <!-- Create Group -->
       <div class="card">
         <h3><span class="badge badge-post">POST</span> Create Group</h3>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-          <code>/api/v1/groups</code> — Create a new group with initial members.
+          <code>/api/v1/groups</code> — Create a new group. Members are optional — share the invite link instead!
         </p>
         <div class="form-row">
           <label>Group Name</label>
           <input type="text" id="grpCreateName" placeholder="My Awesome Group" maxlength="100" />
         </div>
         <div class="form-row">
+          <label>Visibility</label>
+          <select id="grpCreateVisibility">
+            <option value="public">Public — anyone can discover &amp; join</option>
+            <option value="private">Private — invite-only</option>
+          </select>
+        </div>
+        <div class="form-row">
           <label>Avatar URL (optional)</label>
           <input type="text" id="grpCreateAvatar" placeholder="https://..." />
         </div>
         <div class="form-row">
-          <label>Member IDs (comma-separated UUIDs)</label>
-          <textarea id="grpCreateMembers" placeholder="uuid1, uuid2, uuid3" style="min-height:50px"></textarea>
+          <label>Initial Member IDs (optional, comma-separated)</label>
+          <textarea id="grpCreateMembers" placeholder="Leave empty — share the invite link instead" style="min-height:40px"></textarea>
         </div>
         <button class="btn btn-primary" onclick="grpCreate()">Create Group</button>
         <div id="grpCreateResponse" class="response-panel hidden"></div>
+        <div id="grpCreateResult" style="margin-top:12px"></div>
       </div>
 
       <!-- Get Group Info -->
       <div class="card">
         <h3><span class="badge badge-get">GET</span> Group Info</h3>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-          <code>/api/v1/groups/{groupId}</code> — Get group details and member list.
+          <code>/api/v1/groups/{groupId}</code> — Get group details, member list, and invite code.
         </p>
         <div class="form-row">
           <label>Group ID (Room UUID)</label>
@@ -1281,7 +1325,7 @@
       <div class="card">
         <h3><span class="badge badge-patch">PATCH</span> Update Group</h3>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-          <code>/api/v1/groups/{groupId}</code> — Update group name or avatar (admin only).
+          <code>/api/v1/groups/{groupId}</code> — Update group name, avatar, or visibility (admin only).
         </p>
         <div class="form-row">
           <label>Group ID</label>
@@ -1294,6 +1338,14 @@
         <div class="form-row">
           <label>New Avatar URL (optional)</label>
           <input type="text" id="grpUpdateAvatar" placeholder="https://..." />
+        </div>
+        <div class="form-row">
+          <label>Visibility (optional)</label>
+          <select id="grpUpdateVisibility">
+            <option value="">— don't change —</option>
+            <option value="public">Public</option>
+            <option value="private">Private</option>
+          </select>
         </div>
         <button class="btn btn-primary" onclick="grpUpdate()">Update Group</button>
         <div id="grpUpdateResponse" class="response-panel hidden"></div>
@@ -1315,13 +1367,28 @@
     </div>
 
     <hr class="divider" />
-    <h3 style="margin-bottom:12px;font-size:.9rem">Members Management</h3>
+    <h3 style="margin-bottom:12px;font-size:.9rem">Invite & Members Management</h3>
     <div class="grid-2">
-      <!-- Add Members -->
+      <!-- Generate Invite Code -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Generate Invite Code</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/invite</code> — Generate a new invite code (admin only). Share this code so others can join!
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpGenInviteId" placeholder="Group UUID..." />
+        </div>
+        <button class="btn btn-primary" onclick="grpGenInvite()">Generate Invite Code</button>
+        <div id="grpGenInviteResult" style="margin-top:10px"></div>
+        <div id="grpGenInviteResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Add Members (admin) -->
       <div class="card">
         <h3><span class="badge badge-post">POST</span> Add Members</h3>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-          <code>/api/v1/groups/{groupId}/members</code> — Add members (admin only).
+          <code>/api/v1/groups/{groupId}/members</code> — Directly add users by ID (admin only). Prefer sharing the invite link instead.
         </p>
         <div class="form-row">
           <label>Group ID</label>
@@ -1334,12 +1401,14 @@
         <button class="btn btn-primary" onclick="grpAddMembers()">Add Members</button>
         <div id="grpAddMembersResponse" class="response-panel hidden"></div>
       </div>
+    </div>
 
+    <div class="grid-2">
       <!-- Remove Member / Leave -->
       <div class="card">
         <h3><span class="badge badge-delete">DELETE</span> Remove Member / Leave</h3>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-          <code>/api/v1/groups/{groupId}/members/{userId}</code> — Remove a member (admin) or leave the group.
+          <code>/api/v1/groups/{groupId}/members/{userId}</code>
         </p>
         <div class="form-row">
           <label>Group ID</label>
@@ -1355,9 +1424,7 @@
         </div>
         <div id="grpRemoveMemberResponse" class="response-panel hidden"></div>
       </div>
-    </div>
 
-    <div class="grid-2">
       <!-- Promote to Admin -->
       <div class="card">
         <h3><span class="badge badge-post">POST</span> Promote to Admin</h3>
@@ -1375,7 +1442,6 @@
         <button class="btn btn-primary" onclick="grpPromoteAdmin()">Promote to Admin</button>
         <div id="grpPromoteResponse" class="response-panel hidden"></div>
       </div>
-      <div></div>
     </div>
 
     <hr class="divider" />
@@ -2321,14 +2387,28 @@ function grpLogEvent(msg, cls = 'system') {
 async function grpCreate() {
   const name = document.getElementById('grpCreateName').value.trim();
   const avatar = document.getElementById('grpCreateAvatar').value.trim();
+  const visibility = document.getElementById('grpCreateVisibility').value;
   const membersRaw = document.getElementById('grpCreateMembers').value.trim();
   if (!name) return toast('Group name is required', 'error');
-  if (!membersRaw) return toast('Add at least one member ID', 'error');
-  const memberIds = membersRaw.split(',').map(s => s.trim()).filter(Boolean);
-  const body = { name, memberIds };
+  const body = { name, visibility };
   if (avatar) body.avatarUrl = avatar;
+  if (membersRaw) {
+    body.memberIds = membersRaw.split(',').map(s => s.trim()).filter(Boolean);
+  }
   const r = await apiCall('POST', '/api/v1/groups', body, 'grpCreateResponse');
-  if (r.status >= 200 && r.status < 300) toast('Group created!', 'success');
+  if (r.status >= 200 && r.status < 300) {
+    toast('Group created!', 'success');
+    const el = document.getElementById('grpCreateResult');
+    if (r.data) {
+      const g = r.data;
+      el.innerHTML = `
+        <div class="card" style="margin-top:8px;background:var(--bg-card);border:1px solid var(--border)">
+          <p style="font-size:.82rem"><strong>Group ID:</strong> ${escapeHtml(g.roomId)}</p>
+          ${g.inviteCode ? `<p style="font-size:.82rem"><strong>Invite Code:</strong> <code style="background:var(--bg);padding:2px 6px;border-radius:4px;user-select:all">${escapeHtml(g.inviteCode)}</code></p>` : ''}
+          <p style="font-size:.75rem;color:var(--text-muted)">Share the invite code so others can join!</p>
+        </div>`;
+    }
+  }
 }
 
 async function grpGetInfo() {
@@ -2338,6 +2418,9 @@ async function grpGetInfo() {
   const el = document.getElementById('grpInfoResult');
   if (r.data) {
     const g = r.data;
+    const visBadge = g.visibility === 'private'
+      ? '<span style="background:#e74c3c;color:#fff;padding:2px 8px;border-radius:4px;font-size:.7rem">Private</span>'
+      : '<span style="background:var(--success);color:#fff;padding:2px 8px;border-radius:4px;font-size:.7rem">Public</span>';
     const members = (g.members || []).map(m =>
       `<div style="padding:4px 0;font-size:.8rem">
         <strong>${escapeHtml(m.username || m.id)}</strong> — ${escapeHtml(m.role)}
@@ -2346,11 +2429,15 @@ async function grpGetInfo() {
     ).join('');
     el.innerHTML = `
       <div class="card" style="margin-top:10px">
-        <h4>${escapeHtml(g.name)}</h4>
+        <h4>${escapeHtml(g.name)} ${visBadge}</h4>
         <p style="font-size:.75rem;color:var(--text-muted)">Room: ${escapeHtml(g.roomId)} &bull; Type: ${escapeHtml(g.type)} &bull; Created by: ${escapeHtml(g.createdBy)}</p>
         ${g.avatarUrl ? `<img src="${escapeHtml(g.avatarUrl)}" style="width:48px;height:48px;border-radius:50%;margin:6px 0" />` : ''}
+        ${g.inviteCode ? `<div style="margin:8px 0;padding:8px;background:var(--bg);border-radius:6px;font-size:.82rem">
+          <strong>Invite Code:</strong> <code style="padding:2px 6px;border-radius:4px;user-select:all;background:var(--bg-card)">${escapeHtml(g.inviteCode)}</code>
+          <span style="margin-left:8px;color:var(--text-muted);font-size:.75rem">Share this so others can join!</span>
+        </div>` : ''}
         <hr class="divider"/>
-        <h5>Members (${(g.members||[]).length}/${g.maxMembers})</h5>
+        <h5>Members (${g.memberCount || (g.members||[]).length}/${g.maxMembers})</h5>
         ${members || '<div class="empty-state">No members</div>'}
       </div>`;
   } else {
@@ -2364,8 +2451,10 @@ async function grpUpdate() {
   const body = {};
   const name = document.getElementById('grpUpdateName').value.trim();
   const avatar = document.getElementById('grpUpdateAvatar').value.trim();
+  const visibility = document.getElementById('grpUpdateVisibility').value;
   if (name) body.name = name;
   if (avatar) body.avatarUrl = avatar;
+  if (visibility) body.visibility = visibility;
   if (!Object.keys(body).length) return toast('Provide at least one field to update', 'error');
   const r = await apiCall('PATCH', '/api/v1/groups/' + encodeURIComponent(id), body, 'grpUpdateResponse');
   if (r.status >= 200 && r.status < 300) toast('Group updated', 'success');
@@ -2376,6 +2465,65 @@ async function grpDelete() {
   if (!id) return toast('Enter a Group ID', 'error');
   const r = await apiCall('DELETE', '/api/v1/groups/' + encodeURIComponent(id), null, 'grpDeleteResponse');
   if (r.status >= 200 && r.status < 300) toast('Group deleted', 'success');
+}
+
+// ---- Discover / Join / Invite ----
+async function grpListPublic() {
+  const search = document.getElementById('grpSearchQuery').value.trim();
+  const qs = search ? '?search=' + encodeURIComponent(search) : '';
+  const r = await apiCall('GET', '/api/v1/groups' + qs, null, 'grpListResponse');
+  const el = document.getElementById('grpListResult');
+  if (r.data && Array.isArray(r.data)) {
+    if (r.data.length === 0) {
+      el.innerHTML = '<div class="empty-state">No public groups found</div>';
+      return;
+    }
+    el.innerHTML = r.data.map(g => {
+      const memberBadge = g.isMember
+        ? '<span style="background:var(--success);color:#fff;padding:2px 8px;border-radius:4px;font-size:.7rem">Joined</span>'
+        : `<button class="btn btn-success btn-sm" onclick="grpJoinPublic('${escapeHtml(g.roomId)}')">Join</button>`;
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;margin:6px 0;background:var(--bg);border-radius:8px;border:1px solid var(--border)">
+        <div>
+          <strong style="font-size:.88rem">${escapeHtml(g.name)}</strong>
+          <div style="font-size:.72rem;color:var(--text-muted)">${g.memberCount} member${g.memberCount !== 1 ? 's' : ''}</div>
+        </div>
+        ${memberBadge}
+      </div>`;
+    }).join('');
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+async function grpJoinPublic(groupId) {
+  const r = await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(groupId) + '/join', null, 'grpListResponse');
+  if (r.status >= 200 && r.status < 300) {
+    toast('Joined group!', 'success');
+    grpListPublic(); // refresh list
+  }
+}
+
+async function grpJoinByInvite() {
+  const code = document.getElementById('grpInviteCode').value.trim();
+  if (!code) return toast('Enter an invite code', 'error');
+  const r = await apiCall('POST', '/api/v1/groups/join/' + encodeURIComponent(code), null, 'grpJoinInviteResponse');
+  if (r.status >= 200 && r.status < 300) toast('Joined group via invite!', 'success');
+}
+
+async function grpGenInvite() {
+  const gid = document.getElementById('grpGenInviteId').value.trim();
+  if (!gid) return toast('Enter a Group ID', 'error');
+  const r = await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/invite', null, 'grpGenInviteResponse');
+  const el = document.getElementById('grpGenInviteResult');
+  if (r.data && r.data.inviteCode) {
+    el.innerHTML = `
+      <div style="padding:8px;background:var(--bg);border-radius:6px;font-size:.85rem">
+        <strong>New Invite Code:</strong> <code style="padding:2px 6px;border-radius:4px;user-select:all;background:var(--bg-card)">${escapeHtml(r.data.inviteCode)}</code>
+      </div>`;
+    toast('Invite code generated!', 'success');
+  } else {
+    el.innerHTML = '';
+  }
 }
 
 // ---- Members ----
@@ -3421,6 +3569,11 @@ function chatHandleWsEvent(parsed) {
       grpLogEvent('Member added to ' + (parsed.roomId || parsed.groupId || '') + ': ' + (parsed.userId || parsed.memberIds || ''), 'in');
       chatLoadRooms();
       toast('Member added to group', 'info');
+      break;
+    case 'member_joined':
+      grpLogEvent('Member joined ' + (parsed.roomId || parsed.groupId || '') + ': ' + (parsed.userId || ''), 'in');
+      chatLoadRooms();
+      toast('A new member joined the group', 'info');
       break;
     case 'member_removed':
       grpLogEvent('Member removed from ' + (parsed.roomId || parsed.groupId || '') + ': ' + (parsed.userId || ''), 'in');
