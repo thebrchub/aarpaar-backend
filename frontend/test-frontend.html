@@ -1259,7 +1259,7 @@
     <div class="card">
       <h3><span class="badge badge-post">POST</span> Join by Invite Code</h3>
       <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-        <code>/api/v1/groups/join/{inviteCode}</code> — Join any group (public or private) using an invite code shared by an admin.
+        <code>/api/v1/groups/invite/{inviteCode}</code> — Join any group (public or private) using an invite code shared by an admin.
       </p>
       <div class="inline-form">
         <div class="form-row" style="flex:1">
@@ -2506,7 +2506,7 @@ async function grpJoinPublic(groupId) {
 async function grpJoinByInvite() {
   const code = document.getElementById('grpInviteCode').value.trim();
   if (!code) return toast('Enter an invite code', 'error');
-  const r = await apiCall('POST', '/api/v1/groups/join/' + encodeURIComponent(code), null, 'grpJoinInviteResponse');
+  const r = await apiCall('POST', '/api/v1/groups/invite/' + encodeURIComponent(code), null, 'grpJoinInviteResponse');
   if (r.status >= 200 && r.status < 300) toast('Joined group via invite!', 'success');
 }
 

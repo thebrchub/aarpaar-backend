@@ -152,7 +152,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/v1/groups/{groupId}/members/{userId}", mw.Auth(handlers.RemoveGroupMemberHandler))
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/admins", mw.Auth(handlers.PromoteAdminHandler))
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/invite", mw.Auth(handlers.GenerateInviteHandler))
-	mux.HandleFunc("POST /api/v1/groups/join/{inviteCode}", mw.Auth(handlers.JoinGroupByInviteHandler))
+	mux.HandleFunc("POST /api/v1/groups/invite/{inviteCode}", mw.Auth(handlers.JoinGroupByInviteHandler))
 
 	// --- Group Calls (protected) ---
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls", mw.Auth(handlers.StartGroupCallHandler))

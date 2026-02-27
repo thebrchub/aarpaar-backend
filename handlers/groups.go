@@ -849,7 +849,7 @@ func JoinGroupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/groups/join/{inviteCode} — Join a group via invite link
+// POST /api/v1/groups/invite/{inviteCode} — Join a group via invite link
 // ---------------------------------------------------------------------------
 
 func JoinGroupByInviteHandler(w http.ResponseWriter, r *http.Request) {
