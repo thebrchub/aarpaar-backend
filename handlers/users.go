@@ -147,6 +147,7 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		Name         *string `json:"name"`
 		Mobile       *string `json:"mobile"`
 		Gender       *string `json:"gender"`
+		AvatarURL    *string `json:"avatar_url"`
 		IsPrivate    *bool   `json:"is_private"`
 		ShowLastSeen *bool   `json:"show_last_seen"`
 	}
@@ -155,7 +156,7 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if body.Username == nil && body.Name == nil && body.Mobile == nil && body.Gender == nil && body.IsPrivate == nil && body.ShowLastSeen == nil {
+	if body.Username == nil && body.Name == nil && body.Mobile == nil && body.Gender == nil && body.AvatarURL == nil && body.IsPrivate == nil && body.ShowLastSeen == nil {
 		JSONError(w, "Nothing to update", http.StatusBadRequest)
 		return
 	}
@@ -199,6 +200,11 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 	if body.Gender != nil {
 		sets = append(sets, fmt.Sprintf("gender = $%d", i))
 		args = append(args, *body.Gender)
+		i++
+	}
+	if body.AvatarURL != nil {
+		sets = append(sets, fmt.Sprintf("avatar_url = $%d", i))
+		args = append(args, *body.AvatarURL)
 		i++
 	}
 	if body.IsPrivate != nil {
