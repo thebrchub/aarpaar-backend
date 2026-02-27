@@ -690,6 +690,53 @@
       justify-content: center;
     }
 
+    /* Incoming group call popup */
+    .gcall-incoming-overlay {
+      position: fixed; inset: 0; z-index: 19998;
+      background: rgba(0,0,0,.75); backdrop-filter: blur(6px);
+      display: flex; align-items: center; justify-content: center;
+      animation: callFadeIn .3s ease;
+    }
+    .gcall-incoming-overlay.hidden { display: none !important; }
+    .gcall-incoming-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 20px; padding: 32px 40px; text-align: center;
+      box-shadow: 0 8px 40px rgba(0,0,0,.5); min-width: 300px; max-width: 380px;
+    }
+    .gcall-incoming-icon {
+      width: 72px; height: 72px; border-radius: 50%; background: #2a3942;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2rem; margin: 0 auto 14px;
+      animation: incomingPulse 1.5s ease infinite;
+    }
+    .gcall-incoming-name {
+      font-size: 1.05rem; font-weight: 600; color: #fff; margin-bottom: 4px;
+    }
+    .gcall-incoming-info {
+      font-size: .8rem; color: var(--text-muted); margin-bottom: 22px;
+    }
+    .gcall-incoming-actions {
+      display: flex; gap: 16px; justify-content: center;
+    }
+    .gcall-incoming-actions button {
+      width: 52px; height: 52px; border-radius: 50%; border: none;
+      cursor: pointer; font-size: 1.2rem; color: #fff; transition: .2s;
+    }
+    .gcall-incoming-actions .gcall-join { background: #25d366; }
+    .gcall-incoming-actions .gcall-join:hover { background: #1da851; }
+    .gcall-incoming-actions .gcall-dismiss { background: #6b7b8d; }
+    .gcall-incoming-actions .gcall-dismiss:hover { background: #566573; }
+
+    /* Active call indicator in sidebar */
+    .chat-call-active-badge {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: .6rem; color: #25d366; margin-left: 4px;
+      animation: callPulse 2s ease infinite;
+    }
+    @keyframes callPulse {
+      0%, 100% { opacity: 1; } 50% { opacity: .4; }
+    }
+
     /* Chat header call buttons */
     .chat-call-btns {
       display: flex; gap: 6px; margin-left: 8px;
@@ -3440,6 +3487,8 @@ async function chatSelectRoom(roomId) {
   chatUpdateHeaderPresence(roomId);
   // Show/hide call buttons for DM / GROUP rooms
   callUpdateHeaderButtons(roomId);
+  // Show join banner if there's an active group call in this room
+  gcallCheckAndShowBanner(roomId);
   // Clear unread
   const unreadEl = document.getElementById('chatUnread_' + roomId);
   if (unreadEl) { unreadEl.style.display = 'none'; unreadEl.textContent = '0'; }
@@ -3655,13 +3704,18 @@ function chatHandleWsEvent(parsed) {
       const gRoomId = parsed.roomId || parsed.groupId || '';
       const gCallId = parsed.callId || '';
       const initiator = parsed.initiatedBy || '';
-      grpLogEvent('Group call started in ' + gRoomId + ' — Call ID: ' + gCallId, 'in');
-      // If we initiated this call ourselves, we're already connected — skip
+      const callType = parsed.callType || 'video';
+      grpLogEvent('Group call started in ' + gRoomId + ' \u2014 Call ID: ' + gCallId, 'in');
+
+      // Track this active call
+      activeGroupCalls.set(gRoomId, { callId: gCallId, callType, initiator });
+      gcallUpdateSidebarIndicators();
+
+      // If we initiated this call ourselves, we're already connected \u2014 skip
       if (initiator !== currentUserProfile?.id) {
-        const gName = chatState.roomMeta[gRoomId]?.name || 'Group';
-        const callType = parsed.callType || 'video';
-        toast(`📞 ${gName}: ${callType} call started! Click to join`, 'info');
-        // Show a join banner in the chat if this is the active room
+        // Show incoming call popup (like 1-1 calls)
+        gcallShowIncomingPopup(gRoomId, gCallId, callType, initiator);
+        // Also show join banner if this room is currently open
         if (chatState.activeRoomId === gRoomId) {
           gcallShowJoinBanner(gRoomId, gCallId, callType);
         }
@@ -3674,18 +3728,29 @@ function chatHandleWsEvent(parsed) {
     case 'group_call_participant_left':
       grpLogEvent('Participant left call ' + (parsed.callId || '') + ': ' + (parsed.userId || ''), 'in');
       break;
-    case 'group_call_ended':
+    case 'group_call_ended': {
+      const endedRoomId = parsed.roomId || parsed.groupId || '';
       grpLogEvent('Group call ended: ' + (parsed.callId || ''), 'in');
       toast('Group call ended', 'info');
       if (gcallState.active && gcallState.callId === parsed.callId) gcallCleanup();
+      activeGroupCalls.delete(endedRoomId);
+      gcallUpdateSidebarIndicators();
       gcallRemoveJoinBanner();
+      // Dismiss incoming popup if it was for this call
+      if (gcallIncomingData && gcallIncomingData.callId === parsed.callId) gcallDismissIncoming();
       break;
-    case 'group_call_force_ended':
+    }
+    case 'group_call_force_ended': {
+      const fEndedRoomId = parsed.roomId || parsed.groupId || '';
       grpLogEvent('Group call FORCE-ENDED by admin: ' + (parsed.callId || ''), 'in');
       toast('Group call force-ended by admin', 'warning');
       if (gcallState.active && gcallState.callId === parsed.callId) gcallCleanup();
+      activeGroupCalls.delete(fEndedRoomId);
+      gcallUpdateSidebarIndicators();
       gcallRemoveJoinBanner();
+      if (gcallIncomingData && gcallIncomingData.callId === parsed.callId) gcallDismissIncoming();
       break;
+    }
     case 'group_call_participant_muted':
       grpLogEvent('Participant muted in call ' + (parsed.callId || '') + ': ' + (parsed.userId || '') + ' [' + (parsed.trackType || '') + ']', 'in');
       break;
@@ -4790,6 +4855,11 @@ async function chatStartGroupCall(callType) {
 //  GROUP CALL (LiveKit SFU)
 // ======================================================================
 
+// Track active group calls across all groups: roomId -> { callId, callType, initiator }
+const activeGroupCalls = new Map();
+// Store pending incoming group call data for the popup
+let gcallIncomingData = null;
+
 const gcallState = {
   active: false,
   roomId: null,
@@ -5117,15 +5187,49 @@ function gcallUpdateParticipantCount() {
   document.getElementById('gcallStatus').textContent = type + ' call • ' + count + ' participant' + (count !== 1 ? 's' : '');
 }
 
+// ---- Incoming group call popup ----
+function gcallShowIncomingPopup(roomId, callId, callType, initiatorId) {
+  const gName = chatState.roomMeta[roomId]?.name || 'Group';
+  let initiatorName = initiatorId;
+  // Try to resolve initiator name from room members
+  const meta = chatState.roomMeta[roomId];
+  if (meta && meta.members) {
+    const m = meta.members.find(x => x.id === initiatorId);
+    if (m) initiatorName = m.name || m.username || initiatorId;
+  }
+
+  gcallIncomingData = { roomId, callId, callType, initiatorId };
+  document.getElementById('gcallIncomingName').textContent = gName;
+  document.getElementById('gcallIncomingInfo').textContent =
+    callType + ' call started by ' + initiatorName;
+  document.getElementById('gcallIncomingOverlay').classList.remove('hidden');
+}
+
+function gcallDismissIncoming() {
+  document.getElementById('gcallIncomingOverlay').classList.add('hidden');
+  gcallIncomingData = null;
+  // Call info stays in activeGroupCalls — user can join from chat banner later
+}
+
+async function gcallAcceptIncoming() {
+  document.getElementById('gcallIncomingOverlay').classList.add('hidden');
+  if (!gcallIncomingData) return;
+  const { roomId, callId } = gcallIncomingData;
+  gcallIncomingData = null;
+  await gcallJoinExisting(roomId, callId);
+}
+
 // ---- Join banner (shown in chat area when a group call is active) ----
 function gcallShowJoinBanner(roomId, callId, callType) {
   gcallRemoveJoinBanner();
+  // Don't show banner if we're already in this call
+  if (gcallState.active && gcallState.callId === callId) return;
   const banner = document.createElement('div');
   banner.id = 'gcallJoinBanner';
   banner.style.cssText = 'background:linear-gradient(135deg,#128c7e,#25d366);color:#fff;padding:12px 16px;' +
     'display:flex;align-items:center;justify-content:space-between;border-radius:10px;margin:8px 12px;cursor:pointer;' +
     'animation:callFadeIn .3s ease;font-size:.88rem;font-weight:500;';
-  banner.innerHTML = `<span>\ud83d\udcde ${callType} call in progress — tap to join</span>` +
+  banner.innerHTML = `<span>\ud83d\udcde ${callType} call in progress \u2014 tap to join</span>` +
     `<button onclick="gcallJoinExisting('${escapeHtml(roomId)}','${escapeHtml(callId)}')" ` +
     `style="background:#fff;color:#128c7e;border:none;padding:6px 16px;border-radius:6px;font-weight:600;cursor:pointer;font-size:.82rem">Join</button>`;
   const chatArea = document.getElementById('chatMessages');
@@ -5135,6 +5239,32 @@ function gcallShowJoinBanner(roomId, callId, callType) {
 function gcallRemoveJoinBanner() {
   const b = document.getElementById('gcallJoinBanner');
   if (b) b.remove();
+}
+
+// ---- Show banner when selecting a room that has an active call ----
+function gcallCheckAndShowBanner(roomId) {
+  gcallRemoveJoinBanner();
+  const callInfo = activeGroupCalls.get(roomId);
+  if (callInfo && !(gcallState.active && gcallState.callId === callInfo.callId)) {
+    gcallShowJoinBanner(roomId, callInfo.callId, callInfo.callType);
+  }
+}
+
+// ---- Update sidebar to show call-active indicator ----
+function gcallUpdateSidebarIndicators() {
+  // Remove all existing indicators
+  document.querySelectorAll('.chat-call-active-badge').forEach(el => el.remove());
+  // Add indicators for rooms with active calls
+  activeGroupCalls.forEach((info, roomId) => {
+    const nameEl = document.querySelector(`[data-room-id="${roomId}"] .chat-room-name`);
+    if (nameEl && !nameEl.querySelector('.chat-call-active-badge')) {
+      const badge = document.createElement('span');
+      badge.className = 'chat-call-active-badge';
+      badge.innerHTML = '\ud83d\udcde';
+      badge.title = info.callType + ' call active';
+      nameEl.appendChild(badge);
+    }
+  });
 }
 
 // ---- Join an existing group call (from WS notification or Groups tab) ----
@@ -5193,6 +5323,20 @@ async function gcallJoinExisting(roomId, callId) {
       <button class="reject-call" onclick="callRejectIncoming()" title="Decline">📕</button>
       <button class="accept-call" onclick="callAcceptIncoming()" title="Accept">📞</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== INCOMING GROUP CALL POPUP ===== -->
+<div class="gcall-incoming-overlay hidden" id="gcallIncomingOverlay">
+  <div class="gcall-incoming-card">
+    <div class="gcall-incoming-icon"><span>👥</span></div>
+    <div class="gcall-incoming-name" id="gcallIncomingName">Group Name</div>
+    <div class="gcall-incoming-info" id="gcallIncomingInfo">Video call started by someone</div>
+    <div class="gcall-incoming-actions">
+      <button class="gcall-dismiss" onclick="gcallDismissIncoming()" title="Dismiss (join later)">✕</button>
+      <button class="gcall-join" onclick="gcallAcceptIncoming()" title="Join call">📞</button>
+    </div>
+    <div style="margin-top:14px;font-size:.7rem;color:var(--text-muted)">Dismiss to join later from chat</div>
   </div>
 </div>
 
