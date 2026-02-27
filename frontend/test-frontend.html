@@ -709,6 +709,7 @@
   <button class="tab-btn" data-tab="friends">Friends</button>
   <button class="tab-btn" data-tab="match">Match</button>
   <button class="tab-btn" data-tab="calls">📞 Calls</button>
+  <button class="tab-btn" data-tab="groups">👥 Groups</button>
   <button class="tab-btn" data-tab="ws">WebSocket</button>
   <button class="tab-btn" data-tab="chat">💬 Chat</button>
 </div>
@@ -880,6 +881,10 @@
             <option value="F">Female</option>
             <option value="Any">Any / Prefer not to say</option>
           </select>
+        </div>
+        <div class="form-row">
+          <label>Avatar URL (optional)</label>
+          <input type="text" id="patchAvatarUrl" placeholder="https://example.com/avatar.jpg" />
         </div>
         <div class="toggle-row">
           <label class="toggle">
@@ -1230,6 +1235,349 @@
     </div>
   </div>
 
+  <!-- ========== GROUPS TAB ========== -->
+  <div id="tab-groups" class="tab-panel">
+    <div class="grid-2">
+      <!-- Create Group -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Create Group</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups</code> — Create a new group with initial members.
+        </p>
+        <div class="form-row">
+          <label>Group Name</label>
+          <input type="text" id="grpCreateName" placeholder="My Awesome Group" maxlength="100" />
+        </div>
+        <div class="form-row">
+          <label>Avatar URL (optional)</label>
+          <input type="text" id="grpCreateAvatar" placeholder="https://..." />
+        </div>
+        <div class="form-row">
+          <label>Member IDs (comma-separated UUIDs)</label>
+          <textarea id="grpCreateMembers" placeholder="uuid1, uuid2, uuid3" style="min-height:50px"></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="grpCreate()">Create Group</button>
+        <div id="grpCreateResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Get Group Info -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> Group Info</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}</code> — Get group details and member list.
+        </p>
+        <div class="form-row">
+          <label>Group ID (Room UUID)</label>
+          <input type="text" id="grpInfoId" placeholder="Group UUID..." />
+        </div>
+        <button class="btn btn-primary" onclick="grpGetInfo()">Get Info</button>
+        <div id="grpInfoResult" style="margin-top:14px"></div>
+        <div id="grpInfoResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Update Group -->
+      <div class="card">
+        <h3><span class="badge badge-patch">PATCH</span> Update Group</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}</code> — Update group name or avatar (admin only).
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpUpdateId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>New Name (optional)</label>
+          <input type="text" id="grpUpdateName" placeholder="New group name..." maxlength="100" />
+        </div>
+        <div class="form-row">
+          <label>New Avatar URL (optional)</label>
+          <input type="text" id="grpUpdateAvatar" placeholder="https://..." />
+        </div>
+        <button class="btn btn-primary" onclick="grpUpdate()">Update Group</button>
+        <div id="grpUpdateResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Delete Group -->
+      <div class="card">
+        <h3><span class="badge badge-delete">DELETE</span> Delete Group</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}</code> — Delete a group (creator only).
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpDeleteId" placeholder="Group UUID..." />
+        </div>
+        <button class="btn btn-danger" onclick="if(confirm('Delete this group permanently?')) grpDelete()">Delete Group</button>
+        <div id="grpDeleteResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+    <h3 style="margin-bottom:12px;font-size:.9rem">Members Management</h3>
+    <div class="grid-2">
+      <!-- Add Members -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Add Members</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/members</code> — Add members (admin only).
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpAddMembersId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Member IDs (comma-separated)</label>
+          <textarea id="grpAddMembersIds" placeholder="uuid1, uuid2" style="min-height:40px"></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="grpAddMembers()">Add Members</button>
+        <div id="grpAddMembersResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Remove Member / Leave -->
+      <div class="card">
+        <h3><span class="badge badge-delete">DELETE</span> Remove Member / Leave</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/members/{userId}</code> — Remove a member (admin) or leave the group.
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpRemoveMemberId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>User ID to remove</label>
+          <input type="text" id="grpRemoveUserId" placeholder="User UUID (leave empty to leave group)" />
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-danger" onclick="grpRemoveMember()">Remove Member</button>
+          <button class="btn btn-outline" onclick="grpLeaveGroup()">Leave Group</button>
+        </div>
+        <div id="grpRemoveMemberResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Promote to Admin -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Promote to Admin</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/admins</code> — Promote a member to admin.
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpPromoteGroupId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>User ID to promote</label>
+          <input type="text" id="grpPromoteUserId" placeholder="User UUID..." />
+        </div>
+        <button class="btn btn-primary" onclick="grpPromoteAdmin()">Promote to Admin</button>
+        <div id="grpPromoteResponse" class="response-panel hidden"></div>
+      </div>
+      <div></div>
+    </div>
+
+    <hr class="divider" />
+    <h3 style="margin-bottom:12px;font-size:.9rem">Group Calls (LiveKit SFU)</h3>
+    <div class="grid-2">
+      <!-- Start Group Call -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Start Group Call</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/calls</code> — Start a new group call.
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpCallStartId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Call Type</label>
+          <select id="grpCallStartType">
+            <option value="video">Video</option>
+            <option value="audio">Audio</option>
+          </select>
+        </div>
+        <button class="btn btn-success" onclick="grpStartCall()">Start Call</button>
+        <div id="grpStartCallResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Join Group Call -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Join Group Call</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/calls/{callId}/join</code>
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpCallJoinGroupId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Call ID</label>
+          <input type="text" id="grpCallJoinCallId" placeholder="Call UUID..." />
+        </div>
+        <button class="btn btn-success" onclick="grpJoinCall()">Join Call</button>
+        <div id="grpJoinCallResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Leave Group Call -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Leave Group Call</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/calls/{callId}/leave</code>
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpCallLeaveGroupId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Call ID</label>
+          <input type="text" id="grpCallLeaveCallId" placeholder="Call UUID..." />
+        </div>
+        <button class="btn btn-danger" onclick="grpLeaveCall()">Leave Call</button>
+        <div id="grpLeaveCallResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Get Call Status -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> Group Call Status</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/calls/{callId}</code>
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpCallStatusGroupId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Call ID</label>
+          <input type="text" id="grpCallStatusCallId" placeholder="Call UUID..." />
+        </div>
+        <button class="btn btn-primary" onclick="grpGetCallStatus()">Get Status</button>
+        <div id="grpCallStatusResult" style="margin-top:14px"></div>
+        <div id="grpCallStatusResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Mute / Unmute Participant -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Mute / Unmute Participant</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/calls/{callId}/mute</code> — Admin only.
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpMuteGroupId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Call ID</label>
+          <input type="text" id="grpMuteCallId" placeholder="Call UUID..." />
+        </div>
+        <div class="form-row">
+          <label>User ID to mute/unmute</label>
+          <input type="text" id="grpMuteUserId" placeholder="User UUID..." />
+        </div>
+        <div class="inline-form">
+          <div class="form-row">
+            <label>Track Type</label>
+            <select id="grpMuteTrackType">
+              <option value="audio">Audio</option>
+              <option value="video">Video</option>
+              <option value="screen">Screen</option>
+            </select>
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Muted</label>
+            <select id="grpMuteMuted">
+              <option value="true">Mute</option>
+              <option value="false">Unmute</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="grpMuteParticipant()">Submit</button>
+        <div id="grpMuteResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Kick Participant -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Kick Participant</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/calls/{callId}/kick</code> — Admin only.
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpKickGroupId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Call ID</label>
+          <input type="text" id="grpKickCallId" placeholder="Call UUID..." />
+        </div>
+        <div class="form-row">
+          <label>User ID to kick</label>
+          <input type="text" id="grpKickUserId" placeholder="User UUID..." />
+        </div>
+        <button class="btn btn-danger" onclick="grpKickParticipant()">Kick</button>
+        <div id="grpKickResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Promote Call Admin -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Promote Call Admin</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/calls/{callId}/admins</code>
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpCallAdminGroupId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Call ID</label>
+          <input type="text" id="grpCallAdminCallId" placeholder="Call UUID..." />
+        </div>
+        <div class="form-row">
+          <label>User ID to promote</label>
+          <input type="text" id="grpCallAdminUserId" placeholder="User UUID..." />
+        </div>
+        <button class="btn btn-primary" onclick="grpPromoteCallAdmin()">Promote</button>
+        <div id="grpCallAdminResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Force End Call -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Force End Call</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/calls/{callId}/end</code> — Admin only.
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="grpEndCallGroupId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Call ID</label>
+          <input type="text" id="grpEndCallCallId" placeholder="Call UUID..." />
+        </div>
+        <button class="btn btn-danger" onclick="grpForceEndCall()">Force End Call</button>
+        <div id="grpEndCallResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+    <h3 style="margin-bottom:12px;font-size:.9rem">Group Event Log</h3>
+    <div class="card">
+      <h3>Real-time Group Events
+        <span style="flex:1"></span>
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('grpEventLog').innerHTML=''">Clear</button>
+      </h3>
+      <div class="ws-log" id="grpEventLog" style="height:250px;">
+        <div class="ws-entry system"><span class="ts">[--:--:--]</span> Waiting for group events...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ========== WEBSOCKET TAB ========== -->
   <div id="tab-ws" class="tab-panel">
     <!-- Connection Controls -->
@@ -1375,6 +1723,10 @@
               <div class="chat-call-btns" id="chatCallBtns" style="display:none">
                 <button class="chat-call-btn" onclick="callStartAudio()" title="Voice call">📞</button>
                 <button class="chat-call-btn" onclick="callStartVideo()" title="Video call">📹</button>
+              </div>
+              <div class="chat-call-btns" id="chatGroupCallBtns" style="display:none">
+                <button class="chat-call-btn" onclick="chatStartGroupCall('audio')" title="Group voice call">📞</button>
+                <button class="chat-call-btn" onclick="chatStartGroupCall('video')" title="Group video call">📹</button>
               </div>
               <div style="flex:1"></div>
               <button class="btn btn-outline btn-sm" onclick="chatBackToList()" style="display:none" id="chatBackBtn">&larr; Back</button>
@@ -1951,6 +2303,214 @@ async function reportUser() {
 }
 
 // ======================================================================
+//  GROUPS
+// ======================================================================
+
+// ---- Helper: log to the group event panel ----
+function grpLogEvent(msg, cls = 'system') {
+  const log = document.getElementById('grpEventLog');
+  if (!log) return;
+  const entry = document.createElement('div');
+  entry.className = 'ws-entry ' + cls;
+  entry.innerHTML = `<span class="ts">[${new Date().toLocaleTimeString('en-GB',{hour12:false})}]</span> ${escapeHtml(msg)}`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ---- Group CRUD ----
+async function grpCreate() {
+  const name = document.getElementById('grpCreateName').value.trim();
+  const avatar = document.getElementById('grpCreateAvatar').value.trim();
+  const membersRaw = document.getElementById('grpCreateMembers').value.trim();
+  if (!name) return toast('Group name is required', 'error');
+  if (!membersRaw) return toast('Add at least one member ID', 'error');
+  const memberIds = membersRaw.split(',').map(s => s.trim()).filter(Boolean);
+  const body = { name, memberIds };
+  if (avatar) body.avatarUrl = avatar;
+  const r = await apiCall('POST', '/api/v1/groups', body, 'grpCreateResponse');
+  if (r.status >= 200 && r.status < 300) toast('Group created!', 'success');
+}
+
+async function grpGetInfo() {
+  const id = document.getElementById('grpInfoId').value.trim();
+  if (!id) return toast('Enter a Group ID', 'error');
+  const r = await apiCall('GET', '/api/v1/groups/' + encodeURIComponent(id), null, 'grpInfoResponse');
+  const el = document.getElementById('grpInfoResult');
+  if (r.data) {
+    const g = r.data;
+    const members = (g.members || []).map(m =>
+      `<div style="padding:4px 0;font-size:.8rem">
+        <strong>${escapeHtml(m.username || m.id)}</strong> — ${escapeHtml(m.role)}
+        ${m.isOnline ? '<span style="color:var(--success)">●</span>' : '<span style="color:var(--text-muted)">○</span>'}
+      </div>`
+    ).join('');
+    el.innerHTML = `
+      <div class="card" style="margin-top:10px">
+        <h4>${escapeHtml(g.name)}</h4>
+        <p style="font-size:.75rem;color:var(--text-muted)">Room: ${escapeHtml(g.roomId)} &bull; Type: ${escapeHtml(g.type)} &bull; Created by: ${escapeHtml(g.createdBy)}</p>
+        ${g.avatarUrl ? `<img src="${escapeHtml(g.avatarUrl)}" style="width:48px;height:48px;border-radius:50%;margin:6px 0" />` : ''}
+        <hr class="divider"/>
+        <h5>Members (${(g.members||[]).length}/${g.maxMembers})</h5>
+        ${members || '<div class="empty-state">No members</div>'}
+      </div>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+async function grpUpdate() {
+  const id = document.getElementById('grpUpdateId').value.trim();
+  if (!id) return toast('Enter a Group ID', 'error');
+  const body = {};
+  const name = document.getElementById('grpUpdateName').value.trim();
+  const avatar = document.getElementById('grpUpdateAvatar').value.trim();
+  if (name) body.name = name;
+  if (avatar) body.avatarUrl = avatar;
+  if (!Object.keys(body).length) return toast('Provide at least one field to update', 'error');
+  const r = await apiCall('PATCH', '/api/v1/groups/' + encodeURIComponent(id), body, 'grpUpdateResponse');
+  if (r.status >= 200 && r.status < 300) toast('Group updated', 'success');
+}
+
+async function grpDelete() {
+  const id = document.getElementById('grpDeleteId').value.trim();
+  if (!id) return toast('Enter a Group ID', 'error');
+  const r = await apiCall('DELETE', '/api/v1/groups/' + encodeURIComponent(id), null, 'grpDeleteResponse');
+  if (r.status >= 200 && r.status < 300) toast('Group deleted', 'success');
+}
+
+// ---- Members ----
+async function grpAddMembers() {
+  const gid = document.getElementById('grpAddMembersId').value.trim();
+  const raw = document.getElementById('grpAddMembersIds').value.trim();
+  if (!gid) return toast('Enter a Group ID', 'error');
+  if (!raw) return toast('Enter at least one member ID', 'error');
+  const memberIds = raw.split(',').map(s => s.trim()).filter(Boolean);
+  await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/members', { memberIds }, 'grpAddMembersResponse');
+}
+
+async function grpRemoveMember() {
+  const gid = document.getElementById('grpRemoveMemberId').value.trim();
+  const uid = document.getElementById('grpRemoveUserId').value.trim();
+  if (!gid) return toast('Enter a Group ID', 'error');
+  if (!uid) return toast('Enter the User ID to remove', 'error');
+  const r = await apiCall('DELETE', '/api/v1/groups/' + encodeURIComponent(gid) + '/members/' + encodeURIComponent(uid), null, 'grpRemoveMemberResponse');
+  if (r.status >= 200 && r.status < 300) toast('Member removed', 'success');
+}
+
+async function grpLeaveGroup() {
+  const gid = document.getElementById('grpRemoveMemberId').value.trim();
+  if (!gid) return toast('Enter a Group ID', 'error');
+  const myId = currentUserProfile?.id;
+  if (!myId) return toast('Profile not loaded — go to Users → Get Profile first', 'error');
+  const r = await apiCall('DELETE', '/api/v1/groups/' + encodeURIComponent(gid) + '/members/' + encodeURIComponent(myId), null, 'grpRemoveMemberResponse');
+  if (r.status >= 200 && r.status < 300) toast('Left the group', 'success');
+}
+
+async function grpPromoteAdmin() {
+  const gid = document.getElementById('grpPromoteGroupId').value.trim();
+  const uid = document.getElementById('grpPromoteUserId').value.trim();
+  if (!gid || !uid) return toast('Fill in both fields', 'error');
+  await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/admins', { userId: uid }, 'grpPromoteResponse');
+}
+
+// ---- Group Calls ----
+async function grpStartCall() {
+  const gid = document.getElementById('grpCallStartId').value.trim();
+  const callType = document.getElementById('grpCallStartType').value;
+  if (!gid) return toast('Enter a Group ID', 'error');
+  const r = await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/calls', { callType }, 'grpStartCallResponse');
+  if (r.data && r.data.callId) {
+    toast('Call started: ' + r.data.callId, 'success');
+    // Auto-fill call ID fields
+    ['grpCallJoinCallId','grpCallLeaveCallId','grpCallStatusCallId','grpMuteCallId','grpKickCallId','grpCallAdminCallId','grpEndCallCallId'].forEach(id => {
+      document.getElementById(id).value = r.data.callId;
+    });
+    // Auto-fill group ID fields
+    ['grpCallJoinGroupId','grpCallLeaveGroupId','grpCallStatusGroupId','grpMuteGroupId','grpKickGroupId','grpCallAdminGroupId','grpEndCallGroupId'].forEach(id => {
+      document.getElementById(id).value = gid;
+    });
+  }
+}
+
+async function grpJoinCall() {
+  const gid = document.getElementById('grpCallJoinGroupId').value.trim();
+  const cid = document.getElementById('grpCallJoinCallId').value.trim();
+  if (!gid || !cid) return toast('Fill in Group ID and Call ID', 'error');
+  const r = await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/calls/' + encodeURIComponent(cid) + '/join', null, 'grpJoinCallResponse');
+  if (r.data && r.data.token) toast('Joined call — LiveKit token received', 'success');
+}
+
+async function grpLeaveCall() {
+  const gid = document.getElementById('grpCallLeaveGroupId').value.trim();
+  const cid = document.getElementById('grpCallLeaveCallId').value.trim();
+  if (!gid || !cid) return toast('Fill in Group ID and Call ID', 'error');
+  await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/calls/' + encodeURIComponent(cid) + '/leave', null, 'grpLeaveCallResponse');
+}
+
+async function grpGetCallStatus() {
+  const gid = document.getElementById('grpCallStatusGroupId').value.trim();
+  const cid = document.getElementById('grpCallStatusCallId').value.trim();
+  if (!gid || !cid) return toast('Fill in Group ID and Call ID', 'error');
+  const r = await apiCall('GET', '/api/v1/groups/' + encodeURIComponent(gid) + '/calls/' + encodeURIComponent(cid), null, 'grpCallStatusResponse');
+  const el = document.getElementById('grpCallStatusResult');
+  if (r.data) {
+    const c = r.data;
+    const parts = (c.participants || []).map(p =>
+      `<div style="font-size:.78rem;padding:3px 0">👤 ${escapeHtml(p.userId)} — audio:${p.audio} video:${p.video} screen:${p.screen}</div>`
+    ).join('');
+    el.innerHTML = `
+      <div class="card" style="margin-top:8px">
+        <p style="font-size:.8rem"><strong>Call ID:</strong> ${escapeHtml(c.callId)}<br/>
+        <strong>Type:</strong> ${escapeHtml(c.callType)} &bull; <strong>Duration:</strong> ${c.durationSecs}s<br/>
+        <strong>Initiated by:</strong> ${escapeHtml(c.initiatedBy)}<br/>
+        <strong>Admins:</strong> ${(c.admins||[]).map(a => escapeHtml(a)).join(', ')}</p>
+        <hr class="divider"/>
+        <h5>Participants (${(c.participants||[]).length})</h5>
+        ${parts || '<div class="empty-state">No active participants</div>'}
+      </div>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+async function grpMuteParticipant() {
+  const gid = document.getElementById('grpMuteGroupId').value.trim();
+  const cid = document.getElementById('grpMuteCallId').value.trim();
+  const uid = document.getElementById('grpMuteUserId').value.trim();
+  const trackType = document.getElementById('grpMuteTrackType').value;
+  const muted = document.getElementById('grpMuteMuted').value === 'true';
+  if (!gid || !cid || !uid) return toast('Fill in all fields', 'error');
+  await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/calls/' + encodeURIComponent(cid) + '/mute',
+    { userId: uid, trackType, muted }, 'grpMuteResponse');
+}
+
+async function grpKickParticipant() {
+  const gid = document.getElementById('grpKickGroupId').value.trim();
+  const cid = document.getElementById('grpKickCallId').value.trim();
+  const uid = document.getElementById('grpKickUserId').value.trim();
+  if (!gid || !cid || !uid) return toast('Fill in all fields', 'error');
+  await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/calls/' + encodeURIComponent(cid) + '/kick',
+    { userId: uid }, 'grpKickResponse');
+}
+
+async function grpPromoteCallAdmin() {
+  const gid = document.getElementById('grpCallAdminGroupId').value.trim();
+  const cid = document.getElementById('grpCallAdminCallId').value.trim();
+  const uid = document.getElementById('grpCallAdminUserId').value.trim();
+  if (!gid || !cid || !uid) return toast('Fill in all fields', 'error');
+  await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/calls/' + encodeURIComponent(cid) + '/admins',
+    { userId: uid }, 'grpCallAdminResponse');
+}
+
+async function grpForceEndCall() {
+  const gid = document.getElementById('grpEndCallGroupId').value.trim();
+  const cid = document.getElementById('grpEndCallCallId').value.trim();
+  if (!gid || !cid) return toast('Fill in Group ID and Call ID', 'error');
+  await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(gid) + '/calls/' + encodeURIComponent(cid) + '/end',
+    null, 'grpEndCallResponse');
+}
+
+// ======================================================================
 //  WEBSOCKET
 // ======================================================================
 function wsTimestamp() {
@@ -2207,12 +2767,14 @@ async function patchProfile() {
   const n = document.getElementById('patchName').value.trim();
   const m = document.getElementById('patchMobile').value.trim();
   const g = document.getElementById('patchGender').value;
+  const av = document.getElementById('patchAvatarUrl').value.trim();
   const privCheckbox = document.getElementById('patchIsPrivate');
   const lastSeenCheckbox = document.getElementById('patchShowLastSeen');
   if (u) body.username = u;
   if (n) body.name = n;
   if (m) body.mobile = m;
   if (g) body.gender = g;
+  if (av) body.avatar_url = av;
   // Only send is_private if the checkbox was explicitly changed
   if (privCheckbox.dataset.changed === '1') body.is_private = privCheckbox.checked;
   if (lastSeenCheckbox.dataset.changed === '1') body.show_last_seen = lastSeenCheckbox.checked;
@@ -2576,11 +3138,14 @@ function chatRenderSidebar() {
         presenceHtml = '<span class="presence-dot ' + (isOn ? 'online' : 'offline') + '" id="chatPresence_' + other.id + '" style="position:absolute;bottom:0;right:0;border:2px solid var(--surface)"></span>';
       }
     }
+    const isGroup = rm.type === 'GROUP';
+    const avatarContent = isGroup ? '👥' : escapeHtml(initial);
+    const typeLabel = isGroup ? '<span style="font-size:.6rem;color:var(--info);margin-left:4px">GROUP</span>' : '';
     return `
       <div class="chat-room-item ${isActive ? 'active' : ''}" onclick="chatSelectRoom('${escapeHtml(rm.room_id)}')" data-room-id="${escapeHtml(rm.room_id)}">
-        <div class="chat-room-avatar" style="position:relative"><span>${escapeHtml(initial)}</span>${presenceHtml}</div>
+        <div class="chat-room-avatar" style="position:relative"><span>${avatarContent}</span>${presenceHtml}</div>
         <div class="chat-room-details">
-          <div class="chat-room-name">${escapeHtml(name)}</div>
+          <div class="chat-room-name">${escapeHtml(name)}${typeLabel}</div>
           <div class="chat-room-preview" id="chatPreview_${rm.room_id}">${escapeHtml(preview)}</div>
         </div>
         <div class="chat-room-meta">
@@ -2655,11 +3220,14 @@ async function chatSelectRoom(roomId) {
   // Header — resolve DM name from messages after fetch if still a truncated ID
   const meta = chatState.roomMeta[roomId] || {};
   let name = meta.name || roomId.substring(0, 8);
-  document.getElementById('chatHeaderName').textContent = name;
-  document.getElementById('chatHeaderAvatar').innerHTML = '<span>' + name.charAt(0).toUpperCase() + '</span>';
+  const isGroup = meta.type === 'GROUP';
+  document.getElementById('chatHeaderName').textContent = name + (isGroup ? ' (Group)' : '');
+  document.getElementById('chatHeaderAvatar').innerHTML = isGroup
+    ? '<span>👥</span>'
+    : '<span>' + name.charAt(0).toUpperCase() + '</span>';
   // Show online/last-seen status in header for DM rooms
   chatUpdateHeaderPresence(roomId);
-  // Show/hide call buttons for DM rooms
+  // Show/hide call buttons for DM / GROUP rooms
   callUpdateHeaderButtons(roomId);
   // Clear unread
   const unreadEl = document.getElementById('chatUnread_' + roomId);
@@ -2839,6 +3407,65 @@ function chatHandleWsEvent(parsed) {
     case 'call_end':        callHandleEnd(parsed); break;
     case 'call_missed':     callHandleMissed(parsed); break;
     case 'call_busy':       callHandleBusy(parsed); break;
+    // ---- Group lifecycle events ----
+    case 'group_created':
+      grpLogEvent('Group created: ' + (parsed.roomId || parsed.groupId || ''), 'in');
+      chatLoadRooms();
+      toast('New group created', 'info');
+      break;
+    case 'group_updated':
+      grpLogEvent('Group updated: ' + (parsed.roomId || parsed.groupId || '') + ' — ' + JSON.stringify(parsed.changes || ''), 'in');
+      chatLoadRooms();
+      break;
+    case 'member_added':
+      grpLogEvent('Member added to ' + (parsed.roomId || parsed.groupId || '') + ': ' + (parsed.userId || parsed.memberIds || ''), 'in');
+      chatLoadRooms();
+      toast('Member added to group', 'info');
+      break;
+    case 'member_removed':
+      grpLogEvent('Member removed from ' + (parsed.roomId || parsed.groupId || '') + ': ' + (parsed.userId || ''), 'in');
+      chatLoadRooms();
+      toast('Member removed from group', 'info');
+      break;
+    case 'member_left':
+      grpLogEvent('Member left ' + (parsed.roomId || parsed.groupId || '') + ': ' + (parsed.userId || ''), 'in');
+      chatLoadRooms();
+      break;
+    case 'member_promoted':
+      grpLogEvent('Member promoted to admin in ' + (parsed.roomId || parsed.groupId || '') + ': ' + (parsed.userId || ''), 'in');
+      break;
+    // ---- Group call events ----
+    case 'group_call_started':
+      grpLogEvent('Group call started in ' + (parsed.roomId || parsed.groupId || '') + ' — Call ID: ' + (parsed.callId || ''), 'in');
+      toast('Group call started!', 'info');
+      break;
+    case 'group_call_participant_joined':
+      grpLogEvent('Participant joined call ' + (parsed.callId || '') + ': ' + (parsed.userId || ''), 'in');
+      break;
+    case 'group_call_participant_left':
+      grpLogEvent('Participant left call ' + (parsed.callId || '') + ': ' + (parsed.userId || ''), 'in');
+      break;
+    case 'group_call_ended':
+      grpLogEvent('Group call ended: ' + (parsed.callId || ''), 'in');
+      toast('Group call ended', 'info');
+      break;
+    case 'group_call_force_ended':
+      grpLogEvent('Group call FORCE-ENDED by admin: ' + (parsed.callId || ''), 'in');
+      toast('Group call force-ended by admin', 'warning');
+      break;
+    case 'group_call_participant_muted':
+      grpLogEvent('Participant muted in call ' + (parsed.callId || '') + ': ' + (parsed.userId || '') + ' [' + (parsed.trackType || '') + ']', 'in');
+      break;
+    case 'group_call_participant_unmuted':
+      grpLogEvent('Participant unmuted in call ' + (parsed.callId || '') + ': ' + (parsed.userId || '') + ' [' + (parsed.trackType || '') + ']', 'in');
+      break;
+    case 'group_call_participant_kicked':
+      grpLogEvent('Participant KICKED from call ' + (parsed.callId || '') + ': ' + (parsed.userId || ''), 'in');
+      toast('Participant kicked from call', 'warning');
+      break;
+    case 'group_call_admin_granted':
+      grpLogEvent('Call admin granted in ' + (parsed.callId || '') + ': ' + (parsed.userId || ''), 'in');
+      break;
   }
 }
 
@@ -3875,12 +4502,41 @@ function callCleanup() {
 // ---- Show/hide call buttons in chat header for DM rooms ----
 function callUpdateHeaderButtons(roomId) {
   const btns = document.getElementById('chatCallBtns');
+  const grpBtns = document.getElementById('chatGroupCallBtns');
   if (!btns) return;
   const meta = chatState.roomMeta[roomId];
   if (meta && meta.type === 'DM' && ws && ws.readyState === 1) {
     btns.style.display = 'flex';
+    if (grpBtns) grpBtns.style.display = 'none';
+  } else if (meta && meta.type === 'GROUP' && ws && ws.readyState === 1) {
+    btns.style.display = 'none';
+    if (grpBtns) grpBtns.style.display = 'flex';
   } else {
     btns.style.display = 'none';
+    if (grpBtns) grpBtns.style.display = 'none';
+  }
+}
+
+// ---- Start a group call from the chat header ----
+async function chatStartGroupCall(callType) {
+  const roomId = chatState.activeRoomId;
+  if (!roomId) return toast('No active room', 'error');
+  const r = await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(roomId) + '/calls', { callType }, null);
+  if (r.status >= 200 && r.status < 300 && r.data) {
+    toast('Group ' + callType + ' call started! Call ID: ' + (r.data.callId || ''), 'success');
+    // Auto-fill call ID in Groups tab for convenience
+    if (r.data.callId) {
+      ['grpCallJoinCallId','grpCallLeaveCallId','grpCallStatusCallId','grpMuteCallId','grpKickCallId','grpCallAdminCallId','grpEndCallCallId'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = r.data.callId;
+      });
+      ['grpCallJoinGroupId','grpCallLeaveGroupId','grpCallStatusGroupId','grpMuteGroupId','grpKickGroupId','grpCallAdminGroupId','grpEndCallGroupId'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = roomId;
+      });
+    }
+  } else {
+    toast('Failed to start group call: ' + (r.data?.error || r.text || 'unknown error'), 'error');
   }
 }
 </script>
