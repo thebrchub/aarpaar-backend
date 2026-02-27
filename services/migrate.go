@@ -261,6 +261,16 @@ var migrationStatements = []string{
 	// Partial index for fast active member listing per room
 	`CREATE INDEX IF NOT EXISTS idx_room_members_active ON room_members (room_id) WHERE status = 'active'`,
 
+	// Group visibility: public (anyone can join/discover) or private (invite only)
+	`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public'`,
+
+	// Invite code for join-by-link (unique per room, nullable)
+	`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS invite_code TEXT`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_invite_code ON rooms (invite_code) WHERE invite_code IS NOT NULL`,
+
+	// Index for listing/searching public groups
+	`CREATE INDEX IF NOT EXISTS idx_rooms_visibility ON rooms (visibility) WHERE type = 'GROUP'`,
+
 	// ===================================================================
 	// GROUP CALL SUPPORT — call_logs augmentation
 	// ===================================================================

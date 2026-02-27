@@ -142,13 +142,17 @@ func main() {
 	mux.HandleFunc("GET /api/v1/calls/history", mw.Auth(handlers.GetCallHistoryHandler))
 
 	// --- Groups (protected) ---
+	mux.HandleFunc("GET /api/v1/groups", mw.Auth(handlers.ListGroupsHandler))
 	mux.HandleFunc("POST /api/v1/groups", mw.Auth(handlers.CreateGroupHandler))
 	mux.HandleFunc("GET /api/v1/groups/{groupId}", mw.Auth(handlers.GetGroupHandler))
 	mux.HandleFunc("PATCH /api/v1/groups/{groupId}", mw.Auth(handlers.UpdateGroupHandler))
 	mux.HandleFunc("DELETE /api/v1/groups/{groupId}", mw.Auth(handlers.DeleteGroupHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/join", mw.Auth(handlers.JoinGroupHandler))
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/members", mw.Auth(handlers.AddGroupMembersHandler))
 	mux.HandleFunc("DELETE /api/v1/groups/{groupId}/members/{userId}", mw.Auth(handlers.RemoveGroupMemberHandler))
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/admins", mw.Auth(handlers.PromoteAdminHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/invite", mw.Auth(handlers.GenerateInviteHandler))
+	mux.HandleFunc("POST /api/v1/groups/join/{inviteCode}", mw.Auth(handlers.JoinGroupByInviteHandler))
 
 	// --- Group Calls (protected) ---
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls", mw.Auth(handlers.StartGroupCallHandler))

@@ -9,15 +9,17 @@ import "time"
 
 // CreateGroupRequest is the JSON body for POST /api/v1/groups.
 type CreateGroupRequest struct {
-	Name      string   `json:"name"`
-	AvatarURL string   `json:"avatarUrl,omitempty"`
-	MemberIDs []string `json:"memberIds"` // Initial member UUIDs (excluding creator)
+	Name       string   `json:"name"`
+	AvatarURL  string   `json:"avatarUrl,omitempty"`
+	MemberIDs  []string `json:"memberIds,omitempty"`  // Optional initial member UUIDs
+	Visibility string   `json:"visibility,omitempty"` // "public" (default) or "private"
 }
 
 // UpdateGroupRequest is the JSON body for PATCH /api/v1/groups/{groupId}.
 type UpdateGroupRequest struct {
-	Name      *string `json:"name,omitempty"`
-	AvatarURL *string `json:"avatarUrl,omitempty"`
+	Name       *string `json:"name,omitempty"`
+	AvatarURL  *string `json:"avatarUrl,omitempty"`
+	Visibility *string `json:"visibility,omitempty"` // "public" or "private"
 }
 
 // AddMembersRequest is the JSON body for POST /api/v1/groups/{groupId}/members.
@@ -32,13 +34,27 @@ type PromoteAdminRequest struct {
 
 // GroupResponse is the JSON shape returned for group info endpoints.
 type GroupResponse struct {
-	RoomID     string        `json:"roomId"`
-	Name       string        `json:"name"`
-	AvatarURL  string        `json:"avatarUrl"`
-	Type       string        `json:"type"`
-	CreatedBy  string        `json:"createdBy"`
-	MaxMembers int           `json:"maxMembers"`
-	Members    []GroupMember `json:"members"`
+	RoomID      string        `json:"roomId"`
+	Name        string        `json:"name"`
+	AvatarURL   string        `json:"avatarUrl"`
+	Type        string        `json:"type"`
+	CreatedBy   string        `json:"createdBy"`
+	MaxMembers  int           `json:"maxMembers"`
+	Visibility  string        `json:"visibility"`
+	InviteCode  string        `json:"inviteCode,omitempty"`
+	MemberCount int           `json:"memberCount"`
+	Members     []GroupMember `json:"members,omitempty"`
+}
+
+// GroupListItem is a lightweight shape for listing/searching public groups.
+type GroupListItem struct {
+	RoomID      string `json:"roomId"`
+	Name        string `json:"name"`
+	AvatarURL   string `json:"avatarUrl"`
+	Visibility  string `json:"visibility"`
+	MemberCount int    `json:"memberCount"`
+	CreatedBy   string `json:"createdBy"`
+	IsMember    bool   `json:"isMember"`
 }
 
 // GroupMember represents a member in a group response.

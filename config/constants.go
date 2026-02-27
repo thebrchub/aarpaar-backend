@@ -169,6 +169,9 @@ const (
 
 	// Server -> All members: A member was promoted to group admin
 	MsgTypeMemberPromoted = "member_promoted"
+
+	// Server -> All members: A user joined the group via self-join or invite link
+	MsgTypeMemberJoined = "member_joined"
 )
 
 // ---------------------------------------------------------------------------
@@ -236,6 +239,15 @@ const (
 )
 
 // ---------------------------------------------------------------------------
+// Group Visibility
+// ---------------------------------------------------------------------------
+
+const (
+	VisibilityPublic  = "public"  // Anyone can discover & join
+	VisibilityPrivate = "private" // Invite-only
+)
+
+// ---------------------------------------------------------------------------
 // System / Identity Constants
 // ---------------------------------------------------------------------------
 
@@ -289,6 +301,8 @@ const (
 	FieldTrackType       = "trackType"         // Track type: audio, video, screen
 	FieldMuted           = "muted"             // Whether the track is muted
 	FieldRole            = "role"              // Role (admin, member)
+	FieldVisibility      = "visibility"        // Group visibility (public/private)
+	FieldInviteCode      = "inviteCode"        // Group invite code for join links
 )
 
 // ---------------------------------------------------------------------------

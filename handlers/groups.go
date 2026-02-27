@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -40,11 +43,16 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Limit initial members (don't include creator in count)
-	if len(req.MemberIDs) == 0 {
-		JSONError(w, "At least one member is required", http.StatusBadRequest)
-		return
+	// Normalize visibility — default to public
+	visibility := config.VisibilityPublic
+	if req.Visibility == config.VisibilityPrivate {
+		visibility = config.VisibilityPrivate
 	}
+
+	// Generate invite code for the group
+	inviteCode := generateInviteCode()
+
+	// Limit initial members (don't include creator in count)
 	if len(req.MemberIDs) > 49 { // 49 + creator = 50
 		JSONError(w, "Too many initial members (max 49 plus yourself)", http.StatusBadRequest)
 		return
@@ -60,73 +68,68 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 		seen[id] = true
 		uniqueMembers = append(uniqueMembers, id)
 	}
-	if len(uniqueMembers) == 0 {
-		JSONError(w, "At least one other member is required", http.StatusBadRequest)
-		return
-	}
 
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
-	// Validate all member IDs exist and are not banned
-	placeholders, args := buildINClause(uniqueMembers, 1)
-	query := fmt.Sprintf(
-		`SELECT id FROM users WHERE id IN (%s) AND is_banned = false`, placeholders,
-	)
-	rows, err := postgress.GetRawDB().QueryContext(ctx, query, args...)
-	if err != nil {
-		JSONError(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-	validMembers := make(map[string]bool)
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err == nil {
-			validMembers[id] = true
+	// Only validate members if any were provided
+	var finalMembers []string
+	if len(uniqueMembers) > 0 {
+		// Validate all member IDs exist and are not banned
+		placeholders, args := buildINClause(uniqueMembers, 1)
+		query := fmt.Sprintf(
+			`SELECT id FROM users WHERE id IN (%s) AND is_banned = false`, placeholders,
+		)
+		rows, err := postgress.GetRawDB().QueryContext(ctx, query, args...)
+		if err != nil {
+			JSONError(w, "Database error", http.StatusInternalServerError)
+			return
 		}
-	}
-	rows.Close()
+		validMembers := make(map[string]bool)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err == nil {
+				validMembers[id] = true
+			}
+		}
+		rows.Close()
 
-	if len(validMembers) != len(uniqueMembers) {
-		JSONError(w, "One or more member IDs are invalid", http.StatusBadRequest)
-		return
-	}
+		if len(validMembers) != len(uniqueMembers) {
+			JSONError(w, "One or more member IDs are invalid", http.StatusBadRequest)
+			return
+		}
 
-	// Check for blocks: remove any member who has blocked the creator or vice versa
-	blockPlaceholders, blockArgs := buildINClause(uniqueMembers, 1)
-	blockArgs = append(blockArgs, userID)
-	blockQuery := fmt.Sprintf(
-		`SELECT DISTINCT CASE WHEN blocker_id = $%d THEN blocked_id ELSE blocker_id END
+		// Check for blocks: remove any member who has blocked the creator or vice versa
+		blockPlaceholders, blockArgs := buildINClause(uniqueMembers, 1)
+		blockArgs = append(blockArgs, userID)
+		blockQuery := fmt.Sprintf(
+			`SELECT DISTINCT CASE WHEN blocker_id = $%d THEN blocked_id ELSE blocker_id END
 		 FROM blocked_users
 		 WHERE (blocker_id = $%d AND blocked_id IN (%s))
 		    OR (blocked_id = $%d AND blocker_id IN (%s))`,
-		len(blockArgs), len(blockArgs), blockPlaceholders, len(blockArgs), blockPlaceholders,
-	)
-	blockRows, err := postgress.GetRawDB().QueryContext(ctx, blockQuery, blockArgs...)
-	if err != nil {
-		JSONError(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-	blocked := make(map[string]bool)
-	for blockRows.Next() {
-		var id string
-		if err := blockRows.Scan(&id); err == nil {
-			blocked[id] = true
+			len(blockArgs), len(blockArgs), blockPlaceholders, len(blockArgs), blockPlaceholders,
+		)
+		blockRows, err := postgress.GetRawDB().QueryContext(ctx, blockQuery, blockArgs...)
+		if err != nil {
+			JSONError(w, "Database error", http.StatusInternalServerError)
+			return
 		}
-	}
-	blockRows.Close()
+		blocked := make(map[string]bool)
+		for blockRows.Next() {
+			var id string
+			if err := blockRows.Scan(&id); err == nil {
+				blocked[id] = true
+			}
+		}
+		blockRows.Close()
 
-	// Filter out blocked users
-	finalMembers := make([]string, 0, len(uniqueMembers))
-	for _, id := range uniqueMembers {
-		if !blocked[id] {
-			finalMembers = append(finalMembers, id)
+		// Filter out blocked users
+		for _, id := range uniqueMembers {
+			if !blocked[id] {
+				finalMembers = append(finalMembers, id)
+			}
 		}
-	}
-	if len(finalMembers) == 0 {
-		JSONError(w, "No valid members to add (all blocked)", http.StatusBadRequest)
-		return
-	}
+	} // end if len(uniqueMembers) > 0
 
 	// Create room + members in a transaction
 	tx, err := postgress.GetRawDB().Begin()
@@ -138,10 +141,10 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 
 	var roomID string
 	err = tx.QueryRow(
-		`INSERT INTO rooms (name, type, avatar_url, created_by, max_members)
-		 VALUES ($1, $2, $3, $4, 50)
+		`INSERT INTO rooms (name, type, avatar_url, created_by, max_members, visibility, invite_code)
+		 VALUES ($1, $2, $3, $4, 50, $5, $6)
 		 RETURNING id`,
-		req.Name, config.RoomTypeGroup, req.AvatarURL, userID,
+		req.Name, config.RoomTypeGroup, req.AvatarURL, userID, visibility, inviteCode,
 	).Scan(&roomID)
 	if err != nil {
 		JSONError(w, "Failed to create group", http.StatusInternalServerError)
@@ -198,8 +201,10 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 	}, allMembers)
 
 	JSONSuccess(w, map[string]interface{}{
-		"roomId": roomID,
-		"name":   req.Name,
+		"roomId":     roomID,
+		"name":       req.Name,
+		"visibility": visibility,
+		"inviteCode": inviteCode,
 	})
 }
 
@@ -230,12 +235,14 @@ func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch group info
-	var name, avatarURL, createdBy string
+	var name, avatarURL, createdBy, visibility string
+	var inviteCode *string
 	var maxMembers int
 	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT COALESCE(name,''), COALESCE(avatar_url,''), COALESCE(created_by::text,''), max_members
+		`SELECT COALESCE(name,''), COALESCE(avatar_url,''), COALESCE(created_by::text,''), max_members,
+		        COALESCE(visibility,'public'), invite_code
 		 FROM rooms WHERE id = $1 AND type = 'GROUP'`, groupID,
-	).Scan(&name, &avatarURL, &createdBy, &maxMembers)
+	).Scan(&name, &avatarURL, &createdBy, &maxMembers, &visibility, &inviteCode)
 	if err != nil {
 		JSONError(w, "Group not found", http.StatusNotFound)
 		return
@@ -271,14 +278,22 @@ func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 		members = []models.GroupMember{}
 	}
 
+	ic := ""
+	if inviteCode != nil {
+		ic = *inviteCode
+	}
+
 	JSONSuccess(w, models.GroupResponse{
-		RoomID:     groupID,
-		Name:       name,
-		AvatarURL:  avatarURL,
-		Type:       config.RoomTypeGroup,
-		CreatedBy:  createdBy,
-		MaxMembers: maxMembers,
-		Members:    members,
+		RoomID:      groupID,
+		Name:        name,
+		AvatarURL:   avatarURL,
+		Type:        config.RoomTypeGroup,
+		CreatedBy:   createdBy,
+		MaxMembers:  maxMembers,
+		Visibility:  visibility,
+		InviteCode:  ic,
+		MemberCount: len(members),
+		Members:     members,
 	})
 }
 
@@ -328,6 +343,13 @@ func UpdateGroupHandler(w http.ResponseWriter, r *http.Request) {
 		postgress.GetRawDB().ExecContext(ctx,
 			`UPDATE rooms SET avatar_url = $1 WHERE id = $2`, *req.AvatarURL, groupID)
 	}
+	if req.Visibility != nil {
+		v := *req.Visibility
+		if v == config.VisibilityPublic || v == config.VisibilityPrivate {
+			postgress.GetRawDB().ExecContext(ctx,
+				`UPDATE rooms SET visibility = $1 WHERE id = $2`, v, groupID)
+		}
+	}
 
 	// Broadcast group_updated to all members
 	memberIDs := getActiveGroupMemberIDs(ctx, groupID)
@@ -339,6 +361,9 @@ func UpdateGroupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AvatarURL != nil {
 		updateData[config.FieldAvatarURL] = *req.AvatarURL
+	}
+	if req.Visibility != nil {
+		updateData[config.FieldVisibility] = *req.Visibility
 	}
 	broadcastGroupEvent(ctx, groupID, config.MsgTypeGroupUpdated, updateData, memberIDs)
 
@@ -683,6 +708,261 @@ func DeleteGroupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/v1/groups — List / search public groups
+// ---------------------------------------------------------------------------
+
+func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+
+	baseQuery := `SELECT r.id, COALESCE(r.name,''), COALESCE(r.avatar_url,''),
+		        COALESCE(r.visibility,'public'), COALESCE(r.created_by::text,''),
+		        (SELECT COUNT(*) FROM room_members rm2 WHERE rm2.room_id = r.id AND rm2.status = 'active') AS member_count,
+		        EXISTS(SELECT 1 FROM room_members rm3 WHERE rm3.room_id = r.id AND rm3.user_id = $1 AND rm3.status = 'active') AS is_member
+		 FROM rooms r
+		 WHERE r.type = 'GROUP' AND r.visibility = 'public'`
+
+	var args []interface{}
+	args = append(args, userID)
+
+	if search != "" {
+		baseQuery += ` AND LOWER(r.name) LIKE LOWER('%' || $2 || '%')`
+		args = append(args, search)
+	}
+	baseQuery += ` ORDER BY member_count DESC LIMIT 50`
+
+	rows, err := postgress.GetRawDB().QueryContext(ctx, baseQuery, args...)
+	if err != nil {
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var groups []models.GroupListItem
+	for rows.Next() {
+		var g models.GroupListItem
+		if err := rows.Scan(&g.RoomID, &g.Name, &g.AvatarURL, &g.Visibility, &g.CreatedBy, &g.MemberCount, &g.IsMember); err != nil {
+			continue
+		}
+		groups = append(groups, g)
+	}
+	if groups == nil {
+		groups = []models.GroupListItem{}
+	}
+
+	JSONSuccess(w, groups)
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/groups/{groupId}/join — Self-join a public group
+// ---------------------------------------------------------------------------
+
+func JoinGroupHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	groupID := r.PathValue("groupId")
+	if groupID == "" {
+		JSONError(w, "Missing group ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	// Check the group exists, is a GROUP, and is public
+	var visibility string
+	var maxMembers, currentCount int
+	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT COALESCE(r.visibility,'public'), r.max_members,
+		        (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.id AND rm.status = 'active')
+		 FROM rooms r WHERE r.id = $1 AND r.type = 'GROUP'`, groupID,
+	).Scan(&visibility, &maxMembers, &currentCount)
+	if err != nil {
+		JSONError(w, "Group not found", http.StatusNotFound)
+		return
+	}
+
+	if visibility != config.VisibilityPublic {
+		JSONError(w, "This group is private — use an invite link to join", http.StatusForbidden)
+		return
+	}
+
+	// Check if already a member
+	if isGroupMember(ctx, groupID, userID) {
+		JSONError(w, "You are already a member of this group", http.StatusConflict)
+		return
+	}
+
+	if currentCount >= maxMembers {
+		JSONError(w, "Group is full", http.StatusBadRequest)
+		return
+	}
+
+	// Check if user is banned
+	var isBanned bool
+	postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT is_banned FROM users WHERE id = $1`, userID,
+	).Scan(&isBanned)
+	if isBanned {
+		JSONError(w, "Account is banned", http.StatusForbidden)
+		return
+	}
+
+	// Upsert membership (handles re-joining after leaving)
+	_, err = postgress.GetRawDB().ExecContext(ctx,
+		`INSERT INTO room_members (room_id, user_id, status, role, joined_at)
+		 VALUES ($1, $2, 'active', 'member', NOW())
+		 ON CONFLICT (room_id, user_id)
+		 DO UPDATE SET status = 'active', role = 'member', joined_at = NOW(), left_at = NULL`,
+		groupID, userID,
+	)
+	if err != nil {
+		JSONError(w, "Failed to join group", http.StatusInternalServerError)
+		return
+	}
+
+	// Subscribe to room
+	if e := chat.GetEngine(); e != nil {
+		e.JoinRoomForUser(userID, groupID)
+	}
+
+	// Notify all members
+	allMembers := getActiveGroupMemberIDs(ctx, groupID)
+	broadcastGroupEvent(ctx, groupID, config.MsgTypeMemberJoined, map[string]interface{}{
+		config.FieldRoomID: groupID,
+		config.FieldUserID: userID,
+	}, allMembers)
+
+	JSONMessage(w, "ok", "Joined group successfully")
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/groups/join/{inviteCode} — Join a group via invite link
+// ---------------------------------------------------------------------------
+
+func JoinGroupByInviteHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	code := r.PathValue("inviteCode")
+	if code == "" {
+		JSONError(w, "Missing invite code", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	// Look up the group by invite code
+	var groupID string
+	var maxMembers, currentCount int
+	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT r.id, r.max_members,
+		        (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.id AND rm.status = 'active')
+		 FROM rooms r WHERE r.invite_code = $1 AND r.type = 'GROUP'`, code,
+	).Scan(&groupID, &maxMembers, &currentCount)
+	if err != nil {
+		JSONError(w, "Invalid or expired invite code", http.StatusNotFound)
+		return
+	}
+
+	// Check if already a member
+	if isGroupMember(ctx, groupID, userID) {
+		JSONError(w, "You are already a member of this group", http.StatusConflict)
+		return
+	}
+
+	if currentCount >= maxMembers {
+		JSONError(w, "Group is full", http.StatusBadRequest)
+		return
+	}
+
+	// Upsert membership
+	_, err = postgress.GetRawDB().ExecContext(ctx,
+		`INSERT INTO room_members (room_id, user_id, status, role, joined_at)
+		 VALUES ($1, $2, 'active', 'member', NOW())
+		 ON CONFLICT (room_id, user_id)
+		 DO UPDATE SET status = 'active', role = 'member', joined_at = NOW(), left_at = NULL`,
+		groupID, userID,
+	)
+	if err != nil {
+		JSONError(w, "Failed to join group", http.StatusInternalServerError)
+		return
+	}
+
+	// Subscribe to room
+	if e := chat.GetEngine(); e != nil {
+		e.JoinRoomForUser(userID, groupID)
+	}
+
+	// Notify all members
+	allMembers := getActiveGroupMemberIDs(ctx, groupID)
+	broadcastGroupEvent(ctx, groupID, config.MsgTypeMemberJoined, map[string]interface{}{
+		config.FieldRoomID: groupID,
+		config.FieldUserID: userID,
+	}, allMembers)
+
+	JSONSuccess(w, map[string]interface{}{
+		"roomId":  groupID,
+		"message": "Joined group via invite link",
+	})
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/groups/{groupId}/invite — Generate or regenerate invite code
+// ---------------------------------------------------------------------------
+
+func GenerateInviteHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	groupID := r.PathValue("groupId")
+	if groupID == "" {
+		JSONError(w, "Missing group ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	if !isGroupAdmin(ctx, groupID, userID) {
+		JSONError(w, "Only admins can generate invite codes", http.StatusForbidden)
+		return
+	}
+
+	newCode := generateInviteCode()
+	_, err := postgress.GetRawDB().ExecContext(ctx,
+		`UPDATE rooms SET invite_code = $1 WHERE id = $2 AND type = 'GROUP'`, newCode, groupID,
+	)
+	if err != nil {
+		JSONError(w, "Failed to generate invite code", http.StatusInternalServerError)
+		return
+	}
+
+	JSONSuccess(w, map[string]interface{}{
+		"inviteCode": newCode,
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
 
@@ -807,4 +1087,14 @@ func broadcastGroupEvent(ctx context.Context, roomID string, eventType string, d
 	pubCtx, cancel := context.WithTimeout(ctx, config.RedisOpTimeout)
 	defer cancel()
 	redis.Publish(pubCtx, config.CHAT_GLOBAL_CHANNEL, envBytes)
+}
+
+// generateInviteCode creates a random 8-byte hex invite code (16 chars).
+func generateInviteCode() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use time-based value (shouldn't happen)
+		return hex.EncodeToString([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))[:16]
+	}
+	return hex.EncodeToString(b)
 }
