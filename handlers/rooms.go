@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,8 +11,6 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // pgCtx creates a context from an HTTP request with PGTimeout.
@@ -77,9 +74,12 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 				r.id AS room_id, 
 				r.name, 
 				r.type,
+				r.avatar_url AS group_avatar,
+				COALESCE(r.created_by::text, '') AS created_by,
 				lm.content AS last_message_preview,
 				r.last_message_at,
 				COALESCE(uc.unread_count, 0) AS unread_count,
+				COALESCE(mc.member_count, 0) AS member_count,
 				COALESCE(mem.members, '[]'::json) AS members
 			FROM room_members rm
 			JOIN rooms r ON rm.room_id = r.id
@@ -97,10 +97,16 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 				  AND m.sender_id != $1
 			) uc ON true
 			LEFT JOIN LATERAL (
+				SELECT COUNT(*)::int AS member_count
+				FROM room_members rm3
+				WHERE rm3.room_id = r.id AND rm3.status = 'active'
+			) mc ON true
+			LEFT JOIN LATERAL (
 				SELECT json_agg(json_build_object(
 					'id', u.id,
 					'username', u.username,
 					'name', u.name,
+					'avatar_url', COALESCE(u.avatar_url, ''),
 					'last_seen_at', CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END
 				)) AS members
 				FROM room_members rm2
@@ -300,9 +306,9 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------------------
 // enrichRoomsWithOnlineStatus injects "is_online" into each member of every
-// room using gjson/sjson for surgical byte-level modification. This avoids
-// the full deserialize→re-serialize cycle that negated the zero-alloc SQL
-// pattern. (P0-2 fix)
+// room by deserializing into lightweight structs, setting the field, and
+// re-serializing once. This replaces the previous sjson.SetBytes approach
+// which was O(N²) — each call copied the entire growing JSON buffer.
 // ---------------------------------------------------------------------------
 
 func enrichRoomsWithOnlineStatus(raw []byte, currentUserID string) []byte {
@@ -311,30 +317,43 @@ func enrichRoomsWithOnlineStatus(raw []byte, currentUserID string) []byte {
 		return raw
 	}
 
-	result := raw
-	rooms := gjson.ParseBytes(raw)
-	if !rooms.IsArray() {
+	// Lightweight struct that only captures the fields we need to enrich.
+	// json.RawMessage preserves all other fields without allocating Go structs.
+	type member struct {
+		ID        string  `json:"id"`
+		Username  *string `json:"username"`
+		Name      *string `json:"name"`
+		AvatarURL *string `json:"avatar_url,omitempty"`
+		LastSeen  *string `json:"last_seen_at,omitempty"`
+		IsOnline  bool    `json:"is_online"`
+	}
+	type room struct {
+		RoomID      string   `json:"room_id"`
+		Name        *string  `json:"name"`
+		Type        string   `json:"type"`
+		GroupAvatar *string  `json:"group_avatar,omitempty"`
+		CreatedBy   *string  `json:"created_by,omitempty"`
+		LastPreview *string  `json:"last_message_preview,omitempty"`
+		LastMsgAt   *string  `json:"last_message_at,omitempty"`
+		UnreadCount int      `json:"unread_count"`
+		MemberCount int      `json:"member_count"`
+		Members     []member `json:"members"`
+	}
+
+	var rooms []room
+	if err := json.Unmarshal(raw, &rooms); err != nil {
 		return raw
 	}
 
-	var roomIdx int64
-	rooms.ForEach(func(_, room gjson.Result) bool {
-		members := room.Get("members")
-		if members.Exists() && members.IsArray() {
-			var memberIdx int64
-			members.ForEach(func(_, member gjson.Result) bool {
-				id := member.Get("id").String()
-				if id != "" {
-					path := fmt.Sprintf("%d.members.%d.is_online", roomIdx, memberIdx)
-					result, _ = sjson.SetBytes(result, path, e.IsUserOnline(id))
-				}
-				memberIdx++
-				return true
-			})
+	for i := range rooms {
+		for j := range rooms[i].Members {
+			rooms[i].Members[j].IsOnline = e.IsUserOnline(rooms[i].Members[j].ID)
 		}
-		roomIdx++
-		return true
-	})
+	}
 
-	return result
+	enriched, err := json.Marshal(rooms)
+	if err != nil {
+		return raw
+	}
+	return enriched
 }

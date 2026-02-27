@@ -120,6 +120,55 @@ const (
 
 	// Server -> Client: Redirect from P2P to SFU (when 3rd person joins)
 	MsgTypeSFURedirect = "sfu_redirect"
+
+	// -----------------------------------------------------------------------
+	// Group Lifecycle Events
+	// -----------------------------------------------------------------------
+
+	// Server -> Client: A new group was created (sent to all initial members)
+	MsgTypeGroupCreated = "group_created"
+
+	// Server -> Client: A member was added to a group
+	MsgTypeMemberAdded = "member_added"
+
+	// Server -> Client: A member was removed from a group
+	MsgTypeMemberRemoved = "member_removed"
+
+	// Server -> Client: A member left a group voluntarily
+	MsgTypeMemberLeft = "member_left"
+
+	// Server -> Client: Group metadata was updated (name, avatar)
+	MsgTypeGroupUpdated = "group_updated"
+
+	// Server -> Client: A group call has started
+	MsgTypeGroupCallStarted = "group_call_started"
+
+	// Server -> Client: A participant joined the group call
+	MsgTypeGroupCallParticipantJoined = "group_call_participant_joined"
+
+	// Server -> Client: A participant left the group call
+	MsgTypeGroupCallParticipantLeft = "group_call_participant_left"
+
+	// Server -> Client: The group call has ended
+	MsgTypeGroupCallEnded = "group_call_ended"
+
+	// Server -> All members: A participant was muted by an admin
+	MsgTypeGroupCallParticipantMuted = "group_call_participant_muted"
+
+	// Server -> All members: A participant was unmuted by an admin
+	MsgTypeGroupCallParticipantUnmuted = "group_call_participant_unmuted"
+
+	// Server -> All members: A participant was kicked from the call
+	MsgTypeGroupCallParticipantKicked = "group_call_participant_kicked"
+
+	// Server -> All members: A participant was granted call admin
+	MsgTypeGroupCallAdminGranted = "group_call_admin_granted"
+
+	// Server -> All members: The call was force-ended by an admin
+	MsgTypeGroupCallForceEnded = "group_call_force_ended"
+
+	// Server -> All members: A member was promoted to group admin
+	MsgTypeMemberPromoted = "member_promoted"
 )
 
 // ---------------------------------------------------------------------------
@@ -169,6 +218,24 @@ const (
 )
 
 // ---------------------------------------------------------------------------
+// Room Types
+// ---------------------------------------------------------------------------
+
+const (
+	RoomTypeDM    = "DM"
+	RoomTypeGroup = "GROUP"
+)
+
+// ---------------------------------------------------------------------------
+// Room Member Roles
+// ---------------------------------------------------------------------------
+
+const (
+	RoleMember = "member"
+	RoleAdmin  = "admin"
+)
+
+// ---------------------------------------------------------------------------
 // System / Identity Constants
 // ---------------------------------------------------------------------------
 
@@ -206,6 +273,22 @@ const (
 	FieldCandidate       = "candidate"         // ICE candidate
 	FieldCallType        = "callType"          // "audio" or "video"
 	FieldHasVideo        = "hasVideo"          // Whether video is enabled
+	FieldName            = "name"              // Display name (group name, sender name)
+	FieldAvatarURL       = "avatarUrl"         // Avatar URL
+	FieldMembers         = "members"           // Members array
+	FieldAddedBy         = "addedBy"           // Who added a member
+	FieldRemovedBy       = "removedBy"         // Who removed a member
+	FieldInitiatedBy     = "initiatedBy"       // Who started a call
+	FieldFromName        = "fromName"          // Sender display name on messages
+	FieldReplyTo         = "replyTo"           // ID of the message being replied to
+	FieldMentions        = "mentions"          // Array of mentioned user IDs
+	FieldMutedBy         = "mutedBy"           // Who muted a participant
+	FieldKickedBy        = "kickedBy"          // Who kicked a participant
+	FieldGrantedBy       = "grantedBy"         // Who granted admin
+	FieldEndedBy         = "endedBy"           // Who force-ended the call
+	FieldTrackType       = "trackType"         // Track type: audio, video, screen
+	FieldMuted           = "muted"             // Whether the track is muted
+	FieldRole            = "role"              // Role (admin, member)
 )
 
 // ---------------------------------------------------------------------------

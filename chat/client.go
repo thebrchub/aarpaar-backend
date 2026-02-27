@@ -11,6 +11,7 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/gorilla/websocket"
+	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/tidwall/gjson"
@@ -67,11 +68,31 @@ type Client struct {
 	JoinedRooms sync.Map        // Set of room IDs this client is subscribed to (concurrent-safe)
 	closeOnce   sync.Once       // Ensures c.Send is closed exactly once
 	fromPrefix  []byte          // Pre-computed `{"from":"<userID>",` prefix (zero-alloc per message)
+	cachedName  string          // User's display name (cached after first lookup)
+	ready       chan struct{}   // Closed after Register completes; gates readPump
 }
 
 // closeSend safely closes the Send channel exactly once, preventing double-close panics.
 func (c *Client) closeSend() {
 	c.closeOnce.Do(func() { close(c.Send) })
+}
+
+// getFromName queries the user's display name from the database.
+// Cached in-memory after first lookup for the lifetime of the connection.
+func (c *Client) getFromName() string {
+	if c.cachedName != "" {
+		return c.cachedName
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var name string
+	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT COALESCE(name, '') FROM users WHERE id = $1`, c.UserID,
+	).Scan(&name)
+	if err == nil && name != "" {
+		c.cachedName = name
+	}
+	return c.cachedName
 }
 
 // confirmMessage is the JSON shape for delivery confirmations.
@@ -122,6 +143,11 @@ func (c *Client) readPump() {
 		c.Engine.Unregister(c)
 		c.Conn.Close()
 	}()
+
+	// Wait for Register to finish subscribing to all rooms before processing
+	// messages. Without this gate, a message arriving for a room still being
+	// joined would trigger a spurious NOT_A_MEMBER error.
+	<-c.ready
 
 	c.Conn.SetReadLimit(maxMsgSize)
 	c.Conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -287,11 +313,33 @@ func (c *Client) readPump() {
 						payload = patched
 					}
 				}
+
+				// Attach sender's display name for group chats (so recipients can identify sender)
+				if fromName := c.getFromName(); fromName != "" {
+					if patched, err := sjson.SetBytes(payload, config.FieldFromName, fromName); err == nil {
+						payload = patched
+					}
+				}
+
+				// Extract @mentions from message text
+				if mentions := ExtractMentions(sanitized); len(mentions) > 0 {
+					if patched, err := sjson.SetBytes(payload, config.FieldMentions, mentions); err == nil {
+						payload = patched
+					}
+				}
+
+				// Preserve replyTo if present (for threaded replies)
+				// No modification needed — the field passes through as-is
 			}
 
 			// Stamp the authenticated sender onto the payload (pre-computed prefix).
 			// Turns {"type":...} into {"from":"<userID>","type":...}
-			payload = append(c.fromPrefix, payload[1:]...) // skip the leading '{'
+			// NOTE: We must allocate a new slice — append(c.fromPrefix, ...) can
+			// mutate the fromPrefix backing array if it has spare capacity.
+			stamped := make([]byte, 0, len(c.fromPrefix)+len(payload)-1)
+			stamped = append(stamped, c.fromPrefix...)
+			stamped = append(stamped, payload[1:]...) // skip the leading '{'
+			payload = stamped
 
 			// Broadcast to all servers via Redis Pub/Sub (with timeout)
 			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
@@ -420,10 +468,15 @@ func ServeWs(engine *Engine, w http.ResponseWriter, r *http.Request, userID stri
 		Conn:       conn,
 		Send:       make(chan []byte, config.ClientSendBuffer),
 		fromPrefix: []byte(`{"from":"` + userID + `",`),
+		ready:      make(chan struct{}),
 	}
 
-	engine.Register(client)
-
+	// writePump can start immediately (queued messages are harmless).
+	// readPump waits on client.ready which is closed after Register completes.
 	go client.writePump()
+
+	engine.Register(client)
+	close(client.ready) // Signal readPump that all rooms are subscribed
+
 	go client.readPump()
 }

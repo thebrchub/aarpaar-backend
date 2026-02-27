@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -119,7 +120,9 @@ func upsertUser(googleID, email, name, avatar string) (string, bool, error) {
 		    updated_at = NOW()
 		RETURNING id, is_banned;
 	`
-	err := db.QueryRow(query, googleID, email, name, avatar).Scan(&userID, &isBanned)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	err := db.QueryRowContext(ctx, query, googleID, email, name, avatar).Scan(&userID, &isBanned)
 	if err != nil && err != sql.ErrNoRows {
 		return "", false, err
 	}

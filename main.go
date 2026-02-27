@@ -15,6 +15,7 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
+	"github.com/shivanand-burli/go-starter-kit/rtc"
 
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
@@ -56,6 +57,21 @@ func main() {
 		log.Fatalf("[boot] Redis connection failed: %v", err)
 	}
 	log.Println("[boot] Redis connected")
+
+	// -----------------------------------------------------------------------
+	// 3.5 INITIALIZE RTC CLIENT (LiveKit — single shared instance for 10K+ concurrency)
+	// -----------------------------------------------------------------------
+	handlers.RTC = rtc.NewClientOptional(rtc.Config{
+		URL:       config.LiveKitURL,
+		APIKey:    config.LiveKitAPIKey,
+		APISecret: config.LiveKitAPISecret,
+	})
+	chat.RTC = handlers.RTC // Share RTC client with bgpool for orphan cleanup
+	if handlers.RTC.IsConfigured() {
+		log.Println("[boot] RTC (LiveKit) client initialized")
+	} else {
+		log.Println("[boot] RTC (LiveKit) not configured — group calls disabled")
+	}
 
 	// -----------------------------------------------------------------------
 	// 4. START THE WEBSOCKET ENGINE (begins listening to Redis Pub/Sub)
@@ -125,6 +141,25 @@ func main() {
 	mux.HandleFunc("GET /api/v1/calls/config", mw.Auth(handlers.GetCallConfigHandler))
 	mux.HandleFunc("GET /api/v1/calls/history", mw.Auth(handlers.GetCallHistoryHandler))
 
+	// --- Groups (protected) ---
+	mux.HandleFunc("POST /api/v1/groups", mw.Auth(handlers.CreateGroupHandler))
+	mux.HandleFunc("GET /api/v1/groups/{groupId}", mw.Auth(handlers.GetGroupHandler))
+	mux.HandleFunc("PATCH /api/v1/groups/{groupId}", mw.Auth(handlers.UpdateGroupHandler))
+	mux.HandleFunc("DELETE /api/v1/groups/{groupId}", mw.Auth(handlers.DeleteGroupHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/members", mw.Auth(handlers.AddGroupMembersHandler))
+	mux.HandleFunc("DELETE /api/v1/groups/{groupId}/members/{userId}", mw.Auth(handlers.RemoveGroupMemberHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/admins", mw.Auth(handlers.PromoteAdminHandler))
+
+	// --- Group Calls (protected) ---
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls", mw.Auth(handlers.StartGroupCallHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/join", mw.Auth(handlers.JoinGroupCallHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/leave", mw.Auth(handlers.LeaveGroupCallHandler))
+	mux.HandleFunc("GET /api/v1/groups/{groupId}/calls/{callId}", mw.Auth(handlers.GetGroupCallStatusHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/mute", mw.Auth(handlers.MuteParticipantHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/kick", mw.Auth(handlers.KickParticipantHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/admins", mw.Auth(handlers.PromoteCallAdminHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/end", mw.Auth(handlers.ForceEndCallHandler))
+
 	// --- WebSocket (protected) ---
 	mux.HandleFunc("GET /ws", mw.Auth(func(w http.ResponseWriter, r *http.Request) {
 		userID := r.Context().Value(config.UserIDKey).(string)
@@ -141,9 +176,9 @@ func main() {
 		Addr:              "0.0.0.0:" + config.ServerPort,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		ReadTimeout:       0, // Disabled: WebSocket connections are long-lived; readPump manages its own deadlines via SetReadDeadline
+		WriteTimeout:      0, // Disabled: WriteTimeout counts from handler start — kills WebSocket connections after N seconds. writePump manages its own deadlines via SetWriteDeadline
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// -----------------------------------------------------------------------
