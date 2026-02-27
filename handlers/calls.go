@@ -278,7 +278,8 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		config.FieldCallType:    req.CallType,
 	}, memberIDs)
 
-	JSONSuccess(w, models.LiveKitTokenResponse{
+	JSONSuccess(w, models.StartGroupCallResponse{
+		CallID:     callID,
 		Token:      token,
 		LiveKitURL: RTC.GetURL(),
 	})

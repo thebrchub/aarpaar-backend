@@ -86,6 +86,13 @@ type LiveKitTokenResponse struct {
 	LiveKitURL string `json:"livekitUrl"`
 }
 
+// StartGroupCallResponse is the JSON shape returned when starting a group call.
+type StartGroupCallResponse struct {
+	CallID     string `json:"callId"`
+	Token      string `json:"token"`
+	LiveKitURL string `json:"livekitUrl"`
+}
+
 // StartGroupCallRequest is the JSON body for POST /api/v1/groups/{groupId}/calls.
 type StartGroupCallRequest struct {
 	CallType string `json:"callType"` // "audio" or "video"

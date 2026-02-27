@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Aarpaar Backend – Test Console</title>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
   <style>
     /* ------------------------------------------------------------------ */
     /*  CSS Variables & Reset                                             */
@@ -626,6 +627,68 @@
     .call-ctrl-btn:hover { opacity: .85; }
     .call-ctrl-btn.screen-share { background: rgba(0,168,132,.8); }
     .call-ctrl-btn.screen-share.active { background: #e74c3c; }
+
+    /* ------------------------------------------------------------------ */
+    /*  Group Call Overlay                                                 */
+    /* ------------------------------------------------------------------ */
+    .gcall-overlay {
+      position: fixed; inset: 0; z-index: 20000;
+      background: #0b141a; display: flex; flex-direction: column;
+      align-items: center; justify-content: flex-start;
+      animation: callFadeIn .3s ease;
+    }
+    .gcall-overlay.hidden { display: none !important; }
+    .gcall-header {
+      width: 100%; padding: 20px 24px 12px; text-align: center;
+      background: linear-gradient(180deg, rgba(0,0,0,.6) 0%, transparent 100%);
+    }
+    .gcall-group-name {
+      color: #fff; font-size: 1.2rem; font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .gcall-status {
+      color: rgba(255,255,255,.6); font-size: .82rem;
+    }
+    .gcall-timer {
+      color: rgba(255,255,255,.5); font-size: .78rem;
+      font-family: var(--mono); margin-top: 4px;
+    }
+    .gcall-participants-grid {
+      flex: 1; width: 100%; display: flex; flex-wrap: wrap;
+      align-items: center; justify-content: center; gap: 12px;
+      padding: 24px; overflow-y: auto;
+    }
+    .gcall-participant {
+      width: 200px; height: 160px; border-radius: 12px;
+      background: #1a2730; border: 2px solid #2a3942;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      position: relative; overflow: hidden;
+    }
+    .gcall-participant video {
+      width: 100%; height: 100%; object-fit: cover;
+      border-radius: 10px;
+    }
+    .gcall-participant .gcall-avatar {
+      width: 56px; height: 56px; border-radius: 50%;
+      background: #2a3942; display: flex; align-items: center;
+      justify-content: center; font-size: 1.4rem; font-weight: 600;
+      color: #aebac1;
+    }
+    .gcall-participant .gcall-pname {
+      color: #fff; font-size: .75rem; margin-top: 8px;
+      max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .gcall-participant .gcall-pname-overlay {
+      position: absolute; bottom: 6px; left: 8px;
+      color: #fff; font-size: .72rem; text-shadow: 0 1px 3px rgba(0,0,0,.8);
+      z-index: 2;
+    }
+    .gcall-controls {
+      padding: 16px 0 28px; display: flex; gap: 16px;
+      justify-content: center;
+    }
 
     /* Chat header call buttons */
     .chat-call-btns {
@@ -3588,10 +3651,23 @@ function chatHandleWsEvent(parsed) {
       grpLogEvent('Member promoted to admin in ' + (parsed.roomId || parsed.groupId || '') + ': ' + (parsed.userId || ''), 'in');
       break;
     // ---- Group call events ----
-    case 'group_call_started':
-      grpLogEvent('Group call started in ' + (parsed.roomId || parsed.groupId || '') + ' — Call ID: ' + (parsed.callId || ''), 'in');
-      toast('Group call started!', 'info');
+    case 'group_call_started': {
+      const gRoomId = parsed.roomId || parsed.groupId || '';
+      const gCallId = parsed.callId || '';
+      const initiator = parsed.initiatedBy || '';
+      grpLogEvent('Group call started in ' + gRoomId + ' — Call ID: ' + gCallId, 'in');
+      // If we initiated this call ourselves, we're already connected — skip
+      if (initiator !== currentUserProfile?.id) {
+        const gName = chatState.roomMeta[gRoomId]?.name || 'Group';
+        const callType = parsed.callType || 'video';
+        toast(`📞 ${gName}: ${callType} call started! Click to join`, 'info');
+        // Show a join banner in the chat if this is the active room
+        if (chatState.activeRoomId === gRoomId) {
+          gcallShowJoinBanner(gRoomId, gCallId, callType);
+        }
+      }
       break;
+    }
     case 'group_call_participant_joined':
       grpLogEvent('Participant joined call ' + (parsed.callId || '') + ': ' + (parsed.userId || ''), 'in');
       break;
@@ -3601,10 +3677,14 @@ function chatHandleWsEvent(parsed) {
     case 'group_call_ended':
       grpLogEvent('Group call ended: ' + (parsed.callId || ''), 'in');
       toast('Group call ended', 'info');
+      if (gcallState.active && gcallState.callId === parsed.callId) gcallCleanup();
+      gcallRemoveJoinBanner();
       break;
     case 'group_call_force_ended':
       grpLogEvent('Group call FORCE-ENDED by admin: ' + (parsed.callId || ''), 'in');
       toast('Group call force-ended by admin', 'warning');
+      if (gcallState.active && gcallState.callId === parsed.callId) gcallCleanup();
+      gcallRemoveJoinBanner();
       break;
     case 'group_call_participant_muted':
       grpLogEvent('Participant muted in call ' + (parsed.callId || '') + ': ' + (parsed.userId || '') + ' [' + (parsed.trackType || '') + ']', 'in');
@@ -3614,7 +3694,13 @@ function chatHandleWsEvent(parsed) {
       break;
     case 'group_call_participant_kicked':
       grpLogEvent('Participant KICKED from call ' + (parsed.callId || '') + ': ' + (parsed.userId || ''), 'in');
-      toast('Participant kicked from call', 'warning');
+      // If I was kicked, leave the call
+      if (parsed.userId === currentUserProfile?.id && gcallState.active && gcallState.callId === parsed.callId) {
+        toast('You were kicked from the call', 'warning');
+        gcallCleanup();
+      } else {
+        toast('Participant kicked from call', 'warning');
+      }
       break;
     case 'group_call_admin_granted':
       grpLogEvent('Call admin granted in ' + (parsed.callId || '') + ': ' + (parsed.userId || ''), 'in');
@@ -4674,22 +4760,404 @@ function callUpdateHeaderButtons(roomId) {
 async function chatStartGroupCall(callType) {
   const roomId = chatState.activeRoomId;
   if (!roomId) return toast('No active room', 'error');
+  if (gcallState.active) return toast('Already in a group call', 'error');
+
   const r = await apiCall('POST', '/api/v1/groups/' + encodeURIComponent(roomId) + '/calls', { callType }, null);
   if (r.status >= 200 && r.status < 300 && r.data) {
-    toast('Group ' + callType + ' call started! Call ID: ' + (r.data.callId || ''), 'success');
+    const { callId, token, livekitUrl } = r.data;
+    toast('Group ' + callType + ' call started!', 'success');
+
     // Auto-fill call ID in Groups tab for convenience
-    if (r.data.callId) {
+    if (callId) {
       ['grpCallJoinCallId','grpCallLeaveCallId','grpCallStatusCallId','grpMuteCallId','grpKickCallId','grpCallAdminCallId','grpEndCallCallId'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.value = r.data.callId;
+        if (el) el.value = callId;
       });
       ['grpCallJoinGroupId','grpCallLeaveGroupId','grpCallStatusGroupId','grpMuteGroupId','grpKickGroupId','grpCallAdminGroupId','grpEndCallGroupId'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.value = roomId;
       });
     }
+
+    // Connect to LiveKit and show the call screen
+    await gcallConnect(roomId, callId, callType, token, livekitUrl);
   } else {
     toast('Failed to start group call: ' + (r.data?.error || r.text || 'unknown error'), 'error');
+  }
+}
+
+// ======================================================================
+//  GROUP CALL (LiveKit SFU)
+// ======================================================================
+
+const gcallState = {
+  active: false,
+  roomId: null,
+  callId: null,
+  callType: null,
+  isMuted: false,
+  isCamOff: true,
+  isScreenSharing: false,
+  lkRoom: null,         // LiveKit Room instance
+  localStream: null,
+  screenStream: null,
+  timerInterval: null,
+  callStartTime: null,
+  participants: new Map(), // identity -> { videoTrack, audioTrack, name, el }
+};
+
+async function gcallConnect(roomId, callId, callType, token, livekitUrl) {
+  if (typeof LivekitClient === 'undefined') {
+    toast('LiveKit SDK not loaded — cannot connect to group call', 'error');
+    return;
+  }
+
+  gcallState.active = true;
+  gcallState.roomId = roomId;
+  gcallState.callId = callId;
+  gcallState.callType = callType;
+  gcallState.isMuted = false;
+  gcallState.isCamOff = callType !== 'video';
+
+  // Show overlay
+  const groupName = chatState.roomMeta[roomId]?.name || 'Group Call';
+  document.getElementById('gcallGroupName').textContent = groupName;
+  document.getElementById('gcallStatus').textContent = 'Connecting...';
+  document.getElementById('gcallTimer').textContent = '';
+  document.getElementById('gcallParticipantsGrid').innerHTML = '';
+  document.getElementById('gcallOverlay').classList.remove('hidden');
+  gcallUpdateControlButtons();
+
+  try {
+    const lkRoom = new LivekitClient.Room({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+
+    // ---- LiveKit event handlers ----
+    lkRoom.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      gcallHandleTrackSubscribed(track, participant);
+    });
+
+    lkRoom.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+      gcallHandleTrackUnsubscribed(track, participant);
+    });
+
+    lkRoom.on(LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
+      gcallAddParticipantTile(participant);
+    });
+
+    lkRoom.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+      gcallRemoveParticipantTile(participant.identity);
+    });
+
+    lkRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
+      toast('Disconnected from group call', 'info');
+      gcallCleanup();
+    });
+
+    lkRoom.on(LivekitClient.RoomEvent.LocalTrackPublished, (publication, participant) => {
+      // Make sure local participant tile shows their video
+      if (publication.track && publication.track.kind === 'video' && publication.source !== 'screen_share') {
+        gcallAttachLocalVideo(publication.track);
+      }
+    });
+
+    // Connect to LiveKit
+    await lkRoom.connect(livekitUrl, token);
+    gcallState.lkRoom = lkRoom;
+
+    document.getElementById('gcallStatus').textContent = callType + ' call • ' + lkRoom.numParticipants + ' participant(s)';
+    gcallStartTimer();
+
+    // Publish local tracks
+    const withVideo = callType === 'video';
+    await lkRoom.localParticipant.enableCameraAndMicrophone
+      ? await lkRoom.localParticipant.setCameraEnabled(withVideo).catch(() => {})
+      : null;
+    await lkRoom.localParticipant.setMicrophoneEnabled(true).catch(() => {});
+
+    // Add local participant tile
+    gcallAddParticipantTile(lkRoom.localParticipant, true);
+
+    // Add already-connected remote participants
+    lkRoom.remoteParticipants.forEach(p => {
+      gcallAddParticipantTile(p);
+      p.trackPublications.forEach(pub => {
+        if (pub.track && pub.isSubscribed) {
+          gcallHandleTrackSubscribed(pub.track, p);
+        }
+      });
+    });
+
+  } catch (e) {
+    console.error('LiveKit connect failed:', e);
+    toast('Failed to connect to call: ' + e.message, 'error');
+    gcallCleanup();
+  }
+}
+
+function gcallAddParticipantTile(participant, isLocal = false) {
+  const identity = participant.identity;
+  if (document.getElementById('gcall-p-' + identity)) return; // already exists
+
+  const name = participant.name || participant.identity || 'Unknown';
+  const initial = name.charAt(0).toUpperCase();
+
+  const tile = document.createElement('div');
+  tile.className = 'gcall-participant';
+  tile.id = 'gcall-p-' + identity;
+  tile.innerHTML = `
+    <div class="gcall-avatar" id="gcall-avatar-${identity}"><span>${escapeHtml(initial)}</span></div>
+    <div class="gcall-pname" id="gcall-name-${identity}">${escapeHtml(name)}${isLocal ? ' (You)' : ''}</div>
+    <video id="gcall-vid-${identity}" autoplay playsinline ${isLocal ? 'muted' : ''} style="display:none"></video>
+    <div class="gcall-pname-overlay" id="gcall-nameov-${identity}" style="display:none">${escapeHtml(name)}${isLocal ? ' (You)' : ''}</div>
+  `;
+
+  document.getElementById('gcallParticipantsGrid').appendChild(tile);
+  gcallState.participants.set(identity, { name, isLocal });
+
+  // If local and camera is publishing, attach it
+  if (isLocal && gcallState.lkRoom) {
+    const camPub = gcallState.lkRoom.localParticipant.getTrackPublication(LivekitClient.Track.Source.Camera);
+    if (camPub && camPub.track) {
+      gcallAttachLocalVideo(camPub.track);
+    }
+  }
+
+  gcallUpdateParticipantCount();
+}
+
+function gcallRemoveParticipantTile(identity) {
+  const el = document.getElementById('gcall-p-' + identity);
+  if (el) el.remove();
+  gcallState.participants.delete(identity);
+  gcallUpdateParticipantCount();
+}
+
+function gcallHandleTrackSubscribed(track, participant) {
+  const identity = participant.identity;
+  if (!document.getElementById('gcall-p-' + identity)) {
+    gcallAddParticipantTile(participant);
+  }
+
+  if (track.kind === 'video' && track.source !== 'screen_share') {
+    const vidEl = document.getElementById('gcall-vid-' + identity);
+    const avatarEl = document.getElementById('gcall-avatar-' + identity);
+    const nameEl = document.getElementById('gcall-name-' + identity);
+    const nameOvEl = document.getElementById('gcall-nameov-' + identity);
+    if (vidEl) {
+      track.attach(vidEl);
+      vidEl.style.display = '';
+      if (avatarEl) avatarEl.style.display = 'none';
+      if (nameEl) nameEl.style.display = 'none';
+      if (nameOvEl) nameOvEl.style.display = '';
+    }
+  } else if (track.kind === 'audio') {
+    // Audio tracks need to be attached to play
+    const audioEl = track.attach();
+    audioEl.id = 'gcall-audio-' + identity;
+    document.body.appendChild(audioEl);
+  }
+}
+
+function gcallHandleTrackUnsubscribed(track, participant) {
+  const identity = participant.identity;
+  if (track.kind === 'video' && track.source !== 'screen_share') {
+    const vidEl = document.getElementById('gcall-vid-' + identity);
+    const avatarEl = document.getElementById('gcall-avatar-' + identity);
+    const nameEl = document.getElementById('gcall-name-' + identity);
+    const nameOvEl = document.getElementById('gcall-nameov-' + identity);
+    if (vidEl) {
+      track.detach(vidEl);
+      vidEl.style.display = 'none';
+      if (avatarEl) avatarEl.style.display = '';
+      if (nameEl) nameEl.style.display = '';
+      if (nameOvEl) nameOvEl.style.display = 'none';
+    }
+  } else if (track.kind === 'audio') {
+    const audioEl = document.getElementById('gcall-audio-' + identity);
+    if (audioEl) {
+      track.detach(audioEl);
+      audioEl.remove();
+    }
+  }
+}
+
+function gcallAttachLocalVideo(track) {
+  const myIdentity = gcallState.lkRoom?.localParticipant?.identity;
+  if (!myIdentity) return;
+  const vidEl = document.getElementById('gcall-vid-' + myIdentity);
+  const avatarEl = document.getElementById('gcall-avatar-' + myIdentity);
+  const nameEl = document.getElementById('gcall-name-' + myIdentity);
+  const nameOvEl = document.getElementById('gcall-nameov-' + myIdentity);
+  if (vidEl) {
+    track.attach(vidEl);
+    vidEl.style.display = '';
+    if (avatarEl) avatarEl.style.display = 'none';
+    if (nameEl) nameEl.style.display = 'none';
+    if (nameOvEl) nameOvEl.style.display = '';
+  }
+}
+
+// ---- Controls ----
+async function gcallToggleMic() {
+  if (!gcallState.lkRoom) return;
+  gcallState.isMuted = !gcallState.isMuted;
+  await gcallState.lkRoom.localParticipant.setMicrophoneEnabled(!gcallState.isMuted).catch(e => {
+    toast('Mic toggle failed: ' + e.message, 'error');
+  });
+  gcallUpdateControlButtons();
+}
+
+async function gcallToggleCam() {
+  if (!gcallState.lkRoom) return;
+  gcallState.isCamOff = !gcallState.isCamOff;
+  await gcallState.lkRoom.localParticipant.setCameraEnabled(!gcallState.isCamOff).catch(e => {
+    toast('Camera toggle failed: ' + e.message, 'error');
+  });
+
+  // Update local tile
+  const myIdentity = gcallState.lkRoom.localParticipant.identity;
+  const vidEl = document.getElementById('gcall-vid-' + myIdentity);
+  const avatarEl = document.getElementById('gcall-avatar-' + myIdentity);
+  const nameEl = document.getElementById('gcall-name-' + myIdentity);
+  const nameOvEl = document.getElementById('gcall-nameov-' + myIdentity);
+  if (gcallState.isCamOff) {
+    if (vidEl) vidEl.style.display = 'none';
+    if (avatarEl) avatarEl.style.display = '';
+    if (nameEl) nameEl.style.display = '';
+    if (nameOvEl) nameOvEl.style.display = 'none';
+  }
+  gcallUpdateControlButtons();
+}
+
+async function gcallToggleScreen() {
+  if (!gcallState.lkRoom) return;
+  gcallState.isScreenSharing = !gcallState.isScreenSharing;
+  await gcallState.lkRoom.localParticipant.setScreenShareEnabled(gcallState.isScreenSharing).catch(e => {
+    gcallState.isScreenSharing = false;
+    if (e.name !== 'NotAllowedError') toast('Screen share failed: ' + e.message, 'error');
+  });
+  gcallUpdateControlButtons();
+}
+
+function gcallUpdateControlButtons() {
+  const micBtn = document.getElementById('gcallBtnMic');
+  const camBtn = document.getElementById('gcallBtnCam');
+  const screenBtn = document.getElementById('gcallBtnScreen');
+
+  micBtn.className = 'call-ctrl-btn ' + (gcallState.isMuted ? 'muted' : 'active');
+  micBtn.innerHTML = gcallState.isMuted ? '🔇' : '🎤';
+
+  camBtn.className = 'call-ctrl-btn ' + (gcallState.isCamOff ? 'off' : 'active');
+  camBtn.innerHTML = gcallState.isCamOff ? '📷' : '📹';
+
+  screenBtn.className = 'call-ctrl-btn screen-share' + (gcallState.isScreenSharing ? ' active' : '');
+}
+
+// ---- Leave call ----
+async function gcallLeave() {
+  if (!gcallState.active) return;
+  // Tell the server
+  if (gcallState.roomId && gcallState.callId) {
+    await apiCall('POST',
+      '/api/v1/groups/' + encodeURIComponent(gcallState.roomId) + '/calls/' + encodeURIComponent(gcallState.callId) + '/leave',
+      null, null
+    ).catch(() => {});
+  }
+  gcallCleanup();
+  toast('Left group call', 'info');
+}
+
+function gcallCleanup() {
+  // Disconnect from LiveKit
+  if (gcallState.lkRoom) {
+    gcallState.lkRoom.disconnect(true);
+    gcallState.lkRoom = null;
+  }
+
+  // Remove any injected audio elements
+  document.querySelectorAll('[id^="gcall-audio-"]').forEach(el => el.remove());
+
+  // Stop timer
+  if (gcallState.timerInterval) {
+    clearInterval(gcallState.timerInterval);
+    gcallState.timerInterval = null;
+  }
+
+  gcallState.active = false;
+  gcallState.roomId = null;
+  gcallState.callId = null;
+  gcallState.callType = null;
+  gcallState.isMuted = false;
+  gcallState.isCamOff = true;
+  gcallState.isScreenSharing = false;
+  gcallState.callStartTime = null;
+  gcallState.participants.clear();
+
+  document.getElementById('gcallOverlay').classList.add('hidden');
+  document.getElementById('gcallParticipantsGrid').innerHTML = '';
+}
+
+function gcallStartTimer() {
+  gcallState.callStartTime = Date.now();
+  if (gcallState.timerInterval) clearInterval(gcallState.timerInterval);
+  gcallState.timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - gcallState.callStartTime) / 1000);
+    const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const secs = String(elapsed % 60).padStart(2, '0');
+    document.getElementById('gcallTimer').textContent = mins + ':' + secs;
+  }, 1000);
+}
+
+function gcallUpdateParticipantCount() {
+  const count = gcallState.participants.size;
+  const type = gcallState.callType || 'call';
+  document.getElementById('gcallStatus').textContent = type + ' call • ' + count + ' participant' + (count !== 1 ? 's' : '');
+}
+
+// ---- Join banner (shown in chat area when a group call is active) ----
+function gcallShowJoinBanner(roomId, callId, callType) {
+  gcallRemoveJoinBanner();
+  const banner = document.createElement('div');
+  banner.id = 'gcallJoinBanner';
+  banner.style.cssText = 'background:linear-gradient(135deg,#128c7e,#25d366);color:#fff;padding:12px 16px;' +
+    'display:flex;align-items:center;justify-content:space-between;border-radius:10px;margin:8px 12px;cursor:pointer;' +
+    'animation:callFadeIn .3s ease;font-size:.88rem;font-weight:500;';
+  banner.innerHTML = `<span>\ud83d\udcde ${callType} call in progress — tap to join</span>` +
+    `<button onclick="gcallJoinExisting('${escapeHtml(roomId)}','${escapeHtml(callId)}')" ` +
+    `style="background:#fff;color:#128c7e;border:none;padding:6px 16px;border-radius:6px;font-weight:600;cursor:pointer;font-size:.82rem">Join</button>`;
+  const chatArea = document.getElementById('chatMessages');
+  if (chatArea) chatArea.parentNode.insertBefore(banner, chatArea);
+}
+
+function gcallRemoveJoinBanner() {
+  const b = document.getElementById('gcallJoinBanner');
+  if (b) b.remove();
+}
+
+// ---- Join an existing group call (from WS notification or Groups tab) ----
+async function gcallJoinExisting(roomId, callId) {
+  if (gcallState.active) return toast('Already in a group call', 'error');
+  const r = await apiCall('POST',
+    '/api/v1/groups/' + encodeURIComponent(roomId) + '/calls/' + encodeURIComponent(callId) + '/join',
+    null, null
+  );
+  if (r.status >= 200 && r.status < 300 && r.data) {
+    const { token, livekitUrl } = r.data;
+    // Determine call type from status or default to video
+    let callType = 'video';
+    try {
+      const statusR = await apiCall('GET',
+        '/api/v1/groups/' + encodeURIComponent(roomId) + '/calls/' + encodeURIComponent(callId),
+        null, null
+      );
+      if (statusR.data?.callType) callType = statusR.data.callType;
+    } catch (e) {}
+    await gcallConnect(roomId, callId, callType, token, livekitUrl);
+  } else {
+    toast('Failed to join call: ' + (r.data?.error || 'unknown error'), 'error');
   }
 }
 </script>
@@ -4725,6 +5193,24 @@ async function chatStartGroupCall(callType) {
       <button class="reject-call" onclick="callRejectIncoming()" title="Decline">📕</button>
       <button class="accept-call" onclick="callAcceptIncoming()" title="Accept">📞</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== GROUP CALL OVERLAY ===== -->
+<div class="gcall-overlay hidden" id="gcallOverlay">
+  <div class="gcall-header">
+    <div class="gcall-group-name" id="gcallGroupName">Group Call</div>
+    <div class="gcall-status" id="gcallStatus">Connecting...</div>
+    <div class="gcall-timer" id="gcallTimer"></div>
+  </div>
+  <div class="gcall-participants-grid" id="gcallParticipantsGrid">
+    <!-- Participant tiles rendered dynamically -->
+  </div>
+  <div class="gcall-controls">
+    <button class="call-ctrl-btn active" id="gcallBtnMic" onclick="gcallToggleMic()" title="Toggle microphone">🎤</button>
+    <button class="call-ctrl-btn off" id="gcallBtnCam" onclick="gcallToggleCam()" title="Toggle camera">📷</button>
+    <button class="call-ctrl-btn screen-share" id="gcallBtnScreen" onclick="gcallToggleScreen()" title="Share screen">🖥️</button>
+    <button class="call-ctrl-btn hangup" onclick="gcallLeave()" title="Leave call">📕</button>
   </div>
 </div>
 
