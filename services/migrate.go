@@ -241,6 +241,42 @@ var migrationStatements = []string{
 
 	// --- Migrations / Alterations ---
 	`DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='call_logs' AND column_name='call_id' AND data_type='uuid') THEN ALTER TABLE call_logs ALTER COLUMN call_id TYPE TEXT; END IF; END $$`,
+
+	// ===================================================================
+	// GROUP CHAT SUPPORT — rooms augmentation
+	// ===================================================================
+
+	// Add group-specific columns to rooms
+	`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT ''`,
+	`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL`,
+	`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS max_members INT NOT NULL DEFAULT 50`,
+
+	// Add role column to room_members (admin / member)
+	`ALTER TABLE room_members ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member'`,
+
+	// Add join/leave timestamps for membership history
+	`ALTER TABLE room_members ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+	`ALTER TABLE room_members ADD COLUMN IF NOT EXISTS left_at TIMESTAMPTZ`,
+
+	// Partial index for fast active member listing per room
+	`CREATE INDEX IF NOT EXISTS idx_room_members_active ON room_members (room_id) WHERE status = 'active'`,
+
+	// ===================================================================
+	// GROUP CALL SUPPORT — call_logs augmentation
+	// ===================================================================
+
+	// Add participants array to track who joined group calls
+	`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS participants TEXT[] DEFAULT '{}'`,
+
+	// Relax max_participants default to 50 for group calls
+	`ALTER TABLE call_logs ALTER COLUMN max_participants SET DEFAULT 50`,
+
+	// ===================================================================
+	// PERFORMANCE INDEX: call_logs by initiator (for GetCallHistoryHandler)
+	// The OR EXISTS query benefits from a covering index on initiated_by
+	// to avoid sequential scans of the call_logs table.
+	// ===================================================================
+	`CREATE INDEX IF NOT EXISTS idx_call_logs_initiated_by ON call_logs (initiated_by, started_at DESC)`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

@@ -208,7 +208,8 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, ctxCancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer ctxCancel()
 	rdb := redis.GetRawClient()
 
 	// Resolve partner: prefer server-side lookup from Redis stranger_members set,

@@ -61,3 +61,34 @@ func init() {
 func ContainsProfanity(s string) bool {
 	return profanityRegex.MatchString(s)
 }
+
+// ---------------------------------------------------------------------------
+// @Mention Extraction
+//
+// Parses @username mentions from message text. Returns a deduplicated list
+// of mentioned usernames (without the @ prefix). These are later resolved
+// to user IDs in the message payload.
+// ---------------------------------------------------------------------------
+
+var mentionRegex = regexp.MustCompile(`@([a-zA-Z0-9_]{1,30})`)
+
+// ExtractMentions parses @username mentions from text and returns unique usernames.
+func ExtractMentions(s string) []string {
+	if strings.IndexByte(s, '@') == -1 {
+		return nil
+	}
+	matches := mentionRegex.FindAllStringSubmatch(s, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(matches))
+	result := make([]string, 0, len(matches))
+	for _, m := range matches {
+		username := m[1]
+		if !seen[username] {
+			seen[username] = true
+			result = append(result, username)
+		}
+	}
+	return result
+}

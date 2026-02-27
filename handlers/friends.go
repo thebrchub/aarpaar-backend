@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"net/http"
 
@@ -12,8 +11,6 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // ---------------------------------------------------------------------------
@@ -477,9 +474,10 @@ func acceptFriendship(w http.ResponseWriter, accepterID, requesterID string, req
 }
 
 // ---------------------------------------------------------------------------
-// enrichFriendsWithOnlineStatus injects "is_online" into each friend in the
-// JSON array using gjson/sjson for surgical byte-level modification. This
-// avoids the full deserialize→re-serialize cycle. (P2-3 fix)
+// enrichFriendsWithOnlineStatus injects "is_online" into each friend by
+// deserializing into lightweight structs, setting the field, and
+// re-serializing once. This replaces the previous sjson.SetBytes approach
+// which was O(N²) — each call copied the entire growing JSON buffer.
 // ---------------------------------------------------------------------------
 
 func enrichFriendsWithOnlineStatus(raw []byte) []byte {
@@ -488,22 +486,27 @@ func enrichFriendsWithOnlineStatus(raw []byte) []byte {
 		return raw
 	}
 
-	result := raw
-	friends := gjson.ParseBytes(raw)
-	if !friends.IsArray() {
+	type friend struct {
+		ID        string  `json:"id"`
+		Username  *string `json:"username,omitempty"`
+		Name      *string `json:"name,omitempty"`
+		AvatarURL *string `json:"avatar_url,omitempty"`
+		LastSeen  *string `json:"last_seen_at,omitempty"`
+		IsOnline  bool    `json:"is_online"`
+	}
+
+	var friends []friend
+	if err := json.Unmarshal(raw, &friends); err != nil {
 		return raw
 	}
 
-	var idx int64
-	friends.ForEach(func(_, friend gjson.Result) bool {
-		id := friend.Get("id").String()
-		if id != "" {
-			path := fmt.Sprintf("%d.is_online", idx)
-			result, _ = sjson.SetBytes(result, path, e.IsUserOnline(id))
-		}
-		idx++
-		return true
-	})
+	for i := range friends {
+		friends[i].IsOnline = e.IsUserOnline(friends[i].ID)
+	}
 
-	return result
+	enriched, err := json.Marshal(friends)
+	if err != nil {
+		return raw
+	}
+	return enriched
 }

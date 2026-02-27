@@ -429,7 +429,9 @@ func (e *Engine) subscribeAndListen() {
 				}
 
 			// Call events broadcast to entire room (group call started, participants list)
-			case config.MsgTypeCallStarted, config.MsgTypeCallParticipants, config.MsgTypeSFURedirect:
+			case config.MsgTypeCallStarted, config.MsgTypeCallParticipants, config.MsgTypeSFURedirect,
+				config.MsgTypeGroupCallStarted, config.MsgTypeGroupCallParticipantJoined,
+				config.MsgTypeGroupCallParticipantLeft, config.MsgTypeGroupCallEnded:
 				if targetUser != "" {
 					e.deliverToUser(targetUser, payload)
 				} else if roomID != "" {

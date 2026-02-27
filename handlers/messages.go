@@ -82,6 +82,8 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
 			SELECT m.id, m.sender_id, m.content, m.created_at,
+				COALESCE(u.name, '') AS sender_name,
+				COALESCE(u.avatar_url, '') AS sender_avatar,
 				CASE
 					WHEN m.sender_id = $4 THEN
 						CASE
@@ -91,7 +93,9 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 						END
 					ELSE NULL
 				END AS status
-			FROM messages m, receipt_times rt
+			FROM messages m
+			LEFT JOIN users u ON u.id = m.sender_id
+			CROSS JOIN receipt_times rt
 			WHERE m.room_id = $1 AND m.id < $2
 			ORDER BY m.id DESC
 			LIMIT $3

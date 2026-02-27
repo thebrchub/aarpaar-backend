@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
@@ -96,15 +97,28 @@ func clearActiveCall(userID string) {
 	redis.GetRawClient().Del(ctx, config.CALL_ACTIVE_COLON+userID)
 }
 
-// markCallAnswered updates the call state to reflect that the call was accepted.
+// markCallAnsweredScript is a Lua script for atomic read-modify-write of call state.
+// This prevents race conditions when multiple devices send call_accept simultaneously.
+var markCallAnsweredScript = goredis.NewScript(`
+	local val = redis.call('GET', KEYS[1])
+	if not val then return nil end
+	local call = cjson.decode(val)
+	call.answered = true
+	call.startedAt = ARGV[1]
+	redis.call('SET', KEYS[1], cjson.encode(call), 'KEEPTTL')
+	return 1
+`)
+
+// markCallAnswered atomically updates the call state to reflect that the call
+// was accepted. Uses a Lua script to prevent GET-then-SET race conditions.
 func markCallAnswered(userID string) {
-	call := getActiveCall(userID)
-	if call == nil {
-		return
+	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+	defer cancel()
+	key := config.CALL_ACTIVE_COLON + userID
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := markCallAnsweredScript.Run(ctx, redis.GetRawClient(), []string{key}, now).Err(); err != nil {
+		log.Printf("[calls] markCallAnswered Lua failed user=%s: %v", userID, err)
 	}
-	call.Answered = true
-	call.StartedAt = time.Now().UTC() // reset to actual connection time for duration calc
-	setActiveCall(userID, call)
 }
 
 // ---------------------------------------------------------------------------
@@ -466,9 +480,13 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 	}
 
 	// --- Relay the message via Redis Pub/Sub (stamp sender) ---
-	payload = append(c.fromPrefix, payload[1:]...)
+	// NOTE: We must allocate a new slice — append(c.fromPrefix, ...) can
+	// mutate the fromPrefix backing array if it has spare capacity.
+	stamped := make([]byte, 0, len(c.fromPrefix)+len(payload)-1)
+	stamped = append(stamped, c.fromPrefix...)
+	stamped = append(stamped, payload[1:]...)
 	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
-	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, payload)
+	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, stamped)
 	cancel()
 
 	return true
@@ -570,6 +588,15 @@ func startOrphanCallScanner(done <-chan struct{}) {
 
 // scanOrphanCalls checks all active call states and cleans up orphans.
 func scanOrphanCalls() {
+	// Scan P2P call states
+	scanOrphanP2PCalls()
+
+	// Scan group call states
+	ScanOrphanGroupCalls()
+}
+
+// scanOrphanP2PCalls checks P2P (1:1) active call states.
+func scanOrphanP2PCalls() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

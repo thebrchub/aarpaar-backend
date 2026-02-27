@@ -65,6 +65,7 @@ const (
 	FRIEND_REQUEST_COLON   = "friend_req:"            // friend_req:{room_id}:{user_id} -> One-sided friend request marker
 	STRANGER_MEMBERS_COLON = "stranger_members:"      // stranger_members:{room_id} -> Set of both user IDs in a stranger room
 	CALL_ACTIVE_COLON      = "call:active:"           // call:active:{user_id} -> JSON call state (tracks active calls per user)
+	GROUP_CALL_COLON       = "group_call:"            // group_call:{roomId} -> hash with callId, initiatedBy, startedAt, participants
 )
 
 // ---------------------------------------------------------------------------
