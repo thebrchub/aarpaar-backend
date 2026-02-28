@@ -194,10 +194,12 @@ func (c *Client) readPump() {
 				continue
 			}
 			now := time.Now().UTC().Format(time.RFC3339)
-			// Buffer the read receipt in Redis hash — flusher will batch-UPDATE Postgres
 			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
 			pipe := redis.GetRawClient().Pipeline()
-			pipe.HSet(ctx, config.CHAT_READ_RECEIPTS, roomID+":"+c.UserID, now)
+			// Stranger chats are ephemeral — only broadcast, don't persist to Postgres
+			if !strings.HasPrefix(roomID, config.STRANGER_PREFIX) {
+				pipe.HSet(ctx, config.CHAT_READ_RECEIPTS, roomID+":"+c.UserID, now)
+			}
 			// Broadcast read receipt to room members for real-time blue ticks
 			readReceipt, _ := json.Marshal(map[string]string{
 				config.FieldType:   config.MsgTypeMessageRead,
@@ -227,10 +229,12 @@ func (c *Client) readPump() {
 				continue
 			}
 			now := time.Now().UTC().Format(time.RFC3339)
-			// Buffer the delivery receipt in Redis hash — flusher will batch-UPDATE Postgres
 			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
 			pipe := redis.GetRawClient().Pipeline()
-			pipe.HSet(ctx, config.CHAT_DELIVERY_RECEIPTS, roomID+":"+c.UserID, now)
+			// Stranger chats are ephemeral — only broadcast, don't persist to Postgres
+			if !strings.HasPrefix(roomID, config.STRANGER_PREFIX) {
+				pipe.HSet(ctx, config.CHAT_DELIVERY_RECEIPTS, roomID+":"+c.UserID, now)
+			}
 			// Broadcast delivery receipt so the sender sees double ticks
 			deliveryReceipt, _ := json.Marshal(map[string]string{
 				config.FieldType:        config.MsgTypeMessageDelivered,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"hash/fnv"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -588,14 +589,17 @@ func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 
 	// Buffer last_delivered_at for each online recipient in Redis hash
 	// The flusher will batch-UPDATE them to Postgres every FlushInterval.
-	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
-	defer cancel()
-	pipe := redis.GetRawClient().Pipeline()
-	for uid := range recipientIDs {
-		pipe.HSet(ctx, config.CHAT_DELIVERY_RECEIPTS, roomID+":"+uid, now)
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		log.Printf("[engine] delivery receipt buffer failed room=%s: %v", roomID, err)
+	// Stranger chats are ephemeral — skip persisting their receipts.
+	if !strings.HasPrefix(roomID, config.STRANGER_PREFIX) {
+		ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+		defer cancel()
+		pipe := redis.GetRawClient().Pipeline()
+		for uid := range recipientIDs {
+			pipe.HSet(ctx, config.CHAT_DELIVERY_RECEIPTS, roomID+":"+uid, now)
+		}
+		if _, err := pipe.Exec(ctx); err != nil {
+			log.Printf("[engine] delivery receipt buffer failed room=%s: %v", roomID, err)
+		}
 	}
 }
 

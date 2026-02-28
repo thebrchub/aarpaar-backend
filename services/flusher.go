@@ -343,8 +343,13 @@ func flushReceiptHash(redisKey string, column string) {
 		if sepIdx <= 0 {
 			continue
 		}
+		roomID := fieldStr[:sepIdx]
+		// Stranger chats are ephemeral — skip persisting their receipts
+		if strings.HasPrefix(roomID, config.STRANGER_PREFIX) {
+			continue
+		}
 		entries = append(entries, receiptEntry{
-			roomID: fieldStr[:sepIdx],
+			roomID: roomID,
 			userID: fieldStr[sepIdx+1:],
 			ts:     valueStr,
 		})

@@ -639,8 +639,10 @@ func handleBotReply(session *BotSession, userText string) {
 	}
 	sendBotMessage(ctx, session, mainReply)
 
-	// If there's a follow-up question, send it as a separate message after a pause
-	if followUp != "" {
+	// If there's a follow-up question, send it as a separate message after a pause.
+	// Skip the follow-up if the main reply already contains a question mark —
+	// sending two questions back-to-back sounds unnatural.
+	if followUp != "" && !strings.Contains(mainReply, "?") {
 		select {
 		case <-session.done:
 			return
