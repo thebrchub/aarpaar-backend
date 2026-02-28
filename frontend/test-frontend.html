@@ -737,6 +737,17 @@
       0%, 100% { opacity: 1; } 50% { opacity: .4; }
     }
 
+    /* Header join-call button (shown near group title) */
+    .gcall-header-join {
+      display: none; align-items: center; gap: 6px;
+      background: #25d366; color: #fff; border: none; border-radius: 18px;
+      padding: 5px 14px; font-size: .78rem; font-weight: 600;
+      cursor: pointer; white-space: nowrap; animation: callPulse 2s ease infinite;
+      margin-left: 10px;
+    }
+    .gcall-header-join:hover { background: #1da851; }
+    .gcall-header-join.visible { display: inline-flex; }
+
     /* Chat header call buttons */
     .chat-call-btns {
       display: flex; gap: 6px; margin-left: 8px;
@@ -1896,6 +1907,7 @@
                 <div class="chat-contact-name" id="chatHeaderName">&mdash;</div>
                 <div class="chat-typing-text hidden" id="chatTypingIndicator">typing...</div>
               </div>
+              <button class="gcall-header-join" id="gcallHeaderJoinBtn" onclick="gcallHeaderJoinClick()">📞 Join Call</button>
               <div class="chat-call-btns" id="chatCallBtns" style="display:none">
                 <button class="chat-call-btn" onclick="callStartAudio()" title="Voice call">📞</button>
                 <button class="chat-call-btn" onclick="callStartVideo()" title="Video call">📹</button>
@@ -3715,9 +3727,9 @@ function chatHandleWsEvent(parsed) {
       if (initiator !== currentUserProfile?.id) {
         // Show incoming call popup (like 1-1 calls)
         gcallShowIncomingPopup(gRoomId, gCallId, callType, initiator);
-        // Also show join banner if this room is currently open
+        // Also show header join button if this room is currently open
         if (chatState.activeRoomId === gRoomId) {
-          gcallShowJoinBanner(gRoomId, gCallId, callType);
+          gcallShowHeaderJoin(gRoomId, gCallId, callType);
         }
       }
       break;
@@ -3736,6 +3748,7 @@ function chatHandleWsEvent(parsed) {
       activeGroupCalls.delete(endedRoomId);
       gcallUpdateSidebarIndicators();
       gcallRemoveJoinBanner();
+      gcallHideHeaderJoin();
       // Dismiss incoming popup if it was for this call
       if (gcallIncomingData && gcallIncomingData.callId === parsed.callId) gcallDismissIncoming();
       break;
@@ -3748,6 +3761,7 @@ function chatHandleWsEvent(parsed) {
       activeGroupCalls.delete(fEndedRoomId);
       gcallUpdateSidebarIndicators();
       gcallRemoveJoinBanner();
+      gcallHideHeaderJoin();
       if (gcallIncomingData && gcallIncomingData.callId === parsed.callId) gcallDismissIncoming();
       break;
     }
@@ -5239,15 +5253,41 @@ function gcallShowJoinBanner(roomId, callId, callType) {
 function gcallRemoveJoinBanner() {
   const b = document.getElementById('gcallJoinBanner');
   if (b) b.remove();
+  gcallHideHeaderJoin();
 }
 
-// ---- Show banner when selecting a room that has an active call ----
+// ---- Show header join button when selecting a room that has an active call ----
 function gcallCheckAndShowBanner(roomId) {
   gcallRemoveJoinBanner();
   const callInfo = activeGroupCalls.get(roomId);
   if (callInfo && !(gcallState.active && gcallState.callId === callInfo.callId)) {
-    gcallShowJoinBanner(roomId, callInfo.callId, callInfo.callType);
+    gcallShowHeaderJoin(roomId, callInfo.callId, callInfo.callType);
   }
+}
+
+// ---- Header join button (near group title) ----
+let gcallHeaderJoinData = null;
+
+function gcallShowHeaderJoin(roomId, callId, callType) {
+  gcallHeaderJoinData = { roomId, callId, callType };
+  const btn = document.getElementById('gcallHeaderJoinBtn');
+  if (btn) {
+    btn.textContent = '📞 Join ' + callType + ' call';
+    btn.classList.add('visible');
+  }
+}
+
+function gcallHideHeaderJoin() {
+  gcallHeaderJoinData = null;
+  const btn = document.getElementById('gcallHeaderJoinBtn');
+  if (btn) btn.classList.remove('visible');
+}
+
+function gcallHeaderJoinClick() {
+  if (!gcallHeaderJoinData) return;
+  const { roomId, callId } = gcallHeaderJoinData;
+  gcallJoinExisting(roomId, callId);
+  gcallHideHeaderJoin();
 }
 
 // ---- Update sidebar to show call-active indicator ----
