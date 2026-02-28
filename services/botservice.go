@@ -104,20 +104,26 @@ func InitBot() {
 	}
 
 	// Create the single bot client with retrieval engine
+	//
+	// HumanizeRetrieval is disabled because the humanizer's strings.Fields()
+	// flattens the \n separator that maybeAskBack inserts between the response
+	// and follow-up question, concatenating them into one unnatural sentence.
+	// The corpus responses are already written to sound natural, so the
+	// humanizer (typos, fillers, emojis) actually degrades quality.
 	client, err := bot.NewClient(bot.Config{
 		CorpusData:        corpusData,
 		CorpusFormat:      "tsv",
-		AskBackRate:       0.6,
+		AskBackRate:       0.3,
 		HistorySize:       200,
 		MaxRetries:        15,
 		StrictMatch:       true,
-		HumanizeRetrieval: true,
+		HumanizeRetrieval: false,
 		Humanize: bot.HumanizeConfig{
-			Enabled:      true,
-			TypoRate:     0.015,
-			EmojiRate:    0.03,
-			FillerRate:   0.03,
-			FragmentRate: 0.02,
+			Enabled:      false,
+			TypoRate:     0,
+			EmojiRate:    0,
+			FillerRate:   0,
+			FragmentRate: 0,
 			CasingJitter: true,
 		},
 	})
