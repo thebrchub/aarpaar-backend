@@ -86,6 +86,12 @@ func main() {
 	log.Println("[boot] Message flusher started")
 
 	// -----------------------------------------------------------------------
+	// 5.5 INITIALIZE BOT SERVICE (Markov chain chatbot for match fallback)
+	// -----------------------------------------------------------------------
+	services.InitBot()
+	engine.OnUserOffline = services.CancelBotMatch
+
+	// -----------------------------------------------------------------------
 	// 6. RATE LIMITER (10 requests/sec per IP, burst of 20)
 	// -----------------------------------------------------------------------
 	limiter := middleware.NewIPRateLimiter(10, 20)
@@ -221,6 +227,10 @@ func main() {
 	// Close all WebSocket connections and stop Redis Pub/Sub listener
 	engine.Shutdown()
 	log.Println("[shutdown] WebSocket engine stopped")
+
+	// Stop all active bot sessions and close bot client
+	services.StopAllSessions()
+	log.Println("[shutdown] Bot service stopped")
 
 	// Stop the flusher (runs one final flush before returning)
 	services.StopFlusher()

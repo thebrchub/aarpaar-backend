@@ -56,6 +56,10 @@ type Engine struct {
 
 	// done is closed to signal the Redis listener to stop (graceful shutdown)
 	done chan struct{}
+
+	// OnUserOffline is called when a user's last device disconnects.
+	// Used by the bot service to cancel pending bot match timers.
+	OnUserOffline func(userID string)
 }
 
 // NewEngine creates the engine and starts the Redis listener.
@@ -202,6 +206,10 @@ func (e *Engine) Unregister(c *Client) {
 			redis.GetRawClient().SRem(ctx, config.DefaultMatchQueue, c.UserID)
 			cancel()
 		})
+		// Notify bot service to cancel any pending bot match timer
+		if e.OnUserOffline != nil {
+			runBackground(func() { e.OnUserOffline(c.UserID) })
+		}
 	}
 }
 

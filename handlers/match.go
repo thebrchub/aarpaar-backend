@@ -13,6 +13,7 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/thebrchub/aarpaar/services"
 )
 
 // ---------------------------------------------------------------------------
@@ -110,6 +111,10 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 		notifyMatch(ctx, userID, roomID)
 		notifyMatch(ctx, matchedPartner, roomID)
 
+		// Cancel any pending bot timers for both users
+		services.CancelBotMatch(userID)
+		services.CancelBotMatch(matchedPartner)
+
 		// Auto-subscribe both users to the stranger room (no join_room needed)
 		if e := chat.GetEngine(); e != nil {
 			e.JoinRoomForUser(userID, roomID)
@@ -126,6 +131,10 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 
 	// No match — add ourselves to the queue and wait for someone else
 	rdb.SAdd(ctx, queue, userID)
+
+	// Schedule a bot match fallback after BotMatchDelay
+	services.ScheduleBotMatch(userID)
+
 	JSONMessage(w, "queued", "Waiting for a match...")
 }
 
@@ -174,6 +183,9 @@ func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), config.RedisOpTimeout)
 	defer cancel()
 	redis.GetRawClient().SRem(ctx, config.DefaultMatchQueue, userID)
+
+	// Cancel any pending bot match timer
+	services.CancelBotMatch(userID)
 
 	JSONMessage(w, "success", "Removed from queue")
 }
@@ -234,10 +246,31 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// ---- Bot partner detection ----
+	isBot := services.IsBotUser(partnerID)
+
 	// ---- Friend request (mutual opt-in) ----
 	if req.Action == config.ActionFriend {
 		if partnerID == "" || req.RoomID == "" {
 			JSONError(w, "room_id is required", http.StatusBadRequest)
+			return
+		}
+
+		// Bot cannot be friended — auto-reject (bot "disconnects")
+		if isBot {
+			services.StopBotSession(req.RoomID)
+			notifyUser(ctx, userID, map[string]interface{}{
+				config.FieldType:   config.MsgTypeStrangerDisconnected,
+				config.FieldRoomID: req.RoomID,
+			})
+			rdb.Set(ctx, config.CHAT_CLOSED_COLON+req.RoomID, "1", 24*time.Hour)
+			rdb.Del(ctx, config.STRANGER_MEMBERS_COLON+req.RoomID)
+			closedEvent, _ := json.Marshal(map[string]string{
+				config.FieldType:   config.MsgTypeRoomClosed,
+				config.FieldRoomID: req.RoomID,
+			})
+			redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent)
+			JSONMessage(w, "disconnected", "Stranger has left the chat")
 			return
 		}
 
@@ -360,8 +393,13 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 
 	// ---- Skip / Block ----
 
-	// 1. If the action is "block", save it to Postgres
-	if req.Action == config.ActionBlock && partnerID != "" {
+	// Stop bot session if partner is a bot
+	if isBot && req.RoomID != "" {
+		services.StopBotSession(req.RoomID)
+	}
+
+	// 1. If the action is "block", save it to Postgres (no-op for bots — ON CONFLICT DO NOTHING)
+	if req.Action == config.ActionBlock && partnerID != "" && !isBot {
 		query := `
 			INSERT INTO blocked_users (blocker_id, blocked_id) 
 			VALUES ($1, $2) ON CONFLICT DO NOTHING;
@@ -369,8 +407,8 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		postgress.Exec(query, userID, partnerID)
 	}
 
-	// 2. Notify the partner that the stranger disconnected
-	if partnerID != "" && req.RoomID != "" {
+	// 2. Notify the partner that the stranger disconnected (skip for bots)
+	if partnerID != "" && req.RoomID != "" && !isBot {
 		notifyUser(ctx, partnerID, map[string]interface{}{
 			config.FieldType:   config.MsgTypeStrangerDisconnected,
 			config.FieldRoomID: req.RoomID,
