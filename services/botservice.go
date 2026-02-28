@@ -611,8 +611,18 @@ func handleBotReply(session *BotSession, userText string) {
 		return
 	}
 
+	// Split multi-line replies (maybeAskBack joins response + follow-up
+	// question with \n). Send them as separate messages with a pause
+	// between them so they look like two natural consecutive messages.
+	parts := strings.SplitN(reply.Text, "\n", 2)
+	mainReply := strings.TrimSpace(parts[0])
+	followUp := ""
+	if len(parts) == 2 {
+		followUp = strings.TrimSpace(parts[1])
+	}
+
 	// Typing delay — proportional to reply length (simulates typing)
-	typeMs := 200 + len(reply.Text)*40
+	typeMs := 200 + len(mainReply)*40
 	if typeMs > 5000 {
 		typeMs = 5000
 	}
@@ -623,11 +633,35 @@ func handleBotReply(session *BotSession, userText string) {
 	case <-time.After(typingDelay):
 	}
 
-	// Send the message
+	// Send the main reply
 	if !skipTyping {
 		sendBotTypingEnd(ctx, session)
 	}
-	sendBotMessage(ctx, session, reply.Text)
+	sendBotMessage(ctx, session, mainReply)
+
+	// If there's a follow-up question, send it as a separate message after a pause
+	if followUp != "" {
+		select {
+		case <-session.done:
+			return
+		case <-time.After(randomDelay(1500, 3000)):
+		}
+
+		sendBotTypingStart(ctx, session)
+
+		fupTypeMs := 200 + len(followUp)*40
+		if fupTypeMs > 4000 {
+			fupTypeMs = 4000
+		}
+		select {
+		case <-session.done:
+			return
+		case <-time.After(addJitter(fupTypeMs, 0.2)):
+		}
+
+		sendBotTypingEnd(ctx, session)
+		sendBotMessage(ctx, session, followUp)
+	}
 }
 
 // ---------------------------------------------------------------------------

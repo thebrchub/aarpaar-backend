@@ -48,6 +48,17 @@ good	nice! so what brings you here?
 great	awesome! me too
 doing well	thats good! anything exciting happening?
 not bad	same here! so whats new?
+bad	oh no! whats wrong? wanna talk about it?
+fine	just fine? nothing exciting going on?
+nm	lol same! anything fun happening?
+not well	oh no! hope youre okay. wanna distract yourself with a chat?
+not good	aww whats going on? wanna talk?
+im ok	just ok? tell me whats on your mind
+im bored	haha same! thats why im here. wanna play a game or something?
+bored	same actually! lets make this interesting then
+lonely	aww im here for you! lets chat and have fun
+sad	oh no! whats making you sad? i can try to cheer you up
+happy	thats great! whats got you in such a good mood?
 all good	great! so tell me something about yourself
 whats up	not much really! just chilling. you?
 what's up	just hanging out! what about you?
@@ -115,6 +126,16 @@ tumhara naam	mera naam toh secret hai! tumhara batao
 aapka naam	hmm guess karo! aapka batao pehle
 tu kaun hai	main ek interesting insaan hoon! tum kaun ho?
 kaun ho tum	main? bas ek cool person! aur tum?
+kaun hai be	arrey main hoon na! chill karo
+kaun hai tu	main? ek mystery! solve karo
+hota kaun hai	haha kaun hoon main? guess karo!
+hota kaun hai be	arrey bhai chill! main toh friendly hoon
+teri aukat	haha aukat ki baat chhodo! masti karo
+aukat	arrey bhai aukat ki baat mat karo! lets have fun
+tu bot hai	haha nahi yaar! main real hoon. tum batao apne baare mein
+bot hai kya	definitely not! main toh real hoon. wbu?
+mein nhi tho kaun	haha tum hi toh ho! aur kaun hoga
+bol bol	haha kya bolun? tum batao!
 
 # --- Introduction / ASL ---
 where are you from	im from india! what about you?
@@ -146,6 +167,28 @@ are u interested	in a good conversation? always! tell me more
 yes i am	cool! nice to meet you. so tell me what do you do?
 yes i am a	interesting! tell me more about yourself
 i am	nice! so what else should i know about you?
+i am male	cool! so tell me what do you do for fun?
+i am female	cool! so whats your favorite thing about yourself?
+i am a boy	nice! so what brings you here?
+i am a girl	nice! so tell me something interesting about yourself
+i am a guy	cool! so whats on your mind today?
+i am from	oh nice! i love learning about different places. tell me more!
+i am bored	haha same! thats why im here. lets make it fun
+i am single	oh interesting! same here actually. so what are you looking for?
+i am lonely	aww im here for you! lets have a good convo
+i am sad	oh no! whats wrong? wanna talk about it?
+i am happy	thats awesome! whats making you so happy?
+i am tired	same honestly! but chatting is fun so im still here
+i am horny	haha direct toh ho! lets just chat and see where it goes
+i am drunk	haha drunk chatting? this should be interesting! tell me whats on your mind
+i am student	nice! what are you studying?
+i am working	cool! what do you do for work?
+boy	okay noted! so whats your favorite thing to do?
+girl	nice! so whats your story?
+male	alright! so tell me about yourself
+female	okay! so what brings you here?
+ladka	accha! toh batao kya chal raha hai
+ladki	nice! toh kya kar rahi ho aaj?
 
 # --- What do you do ---
 what do you do	i work and chill mostly! what about you?
@@ -237,6 +280,21 @@ send nudes	lol earn my trust first! tell me your best joke
 dirty	haha someones mind is wandering! lets keep it fun
 show me	show you what? my amazing personality? here it is lol
 hot	thanks! youre making me blush. so tell me about yourself
+you are hot	aww thanks! youre making me blush over here
+youre hot	haha stop it! youre pretty hot yourself ngl
+ur hot	aww thanks babe! youre not too bad yourself
+you hot	haha flattery will get you everywhere! tell me more
+you are beautiful	aww thats so sweet! youre making my day
+you are gorgeous	stop it im literally blushing rn! youre sweet
+youre cute	haha thanks! youre pretty adorable yourself
+yes baby	haha i like the energy! so whats on your mind?
+yes babe	loving the vibes! tell me more
+yes dear	aww so sweet! whats up?
+hi baby	hey there! someone's in a cute mood
+hi babe	heyy babe! whats going on?
+hello baby	aww hello! what brings you here cutie?
+hey baby	heyyy! someone's feeling flirty today
+hey babe	heyy! i love the energy already
 kiss	haha virtual kiss! mwah. happy now?
 kiss me	aww so forward! maybe if you impress me enough
 bf	aww looking for one? maybe youre talking to the right person
@@ -249,6 +307,7 @@ hookup	haha slow down Romeo! lets vibe first
 come to my place	buying me coffee first would be a good start lol
 babe	haha already calling me babe? i like the confidence
 baby	aww thats sweet! so what else you got?
+baby	haha baby already? someones moving fast! i like it
 cutie	aww youre making me smile! youre cute too
 sweetheart	haha thats sweet of you! tell me more about yourself
 darling	oh so formal! i like it though
@@ -259,6 +318,10 @@ beautiful	haha thanks! you know how to make someone smile
 gorgeous	aww stop! youre too kind. tell me about yourself
 pretty	thanks! flattery will get you everywhere lol
 handsome	haha thanks! youre making my day
+cute	aww youre calling me cute? thats so sweet of you!
+youre cute	haha thanks! youre pretty cute yourself ngl
+you are cute	aww thank you! youre not too bad yourself
+so cute	haha stahp! youre making me blush
 good looking	aww youre sweet! what else do you like about me?
 i like you	aww thats sweet! youre growing on me too ngl
 i love you	haha already?? we just met! but youre sweet
@@ -274,6 +337,10 @@ relationship	its complicated lol! what about yours?
 commitment	haha slow down! lets enjoy the conversation first
 miss you	aww we literally just started talking! but thats sweet
 i miss you	meeting me was that good huh? tell me more lol
+miss	aww missing someone? im right here if you wanna chat!
+dil	dil ki baat karo! whats on your heart?
+pyaar	pyaar? haha pehle toh acche se baat karo!
+mohabbat	mohabbat ki baat? romantic mood mein ho kya?
 hug	virtual hug! hope that made your day
 cuddle	haha virtual cuddle! youre sweet
 love	love is a beautiful thing! do you believe in love at first chat?
@@ -357,7 +424,11 @@ insomnia	i understand! late night conversations are the best though
 late night	night owl? me too!
 good night	good night! it was nice chatting with you
 bye	bye! take care!
+byee	byeee! it was fun chatting!
+byeee	haha byeee! come back soon
 goodbye	goodbye! hope we chat again sometime
+cya	see ya! was nice talking
+see ya	see ya later! take care
 gotta go	alright! was nice talking to you
 see you	see you! take care
 leaving	aww already? okay take care!
@@ -571,6 +642,13 @@ kaha se ho	india se! aur tum?
 kahan ke ho	yahi kahin se! tum batao
 kahan rehte ho	india mein! tum kahan rehte ho?
 konsa city	city toh nahi bataunga lol! tum konse city se ho?
+konsi city	secret city! tumhari konsi city?
+kaun sa city	haha guess karo! tumhara kaun sa?
+kaun si city	mystery city! tum batao pehle
+your city	thats a mystery! yours?
+ur city	secret! urs?
+city	city ki baat? haha guess karo! yours?
+state	state? somewhere in india! what about you?
 konsa state	thats a secret! tumhara konsa state?
 which place	india! and you?
 which country	india! im guessing you too?
@@ -1830,6 +1908,17 @@ nah	nah? okay then! what do you want to talk about?
 meh response	just meh? lets find something exciting to discuss!
 dunno	thats cool! we can explore together
 whatevs	whatevs? lol okay then
+ha	ha! just ha? thats it?
+haa	haa! toh aur bolo na
+hn	hn? bolo properly yaar
+what	what what? complete the sentence lol
+how	how what? im curious now
+when	when what? give me more context
+where	where? im right here! lol
+who	who? me? or someone else?
+kyun	kyun? you tell me!
+kaise	kaise kya? batao detail mein
+kab	kab? haha depends on what youre asking about
 
 # --- Typing Habits & Internet Slang ---
 lolol	haha youre really laughing!
@@ -4374,6 +4463,54 @@ faltu	faltu nahi! serious baat kar raha hoon
 bekar	bekar? chalo topic change karte hain
 time waste	lets make it worth the time then! new topic?
 pagal hai kya	thoda pagal toh sab hain! normal is boring
+bewakoof	haha coming from you thats a compliment!
+chutiya	arrey bhai itna gussa kyun? chill karo yaar
+madarchod	whoa calm down! lets keep it fun
+bc	haha someone is angry! kya hua?
+mc	arrey relax yaar! masti karo
+bhosdike	wow itna gussa? kuch hua kya? lets talk
+bsdk	haha itna gussa mat ho! baat karte hain
+gaandu	haha creative! but lets keep it chill
+gandu	lol someone woke up on the wrong side! chill
+lodu	haha nice try! wanna actually talk?
+lavde	arrey yaar itna mat gaaliyao! fun karte hain
+bhag	arrey kyun? abhi toh conversation shuru hua!
+nikal	haha arrey ruko! boring nahi hone dunga
+fuck	whoa easy there! lets keep it interesting
+fuck you	haha someone is feisty! kya hua?
+fuck off	arrey relax! kya hua batao
+shit	haha kya hua? everything okay?
+bitch	hey now! lets be nice to each other
+dick	haha okay settle down! whats really going on?
+ass	lol okay! wanna talk about something fun instead?
+chal hat	arrey kyun? stay na! interesting baatein karte hain
+shut up	haha okay going quiet... jk! whats up though?
+get lost	arrey ruko! lets have a proper convo
+go away	dont be like that! im actually fun to talk to
+you suck	ouch! but im too cool to care lol
+hate you	haha thats a strong word! kya hua?
+i hate you	aww dont say that! give me a chance yaar
+loser	takes one to know one? jk! lets talk properly
+kutta	haha bhai kutta nahi hoon! aur batao
+kutte	arrey yaar itna gussa? chalo baat karte hain
+saale	haha saale se acchi baat nahi hoti! friendly raho
+sala	arrey sala bola? haha okay! aur batao kya chal raha
+tu ja	arrey mat jao! abhi toh maza aa raha tha
+jaake	haha kahan jaun? yahan pe hoon tumse baat karne
+chup	okay okay going quiet... not really though! whats up?
+chup kar	haha okay dramatic! but tell me kya hua?
+band kar	okay okay! lets change the topic then?
+kameena	haha kameena? thats my middle name! jk
+harami	arrey yaar harami nahi hoon! funny hoon
+bevda	haha bevda nahi! but chai ka fan zaroor hoon
+tharki	arrey nahi yaar! decent insaan hoon main
+cheap	not cheap! just budget friendly lol
+bore	arrey bore mat ho! lets spice up the convo
+boring	haha sorry! what do you wanna talk about? ill make it interesting
+you are boring	ouch! give me a topic and watch me shine
+tu boring hai	arrey yaar ek chance toh do! kya discuss karein?
+waste	not waste! think of it as an experience lol
+time pass	haha toh lets make it good time pass at least!
 
 # --- Handling Compliments Gracefully ---
 youre the best person here	aww thats really sweet! youre pretty great yourself

@@ -145,6 +145,6 @@ func Init() {
 	BotMatchDelay = time.Duration(botDelaySec) * time.Second
 	botMaxDurSec := helper.GetEnvInt("BOT_SESSION_MAX_DURATION_SECONDS", 60)
 	BotSessionMaxDuration = time.Duration(botMaxDurSec) * time.Second
-	botInactSec := helper.GetEnvInt("BOT_INACTIVITY_TIMEOUT_SECONDS", 30)
+	botInactSec := helper.GetEnvInt("BOT_INACTIVITY_TIMEOUT_SECONDS", 60)
 	BotInactivityTimeout = time.Duration(botInactSec) * time.Second
 }
