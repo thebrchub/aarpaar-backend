@@ -105,6 +105,10 @@ func InitBot() {
 
 	// Create the single bot client with retrieval engine
 	//
+	// StrictMatch is false so the bot uses confused/fallback responses for
+	// unrecognized inputs instead of returning ErrNoMatch (which force-ends
+	// the session — terrible UX after just one message).
+	//
 	// HumanizeRetrieval is disabled because the humanizer's strings.Fields()
 	// flattens the \n separator that maybeAskBack inserts between the response
 	// and follow-up question, concatenating them into one unnatural sentence.
@@ -116,7 +120,7 @@ func InitBot() {
 		AskBackRate:       0.3,
 		HistorySize:       200,
 		MaxRetries:        15,
-		StrictMatch:       true,
+		StrictMatch:       false,
 		HumanizeRetrieval: false,
 		Humanize: bot.HumanizeConfig{
 			Enabled:      false,
@@ -124,7 +128,7 @@ func InitBot() {
 			EmojiRate:    0,
 			FillerRate:   0,
 			FragmentRate: 0,
-			CasingJitter: true,
+			CasingJitter: false,
 		},
 	})
 	if err != nil {
@@ -597,8 +601,10 @@ func handleBotReply(session *BotSession, userText string) {
 			sendBotTypingEnd(ctx, session)
 		}
 		if errors.Is(err, bot.ErrNoMatch) {
-			log.Printf("[bot] No match for input in room %s — ending session", session.RoomID)
-			forceEndSession(session)
+			// Safety net: if StrictMatch is on and no match found, send a
+			// generic deflection instead of force-ending the session.
+			log.Printf("[bot] No match for input %q in room %s — sending fallback", userText, session.RoomID)
+			sendBotMessage(ctx, session, "haha thats interesting! tell me more")
 			return
 		}
 		log.Printf("[bot] Failed to generate reply for room %s: %v", session.RoomID, err)
