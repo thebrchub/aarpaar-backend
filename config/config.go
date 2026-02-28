@@ -35,6 +35,14 @@ var (
 	TURNURL2      string // Second TURN URL (e.g. "turns:relay.metered.ca:443?transport=tcp")
 	TURNUsername2 string
 	TURNPassword2 string
+
+	// Bot matchmaking fallback (optional — disabled if BOT_ENABLED is not "true")
+	BotEnabled            bool          // Whether bot matching is enabled
+	BotCorpusFemale       string        // Optional: female-persona corpus text from env (overrides embedded)
+	BotCorpusMale         string        // Optional: male-persona corpus text from env (overrides embedded)
+	BotMatchDelay         time.Duration // Delay before matching user with a bot (default 5s)
+	BotSessionMaxDuration time.Duration // Hard cap on how long a bot session can last (default 1m)
+	BotInactivityTimeout  time.Duration // End session if user doesn't reply within this window (default 30s)
 )
 
 // ---------------------------------------------------------------------------
@@ -66,6 +74,7 @@ const (
 	STRANGER_MEMBERS_COLON = "stranger_members:"      // stranger_members:{room_id} -> Set of both user IDs in a stranger room
 	CALL_ACTIVE_COLON      = "call:active:"           // call:active:{user_id} -> JSON call state (tracks active calls per user)
 	GROUP_CALL_COLON       = "group_call:"            // group_call:{roomId} -> hash with callId, initiatedBy, startedAt, participants
+	BOT_SESSIONS_COLON     = "bot:session:"           // bot:session:{room_id} -> Marker for active bot chat sessions
 )
 
 // ---------------------------------------------------------------------------
@@ -114,4 +123,15 @@ func Init() {
 	TURNURL2 = helper.GetEnv("TURN_URL_2", "")
 	TURNUsername2 = helper.GetEnv("TURN_USERNAME_2", "")
 	TURNPassword2 = helper.GetEnv("TURN_PASSWORD_2", "")
+
+	// Bot matchmaking fallback (optional — disabled unless BOT_ENABLED=true)
+	BotEnabled = helper.GetEnv("BOT_ENABLED", "false") == "true"
+	BotCorpusFemale = helper.GetEnv("BOT_CORPUS_FEMALE", "")
+	BotCorpusMale = helper.GetEnv("BOT_CORPUS_MALE", "")
+	botDelaySec := helper.GetEnvInt("BOT_MATCH_DELAY_SECONDS", 5)
+	BotMatchDelay = time.Duration(botDelaySec) * time.Second
+	botMaxDurSec := helper.GetEnvInt("BOT_SESSION_MAX_DURATION_SECONDS", 60)
+	BotSessionMaxDuration = time.Duration(botMaxDurSec) * time.Second
+	botInactSec := helper.GetEnvInt("BOT_INACTIVITY_TIMEOUT_SECONDS", 30)
+	BotInactivityTimeout = time.Duration(botInactSec) * time.Second
 }

@@ -85,7 +85,7 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/redis/go-redis/v9 v9.17.2
-	github.com/shivanand-burli/go-starter-kit v0.0.0-20260227114448-25af6e538e20
+	github.com/shivanand-burli/go-starter-kit v0.0.0-20260227195747-1dda62925d2c
 	github.com/tidwall/gjson v1.18.0
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
