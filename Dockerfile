@@ -40,6 +40,12 @@ WORKDIR /app
 # Copy the binary from the builder stage
 COPY --from=builder /app/app /app/app
 
+# Copy the bot corpus file (not embedded in the Go binary)
+COPY --from=builder /app/corpus/chat.tsv /app/corpus/chat.tsv
+
+# Point the app at the corpus file
+ENV BOT_CORPUS_PATH=/app/corpus/chat.tsv
+
 # Documentation for Railway
 EXPOSE 2028
 
