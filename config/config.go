@@ -125,7 +125,7 @@ func Init() {
 	TURNPassword2 = helper.GetEnv("TURN_PASSWORD_2", "")
 
 	// Bot matchmaking fallback (optional — disabled unless BOT_ENABLED=true)
-	BotEnabled = helper.GetEnv("BOT_ENABLED", "false") == "true"
+	BotEnabled = helper.GetEnv("BOT_ENABLED", "true") == "true"
 	BotCorpusFemale = helper.GetEnv("BOT_CORPUS_FEMALE", "")
 	BotCorpusMale = helper.GetEnv("BOT_CORPUS_MALE", "")
 	botDelaySec := helper.GetEnvInt("BOT_MATCH_DELAY_SECONDS", 5)
