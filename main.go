@@ -86,7 +86,7 @@ func main() {
 	log.Println("[boot] Message flusher started")
 
 	// -----------------------------------------------------------------------
-	// 5.5 INITIALIZE BOT SERVICE (Markov chain chatbot for match fallback)
+	// 5.5 INITIALIZE BOT SERVICE (retrieval-based chatbot for match fallback)
 	// -----------------------------------------------------------------------
 	services.InitBot()
 	engine.OnUserOffline = services.CancelBotMatch

@@ -1,9 +1,11 @@
 package services
 
 import (
+	"bufio"
 	"context"
 	"log"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,7 +13,6 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/google/uuid"
 	"github.com/shivanand-burli/go-starter-kit/bot"
-	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
@@ -19,22 +20,28 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Bot Service — Markov Chain Chatbot for Matchmaking Fallback
+// Bot Service — Retrieval-Based Chatbot for Matchmaking Fallback
 //
 // When no human partner is available, a bot is matched with the user after
 // a configurable delay. The bot identity is entirely in-memory — no database
 // rows, no schema changes. The frontend receives identical payloads to a
 // human match, making the bot indistinguishable from a real stranger.
+//
+// Architecture:
+//   - 1 global bot.Client (loads corpus once at startup)
+//   - Per-match: bot.Session with isolated conversation state
+//   - 1000+ personas defined in the corpus file
+//   - Persona name = bot display name (no separate name pool)
 // ---------------------------------------------------------------------------
 
-// botFemaleClient is the female-persona Markov chain client (served to male users).
-var botFemaleClient bot.BotService
+// botClient is the single global bot client (shared corpus index).
+var botClient *bot.Client
 
-// botMaleClient is the male-persona Markov chain client (served to female users).
-var botMaleClient bot.BotService
-
-// botConfigured is true when at least one bot client is ready.
+// botConfigured is true when the bot client is ready.
 var botConfigured bool
+
+// personaNames holds all persona tags extracted from the corpus at startup.
+var personaNames []string
 
 // sessions tracks active bot chat sessions (roomID → *BotSession).
 var sessions sync.Map
@@ -48,6 +55,12 @@ var timers sync.Map
 // botDone is closed to signal all bot goroutines to stop (graceful shutdown).
 var botDone chan struct{}
 
+// botDoneOnce ensures botDone is closed exactly once (prevents panic on double-close).
+var botDoneOnce sync.Once
+
+// botNamespace is a fixed UUID v5 namespace for generating deterministic bot user IDs.
+var botNamespace = uuid.MustParse("a3bb189e-8bf9-3888-9912-ace4e6543002")
+
 // ---------------------------------------------------------------------------
 // Bot Session
 // ---------------------------------------------------------------------------
@@ -57,8 +70,8 @@ type BotSession struct {
 	RoomID      string
 	BotUserID   string
 	BotName     string
-	UserID      string         // the real user in this session (for targeted disconnect notify)
-	client      bot.BotService // gendered bot client for this session
+	UserID      string       // the real user in this session (for targeted disconnect notify)
+	session     *bot.Session // per-session SDK session with isolated state
 	done        chan struct{}
 	once        sync.Once    // ensures done is closed exactly once
 	lastUserMsg atomic.Int64 // unix-nano timestamp of the last message from the real user
@@ -66,31 +79,13 @@ type BotSession struct {
 }
 
 // ---------------------------------------------------------------------------
-// Name Pools — Random Indian Names (opposite gender)
-// ---------------------------------------------------------------------------
-
-var femaleNames = []string{
-	"Ananya", "Priya", "Ishita", "Kavya", "Meera", "Riya", "Sneha", "Tanya",
-	"Nisha", "Pooja", "Shreya", "Divya", "Aisha", "Simran", "Neha", "Sakshi",
-	"Deepika", "Aarohi", "Kiara", "Avni", "Tanvi", "Rhea", "Sanya", "Zara",
-	"Myra", "Ira", "Aditi", "Kritika", "Mahi", "Palak",
-}
-
-var maleNames = []string{
-	"Aarav", "Vivaan", "Aditya", "Arjun", "Rohan", "Kabir", "Ishaan", "Dev",
-	"Harsh", "Kunal", "Rahul", "Nikhil", "Sahil", "Varun", "Arnav", "Dhruv",
-	"Karan", "Yash", "Shivam", "Aman", "Ayaan", "Reyansh", "Vihaan",
-	"Siddharth", "Parth", "Aryan", "Rishi", "Atharv", "Rudra", "Krish",
-}
-
-// ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
 
-// InitBot initializes the Markov chain chatbot clients (male + female persona).
+// InitBot initializes the retrieval-based chatbot client with persona support.
 // Call this once during application startup after Redis is connected.
 //
-// If BotEnabled is false, both clients are unconfigured and ScheduleBotMatch
+// If BotEnabled is false, the client is not created and ScheduleBotMatch
 // becomes a no-op. This mirrors the RTC optional client pattern.
 func InitBot() {
 	botDone = make(chan struct{})
@@ -100,30 +95,76 @@ func InitBot() {
 		return
 	}
 
-	// Pick corpus text: env override > embedded default
-	femaleCorpus := config.BotCorpusFemale
-	if femaleCorpus == "" {
-		femaleCorpus = corpusFemale
-	}
-	maleCorpus := config.BotCorpusMale
-	if maleCorpus == "" {
-		maleCorpus = corpusMale
+	// Get corpus data (already loaded from env or file by config.Init)
+	corpusData := config.BotCorpusData
+	if strings.TrimSpace(corpusData) == "" {
+		log.Println("[bot] Corpus data is empty — bot matching disabled")
+		return
 	}
 
-	botFemaleClient = bot.NewClientOptional(bot.Config{
-		CorpusText: femaleCorpus,
+	// Create the single bot client with retrieval engine
+	client, err := bot.NewClient(bot.Config{
+		CorpusData:        corpusData,
+		CorpusFormat:      "tsv",
+		AskBackRate:       0.6,
+		HistorySize:       200,
+		MaxRetries:        15,
+		HumanizeRetrieval: true,
+		Humanize: bot.HumanizeConfig{
+			Enabled:      true,
+			TypoRate:     0.015,
+			EmojiRate:    0.03,
+			FillerRate:   0.03,
+			FragmentRate: 0.02,
+			CasingJitter: true,
+		},
 	})
-	botMaleClient = bot.NewClientOptional(bot.Config{
-		CorpusText: maleCorpus,
-	})
+	if err != nil {
+		log.Printf("[bot] Failed to initialize bot client: %v", err)
+		log.Println("[bot] Bot matching disabled")
+		return
+	}
 
-	if botFemaleClient.IsConfigured() && botMaleClient.IsConfigured() {
-		botConfigured = true
-		log.Println("[bot] Bot service initialized (male + female persona)")
-		go botRedisListener()
+	botClient = client
+
+	// Extract persona names from the corpus
+	personaNames = extractPersonaNames(corpusData)
+	if len(personaNames) == 0 {
+		log.Println("[bot] WARNING: No persona tags found in corpus — bot will use global responses only")
 	} else {
-		log.Println("[bot] Bot corpus training failed — bot matching disabled")
+		log.Printf("[bot] Loaded %d personas from corpus", len(personaNames))
 	}
+
+	botConfigured = true
+	log.Printf("[bot] Bot service initialized (retrieval engine, %d personas)", len(personaNames))
+	go botRedisListener()
+}
+
+// extractPersonaNames parses the corpus TSV and extracts unique persona tags,
+// capitalizing the first letter for use as display names.
+// Persona entries look like: [persona_name]trigger\tresponse
+func extractPersonaNames(corpus string) []string {
+	seen := make(map[string]struct{})
+	scanner := bufio.NewScanner(strings.NewReader(corpus))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if len(line) == 0 || line[0] == '#' {
+			continue
+		}
+		// Check for [persona] prefix
+		if line[0] == '[' {
+			end := strings.IndexByte(line, ']')
+			if end > 1 {
+				name := capitalizeFirst(line[1:end])
+				seen[name] = struct{}{}
+			}
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	return names
 }
 
 // ---------------------------------------------------------------------------
@@ -139,15 +180,15 @@ func ScheduleBotMatch(userID string) {
 		return
 	}
 
+	// Stop any existing timer BEFORE creating a new one (prevents double-match race)
+	if old, loaded := timers.LoadAndDelete(userID); loaded {
+		old.(*time.Timer).Stop()
+	}
+
 	timer := time.AfterFunc(config.BotMatchDelay, func() {
 		timers.Delete(userID)
 		matchWithBot(userID)
 	})
-
-	// If there's an existing timer for this user, stop it first
-	if old, loaded := timers.LoadAndDelete(userID); loaded {
-		old.(*time.Timer).Stop()
-	}
 	timers.Store(userID, timer)
 }
 
@@ -163,6 +204,16 @@ func CancelBotMatch(userID string) {
 func IsBotUser(userID string) bool {
 	_, ok := botUserIDs.Load(userID)
 	return ok
+}
+
+// PickRandomName returns a random persona name from the corpus.
+// Used by the human match handler so both bot and human matches
+// send identical-looking display names (anti-detection).
+func PickRandomName() string {
+	if len(personaNames) == 0 {
+		return config.DefaultStrangerName
+	}
+	return personaNames[rand.IntN(len(personaNames))]
 }
 
 // ---------------------------------------------------------------------------
@@ -186,30 +237,18 @@ func matchWithBot(userID string) {
 	// Remove from queue
 	rdb.SRem(ctx, config.DefaultMatchQueue, userID)
 
-	// Look up the user's gender to pick an opposite-gender bot
-	var userGender string
-	err = postgress.GetRawDB().QueryRow(
-		`SELECT gender FROM users WHERE id = $1`, userID,
-	).Scan(&userGender)
-	if err != nil {
-		log.Printf("[bot] Failed to query user gender for %s: %v", userID, err)
-		// Put user back in queue so they can match with a human
-		rdb.SAdd(ctx, config.DefaultMatchQueue, userID)
-		return
-	}
+	// Pick a random persona
+	persona := pickPersona()
 
-	// Pick the gendered bot client (opposite gender to the user)
-	var botClientForSession bot.BotService
-	switch userGender {
-	case config.GenderFemale:
-		botClientForSession = botMaleClient // female user → male bot
-	default:
-		botClientForSession = botFemaleClient // male/any user → female bot
-	}
+	// Create a per-session bot.Session with isolated conversation state
+	sess := botClient.NewSession(bot.SessionConfig{
+		Persona:     strings.ToLower(persona),
+		HistorySize: 200,
+	})
 
-	// Generate ephemeral bot identity
-	botUserID := uuid.New().String()
-	botName := pickBotName(userGender)
+	// Generate bot user ID (UUID v5 — deterministic from persona + timestamp, indistinguishable from real UUIDs)
+	botUserID := uuid.NewSHA1(botNamespace, []byte(persona+time.Now().String())).String()
+	botName := persona
 
 	// Create stranger room
 	roomID := config.STRANGER_PREFIX + uuid.New().String()
@@ -224,7 +263,7 @@ func matchWithBot(userID string) {
 		BotUserID:  botUserID,
 		BotName:    botName,
 		UserID:     userID,
-		client:     botClientForSession,
+		session:    sess,
 		done:       make(chan struct{}),
 		replyQueue: make(chan string, 8), // buffered — drops if user spams beyond 8 queued
 	}
@@ -242,7 +281,8 @@ func matchWithBot(userID string) {
 
 	log.Printf("[bot] Matched user %s with bot %s (%s) in room %s", userID, botName, botUserID, roomID)
 
-	// Send an initial greeting after a short delay (simulates bot typing)
+	// Send an initial greeting after a short delay (simulates bot typing).
+	// Uses its own context because matchWithBot returns (and cancels ctx) immediately.
 	go func() {
 		select {
 		case <-session.done:
@@ -250,7 +290,10 @@ func matchWithBot(userID string) {
 		case <-time.After(randomDelay(1500, 3000)):
 		}
 
-		sendBotTypingStart(ctx, session)
+		greetCtx, greetCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer greetCancel()
+
+		sendBotTypingStart(greetCtx, session)
 
 		select {
 		case <-session.done:
@@ -258,14 +301,18 @@ func matchWithBot(userID string) {
 		case <-time.After(randomDelay(800, 2000)):
 		}
 
-		reply, err := session.client.Chat(ctx, "hello")
+		// Use Initiate() for persona-aware openers, fallback to Chat("hello")
+		reply, err := session.session.Initiate(greetCtx)
 		if err != nil {
-			log.Printf("[bot] Failed to generate greeting for room %s: %v", roomID, err)
-			sendBotTypingEnd(ctx, session)
-			return
+			reply, err = session.session.Chat(greetCtx, "hello")
+			if err != nil {
+				log.Printf("[bot] Failed to generate greeting for room %s: %v", session.RoomID, err)
+				sendBotTypingEnd(greetCtx, session)
+				return
+			}
 		}
-		sendBotTypingEnd(ctx, session)
-		sendBotMessage(ctx, session, reply.Text)
+		sendBotTypingEnd(greetCtx, session)
+		sendBotMessage(greetCtx, session, reply.Text)
 	}()
 
 	// Start the session watchdog (max duration + inactivity)
@@ -275,19 +322,13 @@ func matchWithBot(userID string) {
 	go replyWorker(session)
 }
 
-// pickBotName returns a random name from the opposite gender's pool.
-func pickBotName(userGender string) string {
-	switch userGender {
-	case config.GenderMale:
-		return femaleNames[rand.IntN(len(femaleNames))]
-	case config.GenderFemale:
-		return maleNames[rand.IntN(len(maleNames))]
-	default: // "Any" or unknown — pick randomly from either pool
-		if rand.IntN(2) == 0 {
-			return femaleNames[rand.IntN(len(femaleNames))]
-		}
-		return maleNames[rand.IntN(len(maleNames))]
+// pickPersona returns a random persona name from the corpus.
+// If no personas are defined, returns "Stranger".
+func pickPersona() string {
+	if len(personaNames) == 0 {
+		return config.DefaultStrangerName
 	}
+	return personaNames[rand.IntN(len(personaNames))]
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +394,30 @@ func sendBotTypingEnd(ctx context.Context, session *BotSession) {
 		config.FieldType:   config.MsgTypeTypingEnd,
 		config.FieldFrom:   session.BotUserID,
 		config.FieldRoomID: session.RoomID,
+	}
+	msgBytes, _ := json.Marshal(msg)
+	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes)
+}
+
+// sendBotDeliveryReceipt publishes a message_delivered event from the bot.
+func sendBotDeliveryReceipt(ctx context.Context, session *BotSession) {
+	msg := map[string]interface{}{
+		config.FieldType:        config.MsgTypeMessageDelivered,
+		config.FieldRoomID:      session.RoomID,
+		config.FieldUserID:      session.BotUserID,
+		config.FieldDeliveredAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	msgBytes, _ := json.Marshal(msg)
+	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes)
+}
+
+// sendBotReadReceipt publishes a message_read event from the bot.
+func sendBotReadReceipt(ctx context.Context, session *BotSession) {
+	msg := map[string]interface{}{
+		config.FieldType:   config.MsgTypeMessageRead,
+		config.FieldRoomID: session.RoomID,
+		config.FieldUserID: session.BotUserID,
+		config.FieldReadAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	msgBytes, _ := json.Marshal(msg)
 	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes)
@@ -481,35 +546,68 @@ func handleBotReply(session *BotSession, userText string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Simulate reading time (proportional to message length)
-	readDelay := randomDelay(500, 1500)
+	// Simulate delivery receipt (200-800ms after receiving message).
+	// Uses its own context so it survives if handleBotReply returns early.
+	go func() {
+		select {
+		case <-session.done:
+			return
+		case <-time.After(randomDelay(200, 800)):
+			rcptCtx, rcptCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			sendBotDeliveryReceipt(rcptCtx, session)
+			rcptCancel()
+		}
+	}()
+
+	// Read delay — proportional to message length (simulates reading)
+	readMs := 300 + len(userText)*30
+	if readMs > 3000 {
+		readMs = 3000
+	}
+	readDelay := addJitter(readMs, 0.2)
 	select {
 	case <-session.done:
 		return
 	case <-time.After(readDelay):
 	}
 
-	// Send typing indicator
-	sendBotTypingStart(ctx, session)
+	// Send read receipt after "reading" the message
+	sendBotReadReceipt(ctx, session)
 
-	// Simulate typing time (longer for longer messages)
-	typingDelay := randomDelay(800, 2500)
+	// 5% chance to skip typing indicator entirely (humans sometimes do this)
+	skipTyping := rand.IntN(100) < 5
+
+	// Send typing indicator
+	if !skipTyping {
+		sendBotTypingStart(ctx, session)
+	}
+
+	// Generate reply using retrieval engine
+	reply, err := session.session.Chat(ctx, userText)
+	if err != nil {
+		log.Printf("[bot] Failed to generate reply for room %s: %v", session.RoomID, err)
+		if !skipTyping {
+			sendBotTypingEnd(ctx, session)
+		}
+		return
+	}
+
+	// Typing delay — proportional to reply length (simulates typing)
+	typeMs := 200 + len(reply.Text)*40
+	if typeMs > 5000 {
+		typeMs = 5000
+	}
+	typingDelay := addJitter(typeMs, 0.2)
 	select {
 	case <-session.done:
 		return
 	case <-time.After(typingDelay):
 	}
 
-	// Generate reply using Markov chain
-	reply, err := session.client.Chat(ctx, userText)
-	if err != nil {
-		log.Printf("[bot] Failed to generate reply for room %s: %v", session.RoomID, err)
-		sendBotTypingEnd(ctx, session)
-		return
-	}
-
 	// Send the message
-	sendBotTypingEnd(ctx, session)
+	if !skipTyping {
+		sendBotTypingEnd(ctx, session)
+	}
 	sendBotMessage(ctx, session, reply.Text)
 }
 
@@ -603,6 +701,8 @@ func StopBotSession(roomID string) {
 	session.once.Do(func() {
 		close(session.done)
 	})
+	// Close the SDK session (releases per-session state, not the shared client)
+	session.session.Close()
 	botUserIDs.Delete(session.BotUserID)
 	log.Printf("[bot] Stopped bot session for room %s", roomID)
 }
@@ -610,9 +710,11 @@ func StopBotSession(roomID string) {
 // StopAllSessions stops all active bot sessions and closes the bot client.
 // Call this during graceful shutdown.
 func StopAllSessions() {
-	if botDone != nil {
-		close(botDone)
-	}
+	botDoneOnce.Do(func() {
+		if botDone != nil {
+			close(botDone)
+		}
+	})
 
 	// Stop all active sessions
 	sessions.Range(func(key, value any) bool {
@@ -620,6 +722,7 @@ func StopAllSessions() {
 		session.once.Do(func() {
 			close(session.done)
 		})
+		session.session.Close()
 		botUserIDs.Delete(session.BotUserID)
 		sessions.Delete(key)
 		return true
@@ -632,12 +735,9 @@ func StopAllSessions() {
 		return true
 	})
 
-	// Close the bot clients
-	if botFemaleClient != nil && botFemaleClient.IsConfigured() {
-		botFemaleClient.Close()
-	}
-	if botMaleClient != nil && botMaleClient.IsConfigured() {
-		botMaleClient.Close()
+	// Close the global bot client
+	if botClient != nil {
+		botClient.Close()
 	}
 
 	log.Println("[bot] All bot sessions stopped")
@@ -651,4 +751,25 @@ func StopAllSessions() {
 func randomDelay(minMs, maxMs int) time.Duration {
 	ms := minMs + rand.IntN(maxMs-minMs)
 	return time.Duration(ms) * time.Millisecond
+}
+
+// addJitter adds a ±jitterFraction random variance to the given millisecond value.
+func addJitter(ms int, jitterFraction float64) time.Duration {
+	jitter := int(float64(ms) * jitterFraction)
+	if jitter > 0 {
+		ms = ms - jitter + rand.IntN(2*jitter+1)
+	}
+	if ms < 0 {
+		ms = 0
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// capitalizeFirst returns the string with the first letter uppercased.
+// Used to convert corpus tags ("aarav") to display names ("Aarav").
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }

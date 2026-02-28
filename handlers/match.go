@@ -144,7 +144,7 @@ func notifyMatch(ctx context.Context, targetUser, roomID string) {
 	eventPayload := map[string]interface{}{
 		config.FieldType:            config.MsgTypeMatchFound,
 		config.FieldRoomID:          roomID,
-		config.FieldPartnerFakeName: config.DefaultStrangerName,
+		config.FieldPartnerFakeName: services.PickRandomName(),
 		config.FieldPartnerAvatar:   "",
 	}
 

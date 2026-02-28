@@ -1,6 +1,8 @@
 package config
 
 import (
+	"log"
+	"os"
 	"time"
 
 	"github.com/shivanand-burli/go-starter-kit/helper"
@@ -38,8 +40,7 @@ var (
 
 	// Bot matchmaking fallback (optional — disabled if BOT_ENABLED is not "true")
 	BotEnabled            bool          // Whether bot matching is enabled
-	BotCorpusFemale       string        // Optional: female-persona corpus text from env (overrides embedded)
-	BotCorpusMale         string        // Optional: male-persona corpus text from env (overrides embedded)
+	BotCorpusData         string        // Raw corpus TSV content loaded from BOT_CORPUS_PATH or BOT_CORPUS_DATA env
 	BotMatchDelay         time.Duration // Delay before matching user with a bot (default 5s)
 	BotSessionMaxDuration time.Duration // Hard cap on how long a bot session can last (default 1m)
 	BotInactivityTimeout  time.Duration // End session if user doesn't reply within this window (default 30s)
@@ -126,8 +127,20 @@ func Init() {
 
 	// Bot matchmaking fallback (optional — disabled unless BOT_ENABLED=true)
 	BotEnabled = helper.GetEnv("BOT_ENABLED", "true") == "true"
-	BotCorpusFemale = helper.GetEnv("BOT_CORPUS_FEMALE", "")
-	BotCorpusMale = helper.GetEnv("BOT_CORPUS_MALE", "")
+
+	// Corpus: prefer BOT_CORPUS_DATA (inline string) over BOT_CORPUS_PATH (file path).
+	// This lets you embed the entire TSV in an env var (e.g. Docker secrets, K8s ConfigMap)
+	// without shipping a separate file.
+	BotCorpusData = helper.GetEnv("BOT_CORPUS_DATA", "")
+	if BotCorpusData == "" {
+		corpusPath := helper.GetEnv("BOT_CORPUS_PATH", "./corpus/chat.tsv")
+		raw, err := os.ReadFile(corpusPath)
+		if err != nil {
+			log.Printf("[config] Failed to read corpus file %s: %v", corpusPath, err)
+		} else {
+			BotCorpusData = string(raw)
+		}
+	}
 	botDelaySec := helper.GetEnvInt("BOT_MATCH_DELAY_SECONDS", 5)
 	BotMatchDelay = time.Duration(botDelaySec) * time.Second
 	botMaxDurSec := helper.GetEnvInt("BOT_SESSION_MAX_DURATION_SECONDS", 60)
