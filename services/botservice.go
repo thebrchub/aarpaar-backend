@@ -3,6 +3,7 @@ package services
 import (
 	"bufio"
 	"context"
+	"errors"
 	"log"
 	"math/rand/v2"
 	"strings"
@@ -109,6 +110,7 @@ func InitBot() {
 		AskBackRate:       0.6,
 		HistorySize:       200,
 		MaxRetries:        15,
+		StrictMatch:       true,
 		HumanizeRetrieval: true,
 		Humanize: bot.HumanizeConfig{
 			Enabled:      true,
@@ -585,10 +587,15 @@ func handleBotReply(session *BotSession, userText string) {
 	// Generate reply using retrieval engine
 	reply, err := session.session.Chat(ctx, userText)
 	if err != nil {
-		log.Printf("[bot] Failed to generate reply for room %s: %v", session.RoomID, err)
 		if !skipTyping {
 			sendBotTypingEnd(ctx, session)
 		}
+		if errors.Is(err, bot.ErrNoMatch) {
+			log.Printf("[bot] No match for input in room %s — ending session", session.RoomID)
+			forceEndSession(session)
+			return
+		}
+		log.Printf("[bot] Failed to generate reply for room %s: %v", session.RoomID, err)
 		return
 	}
 

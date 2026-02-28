@@ -191,6 +191,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/shivanand-burli/go-starter-kit v0.0.0-20260228113850-5560bce2ac2d h1:3fHViao05pKScvvPdN2Fy2pJo3Eo+fL4zf2X3vDtreE=
 github.com/shivanand-burli/go-starter-kit v0.0.0-20260228113850-5560bce2ac2d/go.mod h1:bdZ3XEPf2jxHzWU5If1SWA/krSHPEq+rqZUxsThWg5c=
+github.com/shivanand-burli/go-starter-kit v0.0.0-20260228190822-574669dcbfe6 h1:2YxLC76DbYwLkOwQjVCaNqrmbza9M3h2YO3x6IUxdJw=
+github.com/shivanand-burli/go-starter-kit v0.0.0-20260228190822-574669dcbfe6/go.mod h1:bdZ3XEPf2jxHzWU5If1SWA/krSHPEq+rqZUxsThWg5c=
 github.com/shoenig/test v1.7.0 h1:eWcHtTXa6QLnBvm0jgEabMRN/uJ4DMV3M8xUGgRkZmk=
 github.com/shoenig/test v1.7.0/go.mod h1:UxJ6u/x2v/TNs/LoLxBNJRV9DiwBBKYxXSyczsBHFoI=
 github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=
