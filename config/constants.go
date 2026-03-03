@@ -343,6 +343,12 @@ const (
 	// MaxRequestBodySize is the maximum allowed HTTP request body (1 MB)
 	MaxRequestBodySize int64 = 1 << 20
 
+	// DefaultPageLimit is the default number of items returned by paginated endpoints
+	DefaultPageLimit = 10
+
+	// MaxPageLimit is the absolute maximum items a client can request via ?limit=
+	MaxPageLimit = 100
+
 	// FlushInterval is how often the flusher checks for dirty rooms
 	FlushInterval = 3 * time.Second
 

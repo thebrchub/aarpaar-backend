@@ -40,8 +40,8 @@ var wsWriteBufferPool = &sync.Pool{}
 var activeConns atomic.Int64
 
 // maxConnections is the hard limit on concurrent WebSocket connections.
-// Set to 8000 to leave ~20% memory headroom on a 1GB Railway container.
-const maxConnections = 8000
+// Set to 12000 to support 10K+ concurrent users with headroom.
+const maxConnections = 12000
 
 // upgrader promotes an HTTP connection to a WebSocket connection.
 var upgrader = websocket.Upgrader{

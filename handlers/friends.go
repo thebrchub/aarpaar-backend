@@ -32,6 +32,7 @@ import (
 
 type FriendRequestBody struct {
 	Username string `json:"username"`
+	Premium  bool   `json:"premium,omitempty"` // true = premium connect (prioritized delivery)
 }
 
 func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
@@ -106,11 +107,27 @@ func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Insert or update our outgoing request
+	isPremium := false
+	if body.Premium {
+		// Verify user meets premium connect threshold from app_settings
+		ctx, cancel := pgCtx(r)
+		defer cancel()
+		var cfg struct {
+			MinDonation float64 `json:"min_donation"`
+		}
+		cfg.MinDonation = 200 // default threshold
+		_ = GetAppSetting(ctx, "premium_connect", &cfg)
+		totalDonated := GetUserTotalDonation(ctx, userID)
+		if totalDonated >= cfg.MinDonation {
+			isPremium = true
+		}
+	}
+
 	_, err = postgress.Exec(
-		`INSERT INTO friend_requests (sender_id, receiver_id, status)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (sender_id, receiver_id) DO UPDATE SET status = $3, updated_at = NOW()`,
-		userID, targetID, config.FriendReqPending,
+		`INSERT INTO friend_requests (sender_id, receiver_id, status, is_premium)
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (sender_id, receiver_id) DO UPDATE SET status = $3, is_premium = $4, updated_at = NOW()`,
+		userID, targetID, config.FriendReqPending, isPremium,
 	)
 	if err != nil {
 		JSONError(w, "Failed to send request", http.StatusInternalServerError)
@@ -324,12 +341,13 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 		query = `
 			SELECT COALESCE(json_agg(t), '[]')::text
 			FROM (
-				SELECT fr.id AS request_id, fr.status, fr.created_at,
-				       u.id AS user_id, u.name, u.username, u.avatar_url
+				SELECT fr.id AS request_id, fr.status, fr.created_at, fr.is_premium,
+				       u.id AS user_id, u.name, u.username, u.avatar_url,
+				       COALESCE((SELECT SUM(d.amount) FROM donations d WHERE d.user_id = fr.sender_id), 0) AS donor_total
 				FROM friend_requests fr
 				JOIN users u ON u.id = fr.sender_id
 				WHERE fr.receiver_id = $1 AND fr.status = 'pending'
-				ORDER BY fr.created_at DESC
+				ORDER BY fr.is_premium DESC, donor_total DESC, fr.created_at DESC
 			) t
 		`
 	}

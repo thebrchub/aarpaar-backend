@@ -44,6 +44,12 @@ var (
 	BotMatchDelay         time.Duration // Delay before matching user with a bot (default 5s)
 	BotSessionMaxDuration time.Duration // Hard cap on how long a bot session can last (default 1m)
 	BotInactivityTimeout  time.Duration // End session if user doesn't reply within this window (default 30s)
+
+	// Moderation (BENKI_ADMIN)
+	BenkiAdminEmail string // Email of the super admin (BENKI_ADMIN) for moderation access
+
+	// Domain (for vanity links)
+	Domain string // Public domain for vanity URLs (e.g. "zquab.com")
 )
 
 // ---------------------------------------------------------------------------
@@ -63,6 +69,8 @@ const UserIDKey contextKey = "user_id"
 
 const (
 	STRANGER_PREFIX = "stranger_" // Prefix for anonymous stranger room IDs
+
+	MATCH_LOCATION_COLON = "match:location:" // match:location:{userId} -> JSON location data (5-min TTL)
 
 	CHAT_GLOBAL_CHANNEL    = "chat:global"            // Global Pub/Sub channel for cross-server message broadcasting
 	CHAT_BUFFER_COLON      = "chat:buffer:"           // chat:buffer:{room_id} -> List of messages to be saved to Postgres
@@ -147,4 +155,10 @@ func Init() {
 	BotSessionMaxDuration = time.Duration(botMaxDurSec) * time.Second
 	botInactSec := helper.GetEnvInt("BOT_INACTIVITY_TIMEOUT_SECONDS", 60)
 	BotInactivityTimeout = time.Duration(botInactSec) * time.Second
+
+	// Moderation
+	BenkiAdminEmail = helper.GetEnv("BENKI_ADMIN_EMAIL", "")
+
+	// Domain
+	Domain = helper.GetEnv("DOMAIN", "")
 }

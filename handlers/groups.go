@@ -152,9 +152,9 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 	var roomID string
 	err = tx.QueryRow(
 		`INSERT INTO rooms (name, type, avatar_url, created_by, max_members, visibility, invite_code)
-		 VALUES ($1, $2, $3, $4, 50, $5, $6)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id`,
-		req.Name, config.RoomTypeGroup, req.AvatarURL, userID, visibility, inviteCode,
+		req.Name, config.RoomTypeGroup, req.AvatarURL, userID, getGroupCapacity(ctx), visibility, inviteCode,
 	).Scan(&roomID)
 	if err != nil {
 		JSONError(w, "Failed to create group", http.StatusInternalServerError)
@@ -823,7 +823,8 @@ func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 		baseQuery += ` AND LOWER(r.name) LIKE LOWER('%' || $2 || '%')`
 		args = append(args, search)
 	}
-	baseQuery += ` ORDER BY member_count DESC LIMIT 50`
+	limit, offset := parsePagination(r)
+	baseQuery += fmt.Sprintf(` ORDER BY member_count DESC LIMIT %d OFFSET %d`, limit, offset)
 
 	rows, err := postgress.GetRawDB().QueryContext(ctx, baseQuery, args...)
 	if err != nil {
@@ -1084,6 +1085,200 @@ func GenerateInviteHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
+
+// getGroupCapacity reads the group_capacity setting from app_settings.
+// Falls back to 50 if not configured.
+func getGroupCapacity(ctx context.Context) int {
+	var cfg struct {
+		MaxMembers int `json:"max_members"`
+	}
+	cfg.MaxMembers = 50 // default
+	_ = GetAppSetting(ctx, "group_capacity", &cfg)
+	if cfg.MaxMembers <= 0 {
+		return 50
+	}
+	return cfg.MaxMembers
+}
+
+// SetVanitySlugHandler sets a vanity slug for a group (admin + VIP only).
+//
+// @Summary		Set group vanity slug
+// @Description	Sets a vanity URL slug for the group. Only group admins who are VIP donors can set this.
+// @Tags		Groups
+// @Accept		json
+// @Produce		json
+// @Param		groupId	path	string	true	"Group room UUID"
+// @Param		body	body	object	true	"Vanity slug: {\"slug\": \"my-group\"}"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		403	{object}	StatusMessage
+// @Failure		409	{object}	StatusMessage	"Slug already taken"
+// @Security	BearerAuth
+// @Router		/groups/{groupId}/vanity [patch]
+func SetVanitySlugHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	groupID := r.PathValue("groupId")
+	if groupID == "" {
+		JSONError(w, "Missing group ID", http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		Slug string `json:"slug"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Slug == "" {
+		JSONError(w, "slug is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate slug format: 3-50 chars, alphanumeric + hyphens, no leading/trailing hyphens
+	slug := strings.ToLower(strings.TrimSpace(body.Slug))
+	if len(slug) < 3 || len(slug) > 50 {
+		JSONError(w, "Slug must be 3-50 characters", http.StatusBadRequest)
+		return
+	}
+	for _, ch := range slug {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-') {
+			JSONError(w, "Slug can only contain lowercase letters, numbers, and hyphens", http.StatusBadRequest)
+			return
+		}
+	}
+	if slug[0] == '-' || slug[len(slug)-1] == '-' {
+		JSONError(w, "Slug cannot start or end with a hyphen", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	// Must be group admin
+	if !isGroupAdmin(ctx, groupID, userID) {
+		JSONError(w, "Only admins can set vanity slug", http.StatusForbidden)
+		return
+	}
+
+	// Must be VIP (donor)
+	if !IsUserVIP(ctx, userID) {
+		JSONError(w, "Only VIP donors can set vanity slugs", http.StatusForbidden)
+		return
+	}
+
+	// Try to set the slug (unique constraint will catch duplicates)
+	res, err := postgress.GetRawDB().ExecContext(ctx,
+		`UPDATE rooms SET vanity_slug = $1 WHERE id = $2 AND type = 'GROUP'`, slug, groupID,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
+			JSONError(w, "This slug is already taken", http.StatusConflict)
+			return
+		}
+		JSONError(w, "Failed to set vanity slug", http.StatusInternalServerError)
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		JSONError(w, "Group not found", http.StatusNotFound)
+		return
+	}
+
+	JSONMessage(w, "ok", "Vanity slug set to: "+slug)
+}
+
+// JoinGroupByVanityHandler joins a group via its vanity slug.
+//
+// @Summary		Join group by vanity slug
+// @Description	Joins a group using its vanity URL slug.
+// @Tags		Groups
+// @Produce		json
+// @Param		slug	path	string	true	"Vanity slug"
+// @Success		200	{object}	JoinByInviteResponse
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		409	{object}	StatusMessage	"Already a member"
+// @Security	BearerAuth
+// @Router		/vanity/{slug} [post]
+func JoinGroupByVanityHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	slug := r.PathValue("slug")
+	if slug == "" {
+		JSONError(w, "Missing vanity slug", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	// Look up group by vanity_slug
+	var groupID, visibility string
+	var maxMembers, currentCount int
+	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT r.id, COALESCE(r.visibility,'public'), r.max_members,
+		        (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.id AND rm.status = 'active')
+		 FROM rooms r WHERE r.vanity_slug = $1 AND r.type = 'GROUP'`, strings.ToLower(slug),
+	).Scan(&groupID, &visibility, &maxMembers, &currentCount)
+	if err != nil {
+		JSONError(w, "Group not found", http.StatusNotFound)
+		return
+	}
+
+	// Private groups cannot be joined via vanity slug (must use invite code)
+	if visibility != config.VisibilityPublic {
+		JSONError(w, "This group is private — use an invite link to join", http.StatusForbidden)
+		return
+	}
+
+	if isGroupMember(ctx, groupID, userID) {
+		JSONError(w, "You are already a member of this group", http.StatusConflict)
+		return
+	}
+
+	if currentCount >= maxMembers {
+		JSONError(w, "Group is full", http.StatusBadRequest)
+		return
+	}
+
+	// Upsert membership
+	_, err = postgress.GetRawDB().ExecContext(ctx,
+		`INSERT INTO room_members (room_id, user_id, status, role, joined_at)
+		 VALUES ($1, $2, 'active', 'member', NOW())
+		 ON CONFLICT (room_id, user_id)
+		 DO UPDATE SET status = 'active', role = 'member', joined_at = NOW(), left_at = NULL`,
+		groupID, userID,
+	)
+	if err != nil {
+		JSONError(w, "Failed to join group", http.StatusInternalServerError)
+		return
+	}
+
+	// Subscribe to room
+	if e := chat.GetEngine(); e != nil {
+		e.JoinRoomForUser(userID, groupID)
+	}
+
+	// Notify all members
+	allMembers := getActiveGroupMemberIDs(ctx, groupID)
+	broadcastGroupEvent(ctx, groupID, config.MsgTypeMemberJoined, map[string]interface{}{
+		config.FieldRoomID: groupID,
+		config.FieldUserID: userID,
+	}, allMembers)
+
+	JSONSuccess(w, map[string]interface{}{
+		"roomId":  groupID,
+		"message": "Joined group via vanity link",
+	})
+}
 
 // isGroupMember checks if a user is an active member of a group room.
 func isGroupMember(ctx context.Context, groupID, userID string) bool {

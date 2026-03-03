@@ -1,0 +1,98 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  GO_VERSION: "1.25"
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: root
+  POSTGRES_DB: aarpaar_test
+
+jobs:
+  # ─── Unit Tests ─────────────────────────────────────────
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Run unit tests
+        run: go test ./chat/... ./config/... ./handlers/... ./payment/... -v -count=1 -race -timeout=5m
+
+  # ─── Integration Tests ──────────────────────────────────
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        ports: ["5432:5432"]
+        env:
+          POSTGRES_USER: ${{ env.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6378:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Run integration tests
+        env:
+          TEST_POSTGRES_CONN_STR: postgresql://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@localhost:5432/${{ env.POSTGRES_DB }}?sslmode=disable
+          TEST_REDIS_HOST: localhost
+          TEST_REDIS_PORT: "6378"
+        run: go test ./tests/integration/... -v -count=1 -timeout=5m
+
+  # ─── Coverage ───────────────────────────────────────────
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Unit test coverage
+        run: |
+          go test ./chat/... ./config/... ./handlers/... ./payment/... \
+            -coverprofile=coverage.out -covermode=atomic -timeout=5m
+          go tool cover -func=coverage.out
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+
+  # ─── Benchmarks (informational, no threshold gate) ─────
+  benchmarks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Run benchmarks
+        run: |
+          go test ./chat/... ./handlers/... \
+            -bench=Benchmark -benchmem -run="^NOMATCH" -count=1 -timeout=3m | tee bench.txt
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks
+          path: bench.txt

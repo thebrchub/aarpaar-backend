@@ -23,6 +23,7 @@ import (
 	_ "github.com/thebrchub/aarpaar/docs" // Swagger generated docs
 	"github.com/thebrchub/aarpaar/handlers"
 	mw "github.com/thebrchub/aarpaar/middleware"
+	"github.com/thebrchub/aarpaar/payment"
 	"github.com/thebrchub/aarpaar/services"
 )
 
@@ -107,6 +108,12 @@ func main() {
 	engine.OnUserOffline = services.CancelBotMatch
 
 	// -----------------------------------------------------------------------
+	// 5.6 INITIALIZE PAYMENT MANAGER (stub provider for now)
+	// -----------------------------------------------------------------------
+	handlers.PaymentMgr = payment.NewManager(&payment.StubProvider{})
+	log.Println("[boot] Payment manager initialized (stub provider)")
+
+	// -----------------------------------------------------------------------
 	// 6. RATE LIMITER (10 requests/sec per IP, burst of 20)
 	// -----------------------------------------------------------------------
 	limiter := middleware.NewIPRateLimiter(10, 20)
@@ -187,6 +194,34 @@ func main() {
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/kick", mw.Auth(handlers.KickParticipantHandler))
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/admins", mw.Auth(handlers.PromoteCallAdminHandler))
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/end", mw.Auth(handlers.ForceEndCallHandler))
+
+	// --- Vanity Links (protected) ---
+	mux.HandleFunc("PATCH /api/v1/groups/{groupId}/vanity", mw.Auth(handlers.SetVanitySlugHandler))
+	mux.HandleFunc("POST /api/v1/vanity/{slug}", mw.Auth(handlers.JoinGroupByVanityHandler))
+
+	// --- Donations (protected) ---
+	mux.HandleFunc("POST /api/v1/donate", mw.Auth(handlers.DonateHandler))
+	mux.HandleFunc("GET /api/v1/donate/history", mw.Auth(handlers.GetDonationHistoryHandler))
+	mux.HandleFunc("GET /api/v1/badges/tiers", mw.Auth(handlers.GetBadgeTiersHandler))
+
+	// --- Leaderboard (protected) ---
+	mux.HandleFunc("GET /api/v1/leaderboard", mw.Auth(handlers.GetLeaderboardHandler))
+
+	// --- Online Count (public) ---
+	mux.HandleFunc("GET /api/v1/online", handlers.GetOnlineCountHandler)
+
+	// --- Admin (protected, BENKI_ADMIN only) ---
+	mux.HandleFunc("GET /api/v1/admin/stats", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminStatsHandler)))
+	mux.HandleFunc("GET /api/v1/admin/users", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminUsersHandler)))
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/ban", mw.Auth(mw.BenkiAdminOnly(handlers.BanUserHandler)))
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/unban", mw.Auth(mw.BenkiAdminOnly(handlers.UnbanUserHandler)))
+	mux.HandleFunc("GET /api/v1/admin/reports", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminReportsHandler)))
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}/reports", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminUserReportsHandler)))
+	mux.HandleFunc("POST /api/v1/admin/badges", mw.Auth(mw.BenkiAdminOnly(handlers.CreateBadgeTierHandler)))
+	mux.HandleFunc("PATCH /api/v1/admin/badges/{badgeId}", mw.Auth(mw.BenkiAdminOnly(handlers.UpdateBadgeTierHandler)))
+	mux.HandleFunc("DELETE /api/v1/admin/badges/{badgeId}", mw.Auth(mw.BenkiAdminOnly(handlers.DeleteBadgeTierHandler)))
+	mux.HandleFunc("GET /api/v1/admin/settings/{key}", mw.Auth(mw.BenkiAdminOnly(handlers.GetAppSettingHandler)))
+	mux.HandleFunc("PATCH /api/v1/admin/settings/{key}", mw.Auth(mw.BenkiAdminOnly(handlers.UpdateAppSettingHandler)))
 
 	// --- WebSocket (protected) ---
 	mux.HandleFunc("GET /ws", mw.Auth(func(w http.ResponseWriter, r *http.Request) {

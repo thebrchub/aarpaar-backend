@@ -25,6 +25,7 @@
 
 # Dependency directories
 vendor/
+docs/
 
 # Go workspace file
 go.work
@@ -46,6 +47,9 @@ temp/
 # OS
 .DS_Store
 Thumbs.db
+
+# Auto-generated test keys (regenerated via: go run ./tests/keygen/)
+tests/testutil/jwt_keys.go
 
 # Logs
 *.log

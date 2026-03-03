@@ -3,8 +3,11 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/shivanand-burli/go-starter-kit/jwt"
+	"github.com/shivanand-burli/go-starter-kit/postgress"
+	redisKit "github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 )
 
@@ -55,8 +58,49 @@ func Auth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// 4. Inject the user ID into the request context for downstream handlers
+		// 4. Check if user is banned (Redis-cached for performance)
+		if isUserBanned(userID) {
+			http.Error(w, "Account is banned", http.StatusForbidden)
+			return
+		}
+
+		// 5. Inject the user ID into the request context for downstream handlers
 		ctx := context.WithValue(r.Context(), config.UserIDKey, userID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
+}
+
+// isUserBanned checks if a user is banned, using Redis cache first (ban:<userId>),
+// then falling back to Postgres. Since JWTs cannot be invalidated, this check runs
+// on every authenticated request to enforce bans in real time.
+func isUserBanned(userID string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	rdb := redisKit.GetRawClient()
+	banKey := "ban:" + userID
+
+	// Fast path: check Redis cache
+	val, err := rdb.Get(ctx, banKey).Result()
+	if err == nil {
+		return val == "1"
+	}
+
+	// Slow path: check Postgres
+	var isBanned bool
+	err = postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT is_banned FROM users WHERE id = $1`, userID,
+	).Scan(&isBanned)
+	if err != nil {
+		return false // fail open (user may not exist yet)
+	}
+
+	// Cache result in Redis (24h TTL for both banned and not-banned)
+	if isBanned {
+		rdb.Set(ctx, banKey, "1", 24*time.Hour)
+	} else {
+		rdb.Set(ctx, banKey, "0", 24*time.Hour)
+	}
+
+	return isBanned
 }

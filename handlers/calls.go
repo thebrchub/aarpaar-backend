@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -117,14 +116,7 @@ func GetCallConfigHandler(w http.ResponseWriter, r *http.Request) {
 func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(config.UserIDKey).(string)
 
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 50 {
-		limit = 20
-	}
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	if offset < 0 {
-		offset = 0
-	}
+	limit, offset := parsePagination(r)
 
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()

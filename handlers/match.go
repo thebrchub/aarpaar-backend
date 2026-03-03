@@ -38,9 +38,20 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse optional location from request body (geolocation passthrough)
+	var body struct {
+		Location *json.RawMessage `json:"location,omitempty"` // opaque JSON object from frontend
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body) // best-effort; body may be empty
+
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
 	rdb := redis.GetRawClient()
+
+	// Store location in Redis if provided (5-min TTL, auto-expires)
+	if body.Location != nil && len(*body.Location) > 2 { // not "{}"
+		rdb.Set(ctx, config.MATCH_LOCATION_COLON+userID, []byte(*body.Location), 5*time.Minute)
+	}
 
 	// Single queue for all users (no gender preference)
 	queue := config.DefaultMatchQueue
@@ -108,8 +119,15 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 		rdb.SAdd(ctx, config.STRANGER_MEMBERS_COLON+roomID, userID, matchedPartner)
 		rdb.Expire(ctx, config.STRANGER_MEMBERS_COLON+roomID, 24*time.Hour)
 
-		notifyMatch(ctx, userID, roomID)
-		notifyMatch(ctx, matchedPartner, roomID)
+		// Fetch partner locations for geolocation passthrough
+		userLocRaw, _ := rdb.Get(ctx, config.MATCH_LOCATION_COLON+userID).Result()
+		partnerLocRaw, _ := rdb.Get(ctx, config.MATCH_LOCATION_COLON+matchedPartner).Result()
+
+		notifyMatchWithLocation(ctx, userID, roomID, partnerLocRaw)
+		notifyMatchWithLocation(ctx, matchedPartner, roomID, userLocRaw)
+
+		// Clean up location keys after match
+		rdb.Del(ctx, config.MATCH_LOCATION_COLON+userID, config.MATCH_LOCATION_COLON+matchedPartner)
 
 		// Cancel any pending bot timers for both users
 		services.CancelBotMatch(userID)
@@ -141,11 +159,21 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 // notifyMatch sends a "match_found" event to a specific user via Redis Pub/Sub.
 // The engine picks this up and delivers it over their WebSocket.
 func notifyMatch(ctx context.Context, targetUser, roomID string) {
+	notifyMatchWithLocation(ctx, targetUser, roomID, "")
+}
+
+// notifyMatchWithLocation sends a "match_found" event including optional partner location.
+func notifyMatchWithLocation(ctx context.Context, targetUser, roomID, partnerLocation string) {
 	eventPayload := map[string]interface{}{
 		config.FieldType:            config.MsgTypeMatchFound,
 		config.FieldRoomID:          roomID,
 		config.FieldPartnerFakeName: services.PickRandomName(),
 		config.FieldPartnerAvatar:   "",
+	}
+
+	// If partner shared their location, include it as opaque JSON
+	if partnerLocation != "" {
+		eventPayload["partner_location"] = json.RawMessage(partnerLocation)
 	}
 
 	// Wrap in the routing envelope that engine.go expects
@@ -188,7 +216,11 @@ func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	// Remove from the single matchmaking queue
 	ctx, cancel := context.WithTimeout(r.Context(), config.RedisOpTimeout)
 	defer cancel()
-	redis.GetRawClient().SRem(ctx, config.DefaultMatchQueue, userID)
+	rdb := redis.GetRawClient()
+	rdb.SRem(ctx, config.DefaultMatchQueue, userID)
+
+	// Clean up stored location
+	rdb.Del(ctx, config.MATCH_LOCATION_COLON+userID)
 
 	// Cancel any pending bot match timer
 	services.CancelBotMatch(userID)

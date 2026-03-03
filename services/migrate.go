@@ -287,6 +287,72 @@ var migrationStatements = []string{
 	// to avoid sequential scans of the call_logs table.
 	// ===================================================================
 	`CREATE INDEX IF NOT EXISTS idx_call_logs_initiated_by ON call_logs (initiated_by, started_at DESC)`,
+
+	// ===================================================================
+	// TABLE: donations (tracks all user donations for badges & leaderboard)
+	// ===================================================================
+	`CREATE TABLE IF NOT EXISTS donations (
+		id               BIGSERIAL PRIMARY KEY,
+		user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		amount           NUMERIC(10,2) NOT NULL,
+		currency         VARCHAR(3) NOT NULL DEFAULT 'INR',
+		payment_id       TEXT NOT NULL,
+		payment_provider TEXT NOT NULL,
+		created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+
+	`CREATE INDEX IF NOT EXISTS idx_donations_user_id ON donations (user_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_donations_created_at ON donations (created_at DESC)`,
+
+	// ===================================================================
+	// TABLE: badge_tiers (configurable badge tiers managed by BENKI_ADMIN)
+	// ===================================================================
+	`CREATE TABLE IF NOT EXISTS badge_tiers (
+		id            SERIAL PRIMARY KEY,
+		name          VARCHAR(50) NOT NULL,
+		min_amount    NUMERIC(10,2) NOT NULL,
+		icon          TEXT NOT NULL DEFAULT '',
+		display_order INT NOT NULL DEFAULT 0,
+		created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+
+	// Seed default badge tiers (only if table is empty)
+	`INSERT INTO badge_tiers (name, min_amount, icon, display_order)
+	 SELECT * FROM (VALUES
+		('Bronze Supporter',  50.00,   'bronze_icon',  1),
+		('Silver Supporter',  200.00,  'silver_icon',  2),
+		('Gold Supporter',    500.00,  'gold_icon',    3),
+		('Founding Member',   1000.00, 'crown_icon',   4)
+	 ) AS v(name, min_amount, icon, display_order)
+	 WHERE NOT EXISTS (SELECT 1 FROM badge_tiers)`,
+
+	// ===================================================================
+	// TABLE: app_settings (key-value config managed by BENKI_ADMIN)
+	// ===================================================================
+	`CREATE TABLE IF NOT EXISTS app_settings (
+		key        TEXT PRIMARY KEY,
+		value      JSONB NOT NULL DEFAULT '{}',
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+
+	// Seed default settings
+	`INSERT INTO app_settings (key, value) VALUES
+		('leaderboard_config', '{"monthly_reset_day": 1, "max_entries": 50, "enabled": true}'),
+		('group_capacity', '{"free_max": 50, "vip_max": 500}'),
+		('premium_connect', '{"min_donation": 50}')
+	 ON CONFLICT (key) DO NOTHING`,
+
+	// ===================================================================
+	// COLUMN: rooms.vanity_slug (vanity URLs for groups)
+	// ===================================================================
+	`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS vanity_slug VARCHAR(50)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_vanity_slug ON rooms (vanity_slug) WHERE vanity_slug IS NOT NULL`,
+
+	// ===================================================================
+	// COLUMN: friend_requests.is_premium (premium connect feature)
+	// ===================================================================
+	`ALTER TABLE friend_requests ADD COLUMN IF NOT EXISTS is_premium BOOLEAN NOT NULL DEFAULT false`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

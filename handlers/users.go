@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -33,7 +35,8 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT COALESCE(
 			(SELECT row_to_json(t)::text FROM (
-				SELECT id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, created_at
+				SELECT id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, created_at,
+				       COALESCE((SELECT SUM(amount) FROM donations WHERE user_id = $1), 0) AS total_donated
 				FROM users WHERE id = $1 AND is_banned = false
 			) t),
 			''
@@ -46,6 +49,9 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "User not found or banned", http.StatusForbidden)
 		return
 	}
+
+	// Enrich with computed badge
+	rawJSON = enrichWithBadge(rawJSON, userID)
 
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
@@ -81,6 +87,8 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 	// Escape LIKE metacharacters to prevent wildcard injection (DoS via pathological patterns)
 	q = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
 
+	limit, offset := parsePagination(r)
+
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
@@ -88,12 +96,12 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 			FROM users
 			WHERE is_banned = false
 			  AND (username ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%')
-			LIMIT 20
+			LIMIT $2 OFFSET $3
 		) t;
 	`
 
 	var rawJSONBytes []byte
-	err := postgress.GetRawDB().QueryRow(query, q).Scan(&rawJSONBytes)
+	err := postgress.GetRawDB().QueryRow(query, q, limit, offset).Scan(&rawJSONBytes)
 	if err != nil {
 		JSONError(w, "Search failed", http.StatusInternalServerError)
 		return
@@ -369,4 +377,34 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(rawJSON))
+}
+
+// ---------------------------------------------------------------------------
+// Badge Enrichment
+// ---------------------------------------------------------------------------
+
+// enrichWithBadge takes a raw JSON user profile string and adds a "badge" field
+// computed from total_donated and badge_tiers. Returns the enriched JSON string.
+func enrichWithBadge(rawJSON string, userID string) string {
+	var profile map[string]interface{}
+	if err := json.Unmarshal([]byte(rawJSON), &profile); err != nil {
+		return rawJSON
+	}
+
+	totalDonated, _ := profile["total_donated"].(float64)
+
+	if totalDonated > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+		defer cancel()
+		badge := computeBadgeFromDB(ctx, totalDonated)
+		if badge != nil {
+			profile["badge"] = badge
+		}
+	}
+
+	enriched, err := json.Marshal(profile)
+	if err != nil {
+		return rawJSON
+	}
+	return string(enriched)
 }

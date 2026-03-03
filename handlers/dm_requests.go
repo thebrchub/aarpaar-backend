@@ -28,6 +28,8 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	limit, offset := parsePagination(r)
+
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
@@ -50,12 +52,12 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 			) lm ON true
 			WHERE my_rm.user_id = $1 AND my_rm.status = 'pending'
 			ORDER BY r.last_message_at DESC NULLS LAST
-			LIMIT 50
+			LIMIT $2 OFFSET $3
 		) t
 	`
 
 	var raw []byte
-	err := postgress.GetRawDB().QueryRow(query, userID).Scan(&raw)
+	err := postgress.GetRawDB().QueryRow(query, userID, limit, offset).Scan(&raw)
 	if err != nil {
 		JSONError(w, "Failed to fetch DM requests", http.StatusInternalServerError)
 		return

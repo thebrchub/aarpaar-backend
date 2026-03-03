@@ -616,6 +616,34 @@ func (e *Engine) IsUserOnline(userID string) bool {
 	return online
 }
 
+// OnlineUserCount returns the number of unique users with at least one WebSocket connection.
+func (e *Engine) OnlineUserCount() int {
+	e.userMu.RLock()
+	n := len(e.users)
+	e.userMu.RUnlock()
+	return n
+}
+
+// ActiveConnectionCount returns the current number of WebSocket connections.
+func ActiveConnectionCount() int64 {
+	return activeConns.Load()
+}
+
+// DisconnectUser forcefully closes all WebSocket connections for a user.
+// Used by the admin ban flow to immediately kick a banned user.
+func (e *Engine) DisconnectUser(userID string) {
+	e.userMu.RLock()
+	clients := make([]*Client, 0, len(e.users[userID]))
+	for c := range e.users[userID] {
+		clients = append(clients, c)
+	}
+	e.userMu.RUnlock()
+
+	for _, c := range clients {
+		c.Conn.Close() // triggers readPump exit → Unregister → cleanup
+	}
+}
+
 // getFriendIDs queries all friend user IDs for the given user.
 // Uses UNION ALL to enable efficient index-only scans on both directions
 // of the friendships table instead of a single OR query.
