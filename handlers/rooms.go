@@ -19,26 +19,19 @@ func pgCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 }
 
-// ---------------------------------------------------------------------------
 // GetRoomsHandler returns paginated chat rooms for the authenticated user.
 //
-// Each room includes:
-//   - room_id, name, type
-//   - last_message_preview (content of the newest message)
-//   - last_message_at (timestamp of the newest message)
-//   - unread_count (messages since the user last read)
-//   - members (array of {id, username, name} for every member in the room)
-//
-// Uses cursor-based pagination:
-//   - cursor = RFC 3339 timestamp of the last room's last_message_at
-//   - limit  = how many rooms to return (default 50, max 50)
-//
-// The SQL uses json_agg so Postgres returns the JSON directly.
-// We pipe those bytes to the response — zero Go struct allocations.
-//
-// GET /api/v1/rooms?cursor=2025-01-01T00:00:00Z&limit=50 (requires auth)
-// ---------------------------------------------------------------------------
-
+// @Summary		List chat rooms
+// @Description	Returns paginated chat rooms with last message preview, unread count, and members. Uses cursor-based pagination.
+// @Tags		Rooms
+// @Produce		json
+// @Param		cursor	query	string	false	"RFC 3339 timestamp to paginate from (default: now)"
+// @Param		limit	query	int		false	"Number of rooms to return (default 50, max 50)"
+// @Success		200	{array}	RoomListItem
+// @Failure		401	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/rooms [get]
 func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Get the authenticated user ID from context
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -139,13 +132,22 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(rawJSONBytes)
 }
 
-// ---------------------------------------------------------------------------
 // CreateDMHandler creates a new DM room between two users.
 // If a DM room already exists between them, returns the existing room.
 //
-// POST /api/v1/rooms (requires auth)
-// Body: { "username": "target-username" }
-// ---------------------------------------------------------------------------
+// @Summary		Create or get DM room
+// @Description	Creates a DM room with the target user. Returns existing room if one already exists. Private accounts get a pending DM request.
+// @Tags		Rooms
+// @Accept		json
+// @Produce		json
+// @Param		body	body	CreateDMRequest	true	"Target username"
+// @Success		200	{object}	CreateDMFullResponse
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/rooms [post]
 
 type CreateDMRequest struct {
 	Username string `json:"username"`

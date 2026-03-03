@@ -28,14 +28,21 @@ type LoginResponse struct {
 	UserID       string `json:"user_id"`
 }
 
-// ---------------------------------------------------------------------------
 // GoogleLoginHandler verifies a Google ID token, creates or updates the
 // user in Postgres, and returns JWT access + refresh tokens.
 //
-// POST /api/v1/auth/google
-// Body: { "google_id_token": "eyJ..." }
-// ---------------------------------------------------------------------------
-
+// @Summary		Google OAuth login
+// @Description	Verifies a Google ID token, upserts the user, and returns JWT tokens.
+// @Tags		Auth
+// @Accept		json
+// @Produce		json
+// @Param		body	body	LoginRequest	true	"Google ID token"
+// @Success		200	{object}	LoginResponse
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		403	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Router		/auth/google [post]
 func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -143,8 +150,16 @@ type RefreshResponse struct {
 
 // RefreshTokenHandler exchanges a valid refresh token for a new access token.
 //
-// POST /api/v1/auth/refresh
-// Body: { "refresh_token": "..." }
+// @Summary		Refresh access token
+// @Description	Exchanges a valid refresh token for a new access token.
+// @Tags		Auth
+// @Accept		json
+// @Produce		json
+// @Param		body	body	RefreshRequest	true	"Refresh token"
+// @Success		200	{object}	RefreshResponse
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Router		/auth/refresh [post]
 func RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	var req RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -177,7 +192,18 @@ type DeviceRegisterRequest struct {
 // If the same token already exists (e.g. phone handed to a new person),
 // it re-assigns the token to the current user.
 //
-// POST /api/v1/auth/device (requires auth)
+// @Summary		Register device for push notifications
+// @Description	Saves an FCM/APNs token. Re-assigns to current user if token already exists.
+// @Tags		Auth
+// @Accept		json
+// @Produce		json
+// @Param		body	body	DeviceRegisterRequest	true	"Device token info"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/auth/device [post]
 func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Get the authenticated user ID from context (set by auth middleware)
 	userID, ok := r.Context().Value(config.UserIDKey).(string)

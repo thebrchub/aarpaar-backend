@@ -16,13 +16,28 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/shivanand-burli/go-starter-kit/rtc"
+	httpSwagger "github.com/swaggo/http-swagger"
 
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
+	_ "github.com/thebrchub/aarpaar/docs" // Swagger generated docs
 	"github.com/thebrchub/aarpaar/handlers"
 	mw "github.com/thebrchub/aarpaar/middleware"
 	"github.com/thebrchub/aarpaar/services"
 )
+
+//	@title						Aarpaar API
+//	@version					1.0
+//	@description				Real-time chat, matchmaking, and group calling API. Uses REST for actions and WebSocket (/ws) for real-time events.
+//	@host						localhost:2028
+//	@BasePath					/api/v1
+//	@schemes					http https
+//	@securityDefinitions.apikey	BearerAuth
+//	@in							header
+//	@name						Authorization
+//	@description				Enter your JWT access token with the `Bearer ` prefix, e.g. "Bearer eyJhbGci..."
+
+//go:generate swag init
 
 func main() {
 	// -----------------------------------------------------------------------
@@ -106,6 +121,9 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+
+	// Swagger UI — serves OpenAPI spec and interactive docs
+	mux.Handle("GET /swagger/", httpSwagger.WrapHandler)
 
 	// --- Auth (public) ---
 	mux.HandleFunc("POST /api/v1/auth/google", handlers.GoogleLoginHandler)

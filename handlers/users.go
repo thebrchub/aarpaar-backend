@@ -11,12 +11,17 @@ import (
 	"github.com/thebrchub/aarpaar/config"
 )
 
-// ---------------------------------------------------------------------------
 // GetMeHandler returns the authenticated user's own profile.
 //
-// GET /api/v1/users/me (requires auth)
-// ---------------------------------------------------------------------------
-
+// @Summary		Get current user profile
+// @Description	Returns the authenticated user's profile. Returns 403 if banned.
+// @Tags		Users
+// @Produce		json
+// @Success		200	{object}	UserProfile
+// @Failure		401	{object}	StatusMessage
+// @Failure		403	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/users/me [get]
 func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -47,12 +52,19 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(rawJSON))
 }
 
-// ---------------------------------------------------------------------------
 // SearchUsersHandler searches for users by username or name.
 //
-// GET /api/v1/users/search?query=srikanth (requires auth)
-// ---------------------------------------------------------------------------
-
+// @Summary		Search users
+// @Description	Searches for users by username or name prefix. Returns up to 20 results.
+// @Tags		Users
+// @Produce		json
+// @Param		query	query	string	true	"Search query (max 30 chars)"
+// @Success		200	{array}	UserSearchResult
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/users/search [get]
 func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 	_, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok {
@@ -92,12 +104,19 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(rawJSONBytes)
 }
 
-// ---------------------------------------------------------------------------
 // CheckUsernameHandler checks if a username is available.
 //
-// GET /api/v1/users/check-username?username=ninja (requires auth)
-// ---------------------------------------------------------------------------
-
+// @Summary		Check username availability
+// @Description	Returns whether the given username is taken or available.
+// @Tags		Users
+// @Produce		json
+// @Param		username	query	string	true	"Username to check (max 30 chars)"
+// @Success		200		{object}	StatusMessage	"status is 'available' or 'taken'"
+// @Failure		400		{object}	StatusMessage
+// @Failure		401		{object}	StatusMessage
+// @Failure		500		{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/users/check-username [get]
 func CheckUsernameHandler(w http.ResponseWriter, r *http.Request) {
 	_, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok {
@@ -127,14 +146,22 @@ func CheckUsernameHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // UpdateMeHandler partially updates the authenticated user's profile.
 // Only the fields provided in the body are updated (PATCH semantics).
 //
-// PATCH /api/v1/users/me (requires auth)
-// Body: { "username": "ninja" } or { "name": "New Name" } or both
-// ---------------------------------------------------------------------------
-
+// @Summary		Partially update profile
+// @Description	Updates only the provided fields. Username is immutable once set.
+// @Tags		Users
+// @Accept		json
+// @Produce		json
+// @Param		body	body	UpdateMeRequest	true	"Fields to update"
+// @Success		200	{object}	UserProfile
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		409	{object}	StatusMessage	"Username already set"
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/users/me [patch]
 func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -244,14 +271,22 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(rawJSON))
 }
 
-// ---------------------------------------------------------------------------
 // PutMeHandler replaces the authenticated user's profile fields entirely.
 // Both username and name are required in the body (PUT semantics).
 //
-// PUT /api/v1/users/me (requires auth)
-// Body: { "username": "ninja", "name": "Ninja Coder" }
-// ---------------------------------------------------------------------------
-
+// @Summary		Replace profile
+// @Description	Replaces user profile fields. Username and name are required. Username is immutable once set.
+// @Tags		Users
+// @Accept		json
+// @Produce		json
+// @Param		body	body	PutMeRequest	true	"Full profile payload"
+// @Success		200	{object}	UserProfile
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		409	{object}	StatusMessage	"Username already set"
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/users/me [put]
 func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

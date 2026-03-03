@@ -11,19 +11,22 @@ import (
 	"github.com/thebrchub/aarpaar/config"
 )
 
-// ---------------------------------------------------------------------------
 // GetRoomMessagesHandler returns paginated messages for a room.
 //
-// Uses cursor-based pagination:
-//   - cursor = the last message ID the client has (older messages are loaded)
-//   - limit  = how many messages to return (default 50, max 100)
-//
-// The SQL uses json_agg so Postgres returns the final JSON string directly.
-// We pipe those bytes straight to the HTTP response — zero Go struct allocations.
-//
-// GET /api/v1/rooms/{roomId}/messages?cursor=123&limit=50 (requires auth)
-// ---------------------------------------------------------------------------
-
+// @Summary		Get room messages
+// @Description	Returns paginated messages for a room using cursor-based pagination. Includes read/delivered receipt status.
+// @Tags		Messages
+// @Produce		json
+// @Param		roomId	path	string	true	"Room UUID"
+// @Param		cursor	query	int		false	"Last message ID for pagination (loads older messages)"
+// @Param		limit	query	int		false	"Number of messages to return (default 50, max 100)"
+// @Success		200	{array}		MessageItem
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		403	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/rooms/{roomId}/messages [get]
 func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Authenticate — make sure the caller is logged in
 	userID, ok := r.Context().Value(config.UserIDKey).(string)

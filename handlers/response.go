@@ -14,8 +14,8 @@ import (
 // bytes. This keeps HTTP responses consistent across the entire API.
 // ---------------------------------------------------------------------------
 
-// statusMessage is the standard shape for simple API responses.
-type statusMessage struct {
+// StatusMessage is the standard shape for simple API responses.
+type StatusMessage struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
 }
@@ -36,7 +36,7 @@ func JSONSuccess(w http.ResponseWriter, data any) {
 func JSONMessage(w http.ResponseWriter, status string, message string) {
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-	bytes, _ := json.Marshal(statusMessage{
+	bytes, _ := json.Marshal(StatusMessage{
 		Status:  status,
 		Message: message,
 	})
@@ -49,7 +49,7 @@ func JSONMessage(w http.ResponseWriter, status string, message string) {
 func JSONError(w http.ResponseWriter, message string, statusCode int) {
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(statusCode)
-	bytes, _ := json.Marshal(statusMessage{
+	bytes, _ := json.Marshal(StatusMessage{
 		Status:  "error",
 		Message: message,
 	})

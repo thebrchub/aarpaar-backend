@@ -13,15 +13,22 @@ import (
 	"github.com/thebrchub/aarpaar/config"
 )
 
-// ---------------------------------------------------------------------------
-// Send Friend Request
-//
-// POST /api/v1/friends/request (requires auth)
-// Body: { "username": "bob" }
-//
-// Creates a persistent friend_requests row in Postgres.
+// SendFriendRequestHandler sends a friend request to a user.
 // If the target already sent us a request, auto-accepts (mutual).
-// ---------------------------------------------------------------------------
+//
+// @Summary		Send friend request
+// @Description	Creates a friend request. Auto-accepts if reversed request exists (mutual).
+// @Tags		Friends
+// @Accept		json
+// @Produce		json
+// @Param		body	body	FriendRequestBody	true	"Target username"
+// @Success		200	{object}	StatusMessage	"status is 'pending', 'accepted', or 'already_friends'"
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/friends/request [post]
 
 type FriendRequestBody struct {
 	Username string `json:"username"`
@@ -120,12 +127,21 @@ func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	JSONMessage(w, "pending", "Friend request sent")
 }
 
-// ---------------------------------------------------------------------------
-// Accept Friend Request
+// AcceptFriendRequestHandler accepts a pending friend request.
 //
-// POST /api/v1/friends/accept (requires auth)
-// Body: { "username": "alice" }
-// ---------------------------------------------------------------------------
+// @Summary		Accept friend request
+// @Description	Accepts a pending friend request and creates a friendship.
+// @Tags		Friends
+// @Accept		json
+// @Produce		json
+// @Param		body	body	FriendRequestBody	true	"Sender's username"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/friends/accept [post]
 
 func AcceptFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -162,12 +178,21 @@ func AcceptFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	acceptFriendship(w, userID, senderID, reqID)
 }
 
-// ---------------------------------------------------------------------------
-// Reject Friend Request
+// RejectFriendRequestHandler rejects a pending friend request.
 //
-// POST /api/v1/friends/reject (requires auth)
-// Body: { "username": "alice" }
-// ---------------------------------------------------------------------------
+// @Summary		Reject friend request
+// @Description	Rejects a pending friend request.
+// @Tags		Friends
+// @Accept		json
+// @Produce		json
+// @Param		body	body	FriendRequestBody	true	"Sender's username"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/friends/reject [post]
 
 func RejectFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -207,12 +232,17 @@ func RejectFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	JSONMessage(w, "success", "Friend request rejected")
 }
 
-// ---------------------------------------------------------------------------
-// Get Friends List
+// GetFriendsHandler returns the authenticated user's friends list.
 //
-// GET /api/v1/friends (requires auth)
-// Returns JSON array of friend user objects.
-// ---------------------------------------------------------------------------
+// @Summary		List friends
+// @Description	Returns all friends with online status and last seen info.
+// @Tags		Friends
+// @Produce		json
+// @Success		200	{array}	FriendItem
+// @Failure		401	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/friends [get]
 
 func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -252,12 +282,18 @@ func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(raw)
 }
 
-// ---------------------------------------------------------------------------
-// Get Friend Requests
+// GetFriendRequestsHandler returns sent or received friend requests.
 //
-// GET /api/v1/friends/requests?type=received (requires auth)
-// Query param: type = "received" (default) or "sent"
-// ---------------------------------------------------------------------------
+// @Summary		List friend requests
+// @Description	Returns pending friend requests. Use type=sent for outgoing, type=received (default) for incoming.
+// @Tags		Friends
+// @Produce		json
+// @Param		type	query	string	false	"'received' (default) or 'sent'"
+// @Success		200	{array}	FriendRequestItem
+// @Failure		401	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/friends/requests [get]
 
 func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -310,11 +346,20 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(raw)
 }
 
-// ---------------------------------------------------------------------------
-// Remove Friend
+// RemoveFriendHandler removes a friend.
 //
-// DELETE /api/v1/friends/{username} (requires auth)
-// ---------------------------------------------------------------------------
+// @Summary		Remove friend
+// @Description	Removes the friendship and cleans up friend requests.
+// @Tags		Friends
+// @Produce		json
+// @Param		username	path	string	true	"Friend's username"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/friends/{username} [delete]
 
 func RemoveFriendHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
