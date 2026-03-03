@@ -22,9 +22,13 @@ ENV GOPRIVATE=github.com/shivanand-burli/*
 COPY ./go.mod ./go.sum ./
 RUN go mod download
 
+# 5.5 Install swag and generate OpenAPI spec
+RUN go install github.com/swaggo/swag/cmd/swag@latest
+
 # 6. Build the application
 COPY ./ .
-RUN CGO_ENABLED=0 \
+RUN swag init && \
+    CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64 \
     go build -trimpath -ldflags="-s -w" -o app

@@ -10,13 +10,17 @@ import (
 	"github.com/thebrchub/aarpaar/config"
 )
 
-// ---------------------------------------------------------------------------
-// Get DM Requests (Instagram "Message Requests" inbox)
+// GetDMRequestsHandler returns pending DM requests (Instagram-style "Message Requests" inbox).
 //
-// GET /api/v1/rooms/requests (requires auth)
-// Returns rooms where the caller's room_members.status = 'pending'.
-// ---------------------------------------------------------------------------
-
+// @Summary		Get DM requests
+// @Description	Returns rooms where the caller has a pending DM invitation from a private account.
+// @Tags		Rooms
+// @Produce		json
+// @Success		200	{array}	DMRequestItem
+// @Failure		401	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/rooms/requests [get]
 func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -62,13 +66,20 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(raw)
 }
 
-// ---------------------------------------------------------------------------
-// Accept DM Request
+// AcceptDMRequestHandler accepts a pending DM request.
 //
-// POST /api/v1/rooms/{roomId}/accept (requires auth)
-// Flips room_members.status from 'pending' → 'active' for the caller.
-// ---------------------------------------------------------------------------
-
+// @Summary		Accept DM request
+// @Description	Flips room membership from pending to active. Notifies the sender.
+// @Tags		Rooms
+// @Produce		json
+// @Param		roomId	path	string	true	"Room UUID"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/rooms/{roomId}/accept [post]
 func AcceptDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -121,13 +132,20 @@ func AcceptDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 	JSONMessage(w, "success", "DM request accepted")
 }
 
-// ---------------------------------------------------------------------------
-// Reject DM Request
+// RejectDMRequestHandler rejects a pending DM request and deletes the room.
 //
-// POST /api/v1/rooms/{roomId}/reject (requires auth)
-// Deletes the room and all its members/messages.
-// ---------------------------------------------------------------------------
-
+// @Summary		Reject DM request
+// @Description	Deletes the room and all its members/messages.
+// @Tags		Rooms
+// @Produce		json
+// @Param		roomId	path	string	true	"Room UUID"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/rooms/{roomId}/reject [post]
 func RejectDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

@@ -23,14 +23,14 @@ import (
 // EnterMatchQueueHandler tries to find an instant stranger match.
 // If no match is found, the user is placed in a Redis queue to wait.
 //
-// How it works:
-//  1. Pop a random user from the queue
-//  2. Check if they've blocked each other in Postgres
-//  3. If clean — create a room and notify both via WebSocket
-//  4. If blocked — put them back and try again (up to MaxMatchAttempts times)
-//  5. If no match found — add ourselves to the queue and wait
-//
-// POST /api/v1/match/enter (requires auth)
+// @Summary		Enter matchmaking queue
+// @Description	Attempts instant stranger match. If no match, queues the user and schedules a bot fallback.
+// @Tags		Matchmaking
+// @Produce		json
+// @Success		200	{object}	MatchResponse		"Matched instantly or queued"
+// @Failure		401	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/match/enter [post]
 func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -169,9 +169,15 @@ func notifyMatch(ctx context.Context, targetUser, roomID string) {
 // ---------------------------------------------------------------------------
 
 // LeaveMatchQueueHandler removes the user from the matchmaking queue.
-// Call this when the user navigates away from the matching screen.
 //
-// POST /api/v1/match/leave (requires auth)
+// @Summary		Leave matchmaking queue
+// @Description	Removes the user from the matchmaking queue and cancels any pending bot match.
+// @Tags		Matchmaking
+// @Produce		json
+// @Success		200	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/match/leave [post]
 func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -201,12 +207,19 @@ type MatchActionRequest struct {
 }
 
 // MatchActionHandler processes skip/block/friend actions during a stranger chat.
-//   - "block" → saves the block in Postgres so they never match again
-//   - "skip"  → ends the chat, notifies partner
-//   - "friend" → one-sided request; when both send it, creates a permanent DM room
-//   - skip & block also close the stranger room
 //
-// POST /api/v1/match/action (requires auth)
+// @Summary		Perform match action
+// @Description	Processes skip, block, or friend actions during a stranger chat session.
+// @Tags		Matchmaking
+// @Accept		json
+// @Produce		json
+// @Param		body	body	MatchActionRequest	true	"Action details"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/match/action [post]
 func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -474,7 +487,19 @@ type ReportRequest struct {
 
 // ReportUserHandler saves a user report to Postgres for moderation review.
 //
-// POST /api/v1/match/report (requires auth)
+// @Summary		Report a user
+// @Description	Saves a user report for moderation review. Auto-blocks the reported user.
+// @Tags		Matchmaking
+// @Accept		json
+// @Produce		json
+// @Param		body	body	ReportRequest	true	"Report details"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/match/report [post]
 func ReportUserHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
