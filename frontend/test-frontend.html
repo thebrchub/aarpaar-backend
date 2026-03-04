@@ -816,6 +816,10 @@
     <span class="health-dot" id="healthDot"></span>
     <span id="healthText">Check Health</span>
   </div>
+  <div class="health-badge" onclick="fetchOnlineCount()" title="Online users" style="margin-left:8px;cursor:pointer">
+    <span style="color:var(--success);font-size:.7rem">●</span>
+    <span id="onlineCountText" style="font-size:.72rem">Online: —</span>
+  </div>
   <div style="flex:1"></div>
   <span style="font-size:.72rem;color:var(--text-muted)">Token stored:
     <strong id="tokenIndicator" style="color:var(--error)">None</strong>
@@ -833,6 +837,9 @@
   <button class="tab-btn" data-tab="groups">👥 Groups</button>
   <button class="tab-btn" data-tab="ws">WebSocket</button>
   <button class="tab-btn" data-tab="chat">💬 Chat</button>
+  <button class="tab-btn" data-tab="donations">💰 Donations</button>
+  <button class="tab-btn" data-tab="leaderboard">🏆 Leaderboard</button>
+  <button class="tab-btn" data-tab="admin">🔒 Admin</button>
 </div>
 
 <!-- ===== CONTENT ===== -->
@@ -963,6 +970,14 @@
           <div class="form-row">
             <label>Search Query</label>
             <input type="text" id="userSearchQuery" placeholder="Type a name or username..." maxlength="30" />
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Limit</label>
+            <input type="number" id="userSearchLimit" value="20" min="1" max="100" />
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Offset</label>
+            <input type="number" id="userSearchOffset" value="0" min="0" />
           </div>
           <button class="btn btn-primary" onclick="searchUsers()">Search</button>
         </div>
@@ -1119,6 +1134,16 @@
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
           <code>/api/v1/rooms/requests</code> — Rooms where you have a pending DM invite (like Instagram message requests).
         </p>
+        <div class="inline-form">
+          <div class="form-row" style="max-width:100px">
+            <label>Limit</label>
+            <input type="number" id="dmReqLimit" value="10" min="1" max="100" />
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Offset</label>
+            <input type="number" id="dmReqOffset" value="0" min="0" />
+          </div>
+        </div>
         <button class="btn btn-primary" onclick="getDMRequests()">Fetch DM Requests</button>
         <div id="dmRequestsList" class="scroll-box" style="margin-top:14px"></div>
         <div id="dmRequestsResponse" class="response-panel hidden"></div>
@@ -1211,6 +1236,14 @@
           <label>Username</label>
           <input type="text" id="friendReqUsername" placeholder="Username to befriend..." />
         </div>
+        <div class="toggle-row">
+          <label class="toggle">
+            <input type="checkbox" id="friendReqPremium" />
+            <span class="slider"></span>
+          </label>
+          <label>Premium Connect</label>
+          <span style="font-size:.7rem;color:var(--text-muted)">(prioritized delivery)</span>
+        </div>
         <button class="btn btn-success" onclick="sendFriendRequest()">Send Request</button>
         <div id="sendFriendReqResponse" class="response-panel hidden"></div>
       </div>
@@ -1244,6 +1277,10 @@
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
           <code>/api/v1/match/enter</code> — Enter the matchmaking queue. Matches randomly with any available user.
         </p>
+        <div class="form-row">
+          <label>Location (optional JSON)</label>
+          <input type="text" id="matchLocation" placeholder='{"lat": 12.97, "lng": 77.59, "city": "Bangalore"}' />
+        </div>
         <button class="btn btn-success" onclick="enterMatchQueue()">Enter Queue</button>
         <div id="enterMatchResponse" class="response-panel hidden"></div>
       </div>
@@ -1562,6 +1599,42 @@
         </div>
         <button class="btn btn-primary" onclick="grpPromoteAdmin()">Promote to Admin</button>
         <div id="grpPromoteResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+    <h3 style="margin-bottom:12px;font-size:.9rem">Vanity Links</h3>
+    <div class="grid-2">
+      <!-- Set Vanity Slug -->
+      <div class="card">
+        <h3><span class="badge badge-post">PATCH</span> Set Vanity Slug</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/groups/{groupId}/vanity</code> — Admin + VIP only. 3-50 chars, lowercase alphanumeric + hyphens.
+        </p>
+        <div class="form-row">
+          <label>Group ID</label>
+          <input type="text" id="vanityGroupId" placeholder="Group UUID..." />
+        </div>
+        <div class="form-row">
+          <label>Vanity Slug</label>
+          <input type="text" id="vanitySlug" placeholder="my-cool-group" maxlength="50" />
+        </div>
+        <button class="btn btn-primary" onclick="setVanitySlug()">Set Vanity Slug</button>
+        <div id="vanitySetResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Join by Vanity Slug -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Join by Vanity Slug</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/vanity/{slug}</code> — Join a public group via its vanity URL.
+        </p>
+        <div class="form-row">
+          <label>Vanity Slug</label>
+          <input type="text" id="vanityJoinSlug" placeholder="my-cool-group" />
+        </div>
+        <button class="btn btn-success" onclick="joinByVanitySlug()">Join Group</button>
+        <div id="vanityJoinResponse" class="response-panel hidden"></div>
       </div>
     </div>
 
@@ -1930,6 +2003,294 @@
     </div>
   </div>
 
+  <!-- ========== DONATIONS TAB ========== -->
+  <div id="tab-donations" class="tab-panel">
+    <div class="grid-2">
+      <!-- Make Donation -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Make a Donation</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/donate</code> — Process a donation. Returns updated badge.
+        </p>
+        <div class="form-row">
+          <label>Amount</label>
+          <input type="number" id="donateAmount" placeholder="100" min="1" step="any" />
+        </div>
+        <div class="form-row">
+          <label>Currency</label>
+          <select id="donateCurrency">
+            <option value="INR">INR</option>
+            <option value="USD">USD</option>
+          </select>
+        </div>
+        <button class="btn btn-success" onclick="makeDonation()">Donate</button>
+        <div id="donateResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Donation History -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> Donation History</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/donate/history</code> — Your donation history.
+        </p>
+        <div class="inline-form">
+          <div class="form-row" style="max-width:100px">
+            <label>Limit</label>
+            <input type="number" id="donHistLimit" value="10" min="1" max="100" />
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Offset</label>
+            <input type="number" id="donHistOffset" value="0" min="0" />
+          </div>
+          <button class="btn btn-primary" onclick="getDonationHistory()">Fetch History</button>
+        </div>
+        <div id="donHistResult" class="scroll-box" style="margin-top:14px"></div>
+        <div id="donHistResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <!-- Badge Tiers -->
+    <div class="card">
+      <h3><span class="badge badge-get">GET</span> Badge Tiers</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+        <code>/api/v1/badges/tiers</code> — List all configurable badge tiers.
+      </p>
+      <button class="btn btn-primary" onclick="getBadgeTiers()">Fetch Badge Tiers</button>
+      <div id="badgeTiersResult" class="scroll-box" style="margin-top:14px"></div>
+      <div id="badgeTiersResponse" class="response-panel hidden"></div>
+    </div>
+  </div>
+
+  <!-- ========== LEADERBOARD TAB ========== -->
+  <div id="tab-leaderboard" class="tab-panel">
+    <div class="card">
+      <h3><span class="badge badge-get">GET</span> Donation Leaderboard</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+        <code>/api/v1/leaderboard</code> — Top donors (all-time or monthly).
+      </p>
+      <div class="inline-form">
+        <div class="form-row">
+          <label>Scope</label>
+          <select id="lbScope">
+            <option value="alltime">All Time</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        <div class="form-row" style="max-width:100px">
+          <label>Limit</label>
+          <input type="number" id="lbLimit" value="10" min="1" max="100" />
+        </div>
+        <button class="btn btn-primary" onclick="getLeaderboard()">Fetch Leaderboard</button>
+      </div>
+      <div id="leaderboardResult" class="scroll-box" style="margin-top:14px"></div>
+      <div id="leaderboardResponse" class="response-panel hidden"></div>
+    </div>
+  </div>
+
+  <!-- ========== ADMIN TAB ========== -->
+  <div id="tab-admin" class="tab-panel">
+    <div style="padding:8px 0 12px;font-size:.82rem;color:var(--warn)">
+      ⚠️ Admin endpoints require <strong>BENKI_ADMIN</strong> role. Regular users will get 403 Forbidden.
+    </div>
+
+    <div class="grid-2">
+      <!-- Platform Stats -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> Platform Stats</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/admin/stats</code> — Total users, rooms, donations, online count, etc.
+        </p>
+        <button class="btn btn-primary" onclick="adminGetStats()">Fetch Stats</button>
+        <div id="adminStatsResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Admin User List -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> List Users</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/admin/users</code> — Paginated user list.
+        </p>
+        <div class="inline-form">
+          <div class="form-row" style="max-width:100px">
+            <label>Limit</label>
+            <input type="number" id="adminUsersLimit" value="10" min="1" max="100" />
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Offset</label>
+            <input type="number" id="adminUsersOffset" value="0" min="0" />
+          </div>
+          <div class="form-row">
+            <label>Search</label>
+            <input type="text" id="adminUsersSearch" placeholder="Name or username..." />
+          </div>
+        </div>
+        <div class="inline-form" style="margin-top:8px">
+          <div class="form-row">
+            <label>Filter</label>
+            <select id="adminUsersBanned">
+              <option value="">All</option>
+              <option value="true">Banned only</option>
+              <option value="false">Not banned</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Sort</label>
+            <select id="adminUsersSort">
+              <option value="created_at">Created At</option>
+              <option value="reports_count">Reports Count</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" onclick="adminGetUsers()">Fetch</button>
+        </div>
+        <div id="adminUsersResult" class="scroll-box" style="margin-top:14px"></div>
+        <div id="adminUsersResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Ban / Unban User -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Ban / Unban User</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/admin/users/{userId}/ban</code> or <code>/unban</code>
+        </p>
+        <div class="form-row">
+          <label>User ID</label>
+          <input type="text" id="adminBanUserId" placeholder="User UUID..." />
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-danger" onclick="adminBanUser()">Ban</button>
+          <button class="btn btn-success" onclick="adminUnbanUser()">Unban</button>
+        </div>
+        <div id="adminBanResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Reports -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> Reports</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/admin/reports</code> — All user reports, or filter by reported user.
+        </p>
+        <div class="inline-form">
+          <div class="form-row">
+            <label>Reported User ID (optional)</label>
+            <input type="text" id="adminReportedId" placeholder="Filter by user..." />
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Limit</label>
+            <input type="number" id="adminReportsLimit" value="10" min="1" max="100" />
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Offset</label>
+            <input type="number" id="adminReportsOffset" value="0" min="0" />
+          </div>
+          <button class="btn btn-primary" onclick="adminGetReports()">Fetch</button>
+        </div>
+        <div id="adminReportsResult" class="scroll-box" style="margin-top:14px"></div>
+        <div id="adminReportsResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+    <h3 style="margin-bottom:12px;font-size:.9rem">Badge Tier Management</h3>
+    <div class="grid-2">
+      <!-- Create Badge Tier -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Create Badge Tier</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/admin/badges</code>
+        </p>
+        <div class="form-row">
+          <label>Name</label>
+          <input type="text" id="badgeCreateName" placeholder="Gold Donor" />
+        </div>
+        <div class="form-row">
+          <label>Min Amount</label>
+          <input type="number" id="badgeCreateMinAmount" placeholder="500" min="1" step="any" />
+        </div>
+        <div class="form-row">
+          <label>Icon (emoji or URL)</label>
+          <input type="text" id="badgeCreateIcon" placeholder="🥇" />
+        </div>
+        <div class="form-row">
+          <label>Display Order</label>
+          <input type="number" id="badgeCreateOrder" value="1" min="0" />
+        </div>
+        <button class="btn btn-success" onclick="adminCreateBadgeTier()">Create</button>
+        <div id="adminBadgeCreateResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Update / Delete Badge Tier -->
+      <div class="card">
+        <h3><span class="badge badge-post">PATCH / DELETE</span> Update / Delete Badge Tier</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/admin/badges/{badgeId}</code>
+        </p>
+        <div class="form-row">
+          <label>Badge Tier ID</label>
+          <input type="text" id="badgeEditId" placeholder="Tier ID..." />
+        </div>
+        <div class="form-row">
+          <label>Name (optional)</label>
+          <input type="text" id="badgeEditName" placeholder="New name..." />
+        </div>
+        <div class="form-row">
+          <label>Min Amount (optional)</label>
+          <input type="number" id="badgeEditMinAmount" placeholder="New amount..." step="any" />
+        </div>
+        <div class="form-row">
+          <label>Icon (optional)</label>
+          <input type="text" id="badgeEditIcon" placeholder="🏆" />
+        </div>
+        <div class="form-row">
+          <label>Display Order (optional)</label>
+          <input type="number" id="badgeEditOrder" placeholder="Order..." />
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" onclick="adminUpdateBadgeTier()">Update</button>
+          <button class="btn btn-danger" onclick="adminDeleteBadgeTier()">Delete</button>
+        </div>
+        <div id="adminBadgeEditResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <hr class="divider" />
+    <h3 style="margin-bottom:12px;font-size:.9rem">App Settings</h3>
+    <div class="grid-2">
+      <!-- Get Setting -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> Get App Setting</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/admin/settings/{key}</code>
+        </p>
+        <div class="form-row">
+          <label>Setting Key</label>
+          <input type="text" id="adminSettingKey" placeholder="leaderboard_config" />
+        </div>
+        <button class="btn btn-primary" onclick="adminGetSetting()">Fetch</button>
+        <div id="adminSettingGetResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Update Setting -->
+      <div class="card">
+        <h3><span class="badge badge-post">PATCH</span> Update App Setting</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/admin/settings/{key}</code> — Body is raw JSON value.
+        </p>
+        <div class="form-row">
+          <label>Setting Key</label>
+          <input type="text" id="adminSettingUpdateKey" placeholder="leaderboard_config" />
+        </div>
+        <div class="form-row">
+          <label>Value (JSON)</label>
+          <textarea id="adminSettingUpdateValue" rows="3" placeholder='{"monthly_reset_day": 1}'></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="adminUpdateSetting()">Update Setting</button>
+        <div id="adminSettingUpdateResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Username Setup Modal (shown when user has no username after login) -->
@@ -2210,6 +2571,7 @@ async function getMyProfile() {
           <p>@${escapeHtml(d.username || '—')} &bull; ${escapeHtml(d.email || '')}</p>
           <p style="font-size:.72rem;color:var(--text-muted)">Gender: ${escapeHtml(d.gender || 'Any')} &bull; Mobile: ${escapeHtml(d.mobile || '—')}</p>
           <p style="font-size:.72rem;color:var(--text-muted)">Last Seen: ${d.show_last_seen !== false ? '👁 Visible to friends' : '🔒 Hidden'}</p>
+          <p style="font-size:.72rem;color:var(--text-muted)">Total Donated: ₹${d.total_donated != null ? d.total_donated : 0}${d.badge ? ' &bull; Badge: ' + escapeHtml(d.badge.icon || '') + ' ' + escapeHtml(d.badge.name || '') : ''}</p>
           <p style="font-family:var(--mono);font-size:.7rem;color:var(--text-muted)">${escapeHtml(d.id)}</p>
         </div>
       </div>`;
@@ -2348,7 +2710,9 @@ async function postLoginFlow() {
 async function searchUsers() {
   const q = document.getElementById('userSearchQuery').value.trim();
   if (!q) return toast('Enter a search query', 'error');
-  const r = await apiCall('GET', '/api/v1/users/search?query=' + encodeURIComponent(q), null, 'searchResponse');
+  const limit = document.getElementById('userSearchLimit').value || 20;
+  const offset = document.getElementById('userSearchOffset').value || 0;
+  const r = await apiCall('GET', '/api/v1/users/search?query=' + encodeURIComponent(q) + '&limit=' + limit + '&offset=' + offset, null, 'searchResponse');
   const el = document.getElementById('userSearchResults');
   if (r.data && Array.isArray(r.data) && r.data.length > 0) {
     el.innerHTML = '<ul class="user-list">' + r.data.map(u => `
@@ -2455,7 +2819,12 @@ async function getRoomMessages() {
 //  MATCH
 // ======================================================================
 async function enterMatchQueue() {
-  const r = await apiCall('POST', '/api/v1/match/enter', {}, 'enterMatchResponse');
+  const body = {};
+  const locStr = document.getElementById('matchLocation').value.trim();
+  if (locStr) {
+    try { body.location = JSON.parse(locStr); } catch(e) { return toast('Invalid JSON in location field', 'error'); }
+  }
+  const r = await apiCall('POST', '/api/v1/match/enter', body, 'enterMatchResponse');
   if (r.data && r.data.room_id) {
     document.getElementById('wsRoomId').value = r.data.room_id;
     document.getElementById('wsMsgRoomId').value = r.data.room_id;
@@ -2872,7 +3241,8 @@ function wsConnect() {
 
       if (parsed.type === 'match_found') {
         const rid = parsed.roomId || parsed.room_id || '';
-        toast('Match found! Room: ' + rid, 'success');
+        const partnerLoc = parsed.partner_location ? ' | Partner Location: ' + JSON.stringify(parsed.partner_location) : '';
+        toast('Match found! Room: ' + rid + partnerLoc, 'success');
         if (rid) {
           document.getElementById('wsRoomId').value = rid;
           document.getElementById('wsMsgRoomId').value = rid;
@@ -3157,7 +3527,10 @@ async function getFriendRequests() {
 async function sendFriendRequest() {
   const username = document.getElementById('friendReqUsername').value.trim();
   if (!username) return toast('Enter a username', 'error');
-  const r = await apiCall('POST', '/api/v1/friends/request', { username }, 'sendFriendReqResponse');
+  const premium = document.getElementById('friendReqPremium').checked;
+  const body = { username };
+  if (premium) body.premium = true;
+  const r = await apiCall('POST', '/api/v1/friends/request', body, 'sendFriendReqResponse');
   if (r.status >= 200 && r.status < 300) toast(r.data?.message || 'Request sent', 'success');
 }
 
@@ -3186,7 +3559,9 @@ async function removeFriend() {
 //  DM REQUESTS
 // ======================================================================
 async function getDMRequests() {
-  const r = await apiCall('GET', '/api/v1/rooms/requests', null, 'dmRequestsResponse');
+  const limit = document.getElementById('dmReqLimit')?.value || 10;
+  const offset = document.getElementById('dmReqOffset')?.value || 0;
+  const r = await apiCall('GET', '/api/v1/rooms/requests?limit=' + limit + '&offset=' + offset, null, 'dmRequestsResponse');
   const el = document.getElementById('dmRequestsList');
   if (r.data && Array.isArray(r.data) && r.data.length > 0) {
     el.innerHTML = r.data.map(dm => `
@@ -5329,6 +5704,250 @@ async function gcallJoinExisting(roomId, callId) {
   } else {
     toast('Failed to join call: ' + (r.data?.error || 'unknown error'), 'error');
   }
+}
+
+// ======================================================================
+//  ONLINE COUNT (periodic polling)
+// ======================================================================
+let onlineCountInterval = null;
+
+async function fetchOnlineCount() {
+  try {
+    const resp = await fetch(base() + '/api/v1/online');
+    const data = await resp.json();
+    const count = data.data?.online_users ?? data.online_users ?? '—';
+    document.getElementById('onlineCountText').textContent = 'Online: ' + count;
+  } catch (e) {
+    document.getElementById('onlineCountText').textContent = 'Online: —';
+  }
+}
+
+// Start polling on load
+onlineCountInterval = setInterval(fetchOnlineCount, 30000);
+fetchOnlineCount(); // initial fetch
+
+// ======================================================================
+//  DONATIONS
+// ======================================================================
+async function makeDonation() {
+  const amount = parseFloat(document.getElementById('donateAmount').value);
+  if (!amount || amount <= 0) return toast('Enter a positive amount', 'error');
+  const currency = document.getElementById('donateCurrency').value || 'INR';
+  const r = await apiCall('POST', '/api/v1/donate', { amount, currency }, 'donateResponse');
+  if (r.status >= 200 && r.status < 300) {
+    toast(r.data?.message || 'Donation successful!', 'success');
+  }
+}
+
+async function getDonationHistory() {
+  const limit = document.getElementById('donHistLimit').value || 10;
+  const offset = document.getElementById('donHistOffset').value || 0;
+  const r = await apiCall('GET', '/api/v1/donate/history?limit=' + limit + '&offset=' + offset, null, 'donHistResponse');
+  const el = document.getElementById('donHistResult');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = '<table style="width:100%;font-size:.78rem;border-collapse:collapse"><thead><tr style="text-align:left;border-bottom:1px solid var(--border)"><th>Date</th><th>Amount</th><th>Currency</th><th>Payment ID</th></tr></thead><tbody>'
+      + r.data.map(d => `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:6px 4px">${new Date(d.created_at).toLocaleString()}</td>
+        <td style="padding:6px 4px">${d.amount}</td>
+        <td style="padding:6px 4px">${escapeHtml(d.currency || 'INR')}</td>
+        <td style="padding:6px 4px;font-family:var(--mono);font-size:.68rem">${escapeHtml(d.payment_id || '—')}</td>
+      </tr>`).join('') + '</tbody></table>';
+  } else {
+    el.innerHTML = '<div class="empty-state">No donation history</div>';
+  }
+}
+
+async function getBadgeTiers() {
+  const r = await apiCall('GET', '/api/v1/badges/tiers', null, 'badgeTiersResponse');
+  const el = document.getElementById('badgeTiersResult');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = '<table style="width:100%;font-size:.78rem;border-collapse:collapse"><thead><tr style="text-align:left;border-bottom:1px solid var(--border)"><th>Order</th><th>Icon</th><th>Name</th><th>Min Amount</th><th>ID</th></tr></thead><tbody>'
+      + r.data.map(t => `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:6px 4px">${t.display_order}</td>
+        <td style="padding:6px 4px">${escapeHtml(t.icon || '')}</td>
+        <td style="padding:6px 4px">${escapeHtml(t.name)}</td>
+        <td style="padding:6px 4px">${t.min_amount}</td>
+        <td style="padding:6px 4px;font-family:var(--mono);font-size:.68rem">${t.id}</td>
+      </tr>`).join('') + '</tbody></table>';
+  } else {
+    el.innerHTML = '<div class="empty-state">No badge tiers configured</div>';
+  }
+}
+
+// ======================================================================
+//  LEADERBOARD
+// ======================================================================
+async function getLeaderboard() {
+  const scope = document.getElementById('lbScope').value || 'alltime';
+  const limit = document.getElementById('lbLimit').value || 10;
+  const r = await apiCall('GET', '/api/v1/leaderboard?scope=' + scope + '&limit=' + limit, null, 'leaderboardResponse');
+  const el = document.getElementById('leaderboardResult');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = '<table style="width:100%;font-size:.78rem;border-collapse:collapse"><thead><tr style="text-align:left;border-bottom:1px solid var(--border)"><th>#</th><th>User</th><th>Total Donated</th><th>Donations</th></tr></thead><tbody>'
+      + r.data.map((d, i) => `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:6px 4px;font-weight:600">${i + 1}</td>
+        <td style="padding:6px 4px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <img src="${escapeHtml(d.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(d.name || 'U'))}" style="width:24px;height:24px;border-radius:50%" />
+            ${escapeHtml(d.name || 'Unknown')}
+          </div>
+        </td>
+        <td style="padding:6px 4px;font-weight:600;color:var(--success)">₹${d.total_donated}</td>
+        <td style="padding:6px 4px">${d.donation_count}</td>
+      </tr>`).join('') + '</tbody></table>';
+  } else {
+    el.innerHTML = '<div class="empty-state">No leaderboard data</div>';
+  }
+}
+
+// ======================================================================
+//  VANITY LINKS
+// ======================================================================
+async function setVanitySlug() {
+  const groupId = document.getElementById('vanityGroupId').value.trim();
+  const slug = document.getElementById('vanitySlug').value.trim();
+  if (!groupId) return toast('Enter a Group ID', 'error');
+  if (!slug) return toast('Enter a vanity slug', 'error');
+  await apiCall('PATCH', '/api/v1/groups/' + encodeURIComponent(groupId) + '/vanity', { slug }, 'vanitySetResponse');
+}
+
+async function joinByVanitySlug() {
+  const slug = document.getElementById('vanityJoinSlug').value.trim();
+  if (!slug) return toast('Enter a vanity slug', 'error');
+  const r = await apiCall('POST', '/api/v1/vanity/' + encodeURIComponent(slug), null, 'vanityJoinResponse');
+  if (r.status >= 200 && r.status < 300) {
+    toast('Joined group via vanity slug!', 'success');
+    getRooms();
+  }
+}
+
+// ======================================================================
+//  ADMIN
+// ======================================================================
+async function adminGetStats() {
+  await apiCall('GET', '/api/v1/admin/stats', null, 'adminStatsResponse');
+}
+
+async function adminGetUsers() {
+  const limit = document.getElementById('adminUsersLimit').value || 10;
+  const offset = document.getElementById('adminUsersOffset').value || 0;
+  const search = document.getElementById('adminUsersSearch').value.trim();
+  const banned = document.getElementById('adminUsersBanned').value;
+  const sort = document.getElementById('adminUsersSort').value;
+  let path = '/api/v1/admin/users?limit=' + limit + '&offset=' + offset;
+  if (search) path += '&search=' + encodeURIComponent(search);
+  if (banned) path += '&banned=' + banned;
+  if (sort) path += '&sort=' + sort;
+  const r = await apiCall('GET', path, null, 'adminUsersResponse');
+  const el = document.getElementById('adminUsersResult');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = '<table style="width:100%;font-size:.75rem;border-collapse:collapse"><thead><tr style="text-align:left;border-bottom:1px solid var(--border)"><th>Name</th><th>Username</th><th>Email</th><th>Banned</th><th>Reports</th><th>Donated</th><th>Actions</th></tr></thead><tbody>'
+      + r.data.map(u => `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:4px">${escapeHtml(u.name || '—')}</td>
+        <td style="padding:4px">@${escapeHtml(u.username || '—')}</td>
+        <td style="padding:4px;font-size:.68rem">${escapeHtml(u.email || '')}</td>
+        <td style="padding:4px">${u.is_banned ? '<span style="color:var(--error)">Yes</span>' : 'No'}</td>
+        <td style="padding:4px">${u.reports_count || 0}</td>
+        <td style="padding:4px">₹${u.total_donated || 0}</td>
+        <td style="padding:4px">
+          <button class="btn btn-sm ${u.is_banned ? 'btn-success' : 'btn-danger'}" onclick="document.getElementById('adminBanUserId').value='${escapeHtml(u.id)}'; ${u.is_banned ? 'adminUnbanUser()' : 'adminBanUser()'}">
+            ${u.is_banned ? 'Unban' : 'Ban'}
+          </button>
+        </td>
+      </tr>`).join('') + '</tbody></table>';
+  } else {
+    el.innerHTML = '<div class="empty-state">No users found</div>';
+  }
+}
+
+async function adminBanUser() {
+  const userId = document.getElementById('adminBanUserId').value.trim();
+  if (!userId) return toast('Enter a User ID', 'error');
+  const r = await apiCall('POST', '/api/v1/admin/users/' + encodeURIComponent(userId) + '/ban', null, 'adminBanResponse');
+  if (r.status >= 200 && r.status < 300) toast('User banned', 'success');
+}
+
+async function adminUnbanUser() {
+  const userId = document.getElementById('adminBanUserId').value.trim();
+  if (!userId) return toast('Enter a User ID', 'error');
+  const r = await apiCall('POST', '/api/v1/admin/users/' + encodeURIComponent(userId) + '/unban', null, 'adminBanResponse');
+  if (r.status >= 200 && r.status < 300) toast('User unbanned', 'success');
+}
+
+async function adminGetReports() {
+  const limit = document.getElementById('adminReportsLimit').value || 10;
+  const offset = document.getElementById('adminReportsOffset').value || 0;
+  const reportedId = document.getElementById('adminReportedId').value.trim();
+  let path = '/api/v1/admin/reports?limit=' + limit + '&offset=' + offset;
+  if (reportedId) path += '&reported_id=' + encodeURIComponent(reportedId);
+  const r = await apiCall('GET', path, null, 'adminReportsResponse');
+  const el = document.getElementById('adminReportsResult');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = r.data.map(rpt => `
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border);font-size:.78rem">
+        <div><strong>Reporter:</strong> ${escapeHtml(rpt.reporter_name || '')} (@${escapeHtml(rpt.reporter_username || '')})</div>
+        <div><strong>Reported:</strong> ${escapeHtml(rpt.reported_name || '')} (@${escapeHtml(rpt.reported_username || '')})
+          ${rpt.reported_is_banned ? '<span style="color:var(--error);font-size:.7rem"> [BANNED]</span>' : ''}</div>
+        <div style="color:var(--text-muted)">Reason: ${escapeHtml(rpt.reason || '—')} &bull; ${new Date(rpt.created_at).toLocaleString()}</div>
+      </div>`).join('');
+  } else {
+    el.innerHTML = '<div class="empty-state">No reports</div>';
+  }
+}
+
+async function adminCreateBadgeTier() {
+  const name = document.getElementById('badgeCreateName').value.trim();
+  const minAmount = parseFloat(document.getElementById('badgeCreateMinAmount').value);
+  if (!name || !minAmount || minAmount <= 0) return toast('Name and min amount (> 0) required', 'error');
+  const body = {
+    name,
+    min_amount: minAmount,
+    icon: document.getElementById('badgeCreateIcon').value.trim() || '',
+    display_order: parseInt(document.getElementById('badgeCreateOrder').value) || 1
+  };
+  const r = await apiCall('POST', '/api/v1/admin/badges', body, 'adminBadgeCreateResponse');
+  if (r.status >= 200 && r.status < 300) toast('Badge tier created', 'success');
+}
+
+async function adminUpdateBadgeTier() {
+  const id = document.getElementById('badgeEditId').value.trim();
+  if (!id) return toast('Enter a Badge Tier ID', 'error');
+  const body = {};
+  const name = document.getElementById('badgeEditName').value.trim();
+  const minAmt = document.getElementById('badgeEditMinAmount').value;
+  const icon = document.getElementById('badgeEditIcon').value.trim();
+  const order = document.getElementById('badgeEditOrder').value;
+  if (name) body.name = name;
+  if (minAmt) body.min_amount = parseFloat(minAmt);
+  if (icon) body.icon = icon;
+  if (order) body.display_order = parseInt(order);
+  if (Object.keys(body).length === 0) return toast('No fields to update', 'error');
+  const r = await apiCall('PATCH', '/api/v1/admin/badges/' + encodeURIComponent(id), body, 'adminBadgeEditResponse');
+  if (r.status >= 200 && r.status < 300) toast('Badge tier updated', 'success');
+}
+
+async function adminDeleteBadgeTier() {
+  const id = document.getElementById('badgeEditId').value.trim();
+  if (!id) return toast('Enter a Badge Tier ID', 'error');
+  const r = await apiCall('DELETE', '/api/v1/admin/badges/' + encodeURIComponent(id), null, 'adminBadgeEditResponse');
+  if (r.status >= 200 && r.status < 300) toast('Badge tier deleted', 'success');
+}
+
+async function adminGetSetting() {
+  const key = document.getElementById('adminSettingKey').value.trim();
+  if (!key) return toast('Enter a setting key', 'error');
+  await apiCall('GET', '/api/v1/admin/settings/' + encodeURIComponent(key), null, 'adminSettingGetResponse');
+}
+
+async function adminUpdateSetting() {
+  const key = document.getElementById('adminSettingUpdateKey').value.trim();
+  const valueStr = document.getElementById('adminSettingUpdateValue').value.trim();
+  if (!key) return toast('Enter a setting key', 'error');
+  if (!valueStr) return toast('Enter a JSON value', 'error');
+  let value;
+  try { value = JSON.parse(valueStr); } catch(e) { return toast('Invalid JSON value', 'error'); }
+  const r = await apiCall('PATCH', '/api/v1/admin/settings/' + encodeURIComponent(key), value, 'adminSettingUpdateResponse');
+  if (r.status >= 200 && r.status < 300) toast('Setting updated', 'success');
 }
 </script>
 
