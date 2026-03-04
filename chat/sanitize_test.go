@@ -80,6 +80,48 @@ func TestContainsProfanity(t *testing.T) {
 		{"empty string", "", false},
 		{"near-miss", "ship", false},
 		{"duck", "duck", false},
+		// Hindi/Hinglish slurs (substring match — no word boundaries)
+		{"hindi bhosdike", "bhosdike", true},
+		{"hindi bsdi embedded", "bsdiwali", true},
+		{"hindi bsdk", "bsdk", true},
+		{"hindi madarchod", "madarchod", true},
+		{"hindi benchod", "benchod", true},
+		{"hindi chutiya", "chutiya", true},
+		{"hindi gandu", "gandu", true},
+		{"hindi randi", "randi", true},
+		{"hindi lund", "lund", true},
+		{"hindi gand word", "gand", true},
+		{"hindi harami", "harami", true},
+		{"hindi embedded in word", "kbsdkya", true},
+		{"hindi case insensitive", "BHOSDIKE", true},
+		{"clean hindi", "diwali mubarak", false},
+		{"clean hindi 2", "gandhi jayanti", false},
+		// New: abbreviated English profanity
+		{"abbrev fk", "fk u", true},
+		{"abbrev fck", "fck off", true},
+		{"abbrev fuk", "fuk", true},
+		{"abbrev stfu", "stfu", true},
+		// New: laudi variant
+		{"hindi laudi", "laudi", true},
+		// New: sali
+		{"hindi sali randi", "sali randi", true},
+		{"hindi sali standalone", "sali", true},
+		{"hindi saala", "saala", true},
+		// NSFW / sexual terms
+		{"nsfw masturbate", "masturbate", true},
+		{"nsfw masturbation", "do you do masturbation", true},
+		{"nsfw horny", "im so horny", true},
+		{"nsfw porn", "send me porn", true},
+		{"nsfw boobs", "show boobs", true},
+		{"nsfw nudes", "send nudes", true},
+		{"nsfw cum", "cum", true},
+		{"nsfw blowjob", "blowjob", true},
+		{"nsfw sexting", "lets do sexting", true},
+		{"nsfw fap", "fap", true},
+		// NSFW false positive checks
+		{"clean analysis", "analysis of data", false},
+		{"clean cumulative", "cumulative total", false},
+		{"clean document", "document review", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
