@@ -293,39 +293,46 @@ func matchWithBot(userID string) {
 
 	log.Printf("[bot] Matched user %s with bot %s (%s) in room %s", userID, botName, botUserID, roomID)
 
-	// Send an initial greeting after a short delay (simulates bot typing).
-	// Uses its own context because matchWithBot returns (and cancels ctx) immediately.
-	go func() {
-		select {
-		case <-session.done:
-			return
-		case <-time.After(randomDelay(1500, 3000)):
-		}
-
-		greetCtx, greetCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer greetCancel()
-
-		sendBotTypingStart(greetCtx, session)
-
-		select {
-		case <-session.done:
-			return
-		case <-time.After(randomDelay(800, 2000)):
-		}
-
-		// Use Initiate() for persona-aware openers, fallback to Chat("hello")
-		reply, err := session.session.Initiate(greetCtx)
-		if err != nil {
-			reply, err = session.session.Chat(greetCtx, "hello")
-			if err != nil {
-				log.Printf("[bot] Failed to generate greeting for room %s: %v", session.RoomID, err)
-				sendBotTypingEnd(greetCtx, session)
+	// 50% chance: bot initiates the conversation, 50% chance: bot waits
+	// for the stranger to speak first. This prevents the pattern of the bot
+	// always greeting first, which is a strong bot-detection signal.
+	if rand.IntN(100) < 50 {
+		// Send an initial greeting after a short delay (simulates bot typing).
+		// Uses its own context because matchWithBot returns (and cancels ctx) immediately.
+		go func() {
+			select {
+			case <-session.done:
 				return
+			case <-time.After(randomDelay(1500, 3000)):
 			}
-		}
-		sendBotTypingEnd(greetCtx, session)
-		sendBotMessage(greetCtx, session, reply.Text)
-	}()
+
+			greetCtx, greetCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer greetCancel()
+
+			sendBotTypingStart(greetCtx, session)
+
+			select {
+			case <-session.done:
+				return
+			case <-time.After(randomDelay(800, 2000)):
+			}
+
+			// Use Initiate() for persona-aware openers, fallback to Chat("hello")
+			reply, err := session.session.Initiate(greetCtx)
+			if err != nil {
+				reply, err = session.session.Chat(greetCtx, "hello")
+				if err != nil {
+					log.Printf("[bot] Failed to generate greeting for room %s: %v", session.RoomID, err)
+					sendBotTypingEnd(greetCtx, session)
+					return
+				}
+			}
+			sendBotTypingEnd(greetCtx, session)
+			sendBotMessage(greetCtx, session, reply.Text)
+		}()
+	} else {
+		log.Printf("[bot] Bot waiting for user %s to start conversation in room %s", userID, session.RoomID)
+	}
 
 	// Start the session watchdog (max duration + inactivity)
 	go sessionWatchdog(session)
