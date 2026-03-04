@@ -77,6 +77,10 @@ type BotSession struct {
 	once        sync.Once    // ensures done is closed exactly once
 	lastUserMsg atomic.Int64 // unix-nano timestamp of the last message from the real user
 	replyQueue  chan string  // serialized reply queue — single worker goroutine drains this
+
+	// Repeat detection — accessed only by replyWorker (single goroutine), no lock needed.
+	lastInput   string // normalised (lowercased, trimmed) previous user input
+	repeatCount int    // consecutive times the same input was received
 }
 
 // ---------------------------------------------------------------------------
@@ -561,6 +565,86 @@ func handleBotReply(session *BotSession, userText string) {
 		return
 	default:
 	}
+
+	// --- Repeat detection ---
+	// Normalise input: lowercase + collapse whitespace + trim.
+	normInput := strings.ToLower(strings.TrimSpace(userText))
+	normInput = strings.Join(strings.Fields(normInput), " ")
+
+	if normInput == session.lastInput && normInput != "" {
+		session.repeatCount++
+	} else {
+		session.lastInput = normInput
+		session.repeatCount = 0
+	}
+
+	// If the user is repeating, respond with escalating nudges instead of
+	// going through the retrieval engine (which would cycle the same 2-3 replies).
+	if session.repeatCount > 0 {
+		var repeatReply string
+		switch {
+		case session.repeatCount == 1:
+			replies := []string{
+				"you already said that lol",
+				"haha you just said that!",
+				"deja vu much?",
+				"repeating yourself there!",
+			}
+			repeatReply = replies[rand.IntN(len(replies))]
+		case session.repeatCount == 2:
+			replies := []string{
+				"ok ok i heard you the first time!",
+				"yeahh i got it lol",
+				"bro same thing again? come on tell me something new",
+				"haha third time! you really want me to notice huh",
+			}
+			repeatReply = replies[rand.IntN(len(replies))]
+		case session.repeatCount == 3:
+			replies := []string{
+				"alright alright! lets talk about something else. whats your favorite movie?",
+				"okay broken record mode off please! so what do you do for fun?",
+				"i think we covered that lol. tell me whats your hobby?",
+			}
+			repeatReply = replies[rand.IntN(len(replies))]
+		default: // 4+
+			replies := []string{
+				"you really like saying that huh. anyway whats up with you today?",
+				"lol still? ok tell me something interesting about yourself instead",
+				"im gonna pretend i didnt hear that again. so where are you from?",
+			}
+			repeatReply = replies[rand.IntN(len(replies))]
+		}
+
+		// Still simulate natural delays
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		readMs := 300 + len(userText)*30
+		if readMs > 2000 {
+			readMs = 2000
+		}
+		select {
+		case <-session.done:
+			return
+		case <-time.After(addJitter(readMs, 0.2)):
+		}
+		sendBotReadReceipt(ctx, session)
+		sendBotTypingStart(ctx, session)
+
+		typeMs := 200 + len(repeatReply)*40
+		if typeMs > 3000 {
+			typeMs = 3000
+		}
+		select {
+		case <-session.done:
+			return
+		case <-time.After(addJitter(typeMs, 0.2)):
+		}
+		sendBotTypingEnd(ctx, session)
+		sendBotMessage(ctx, session, repeatReply)
+		return
+	}
+	// --- End repeat detection ---
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
