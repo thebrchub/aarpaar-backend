@@ -23,7 +23,6 @@ import (
 	_ "github.com/thebrchub/aarpaar/docs" // Swagger generated docs
 	"github.com/thebrchub/aarpaar/handlers"
 	mw "github.com/thebrchub/aarpaar/middleware"
-	"github.com/thebrchub/aarpaar/payment"
 	"github.com/thebrchub/aarpaar/services"
 
 	sdkpay "github.com/shivanand-burli/go-starter-kit/payment"
@@ -110,14 +109,13 @@ func main() {
 	engine.OnUserOffline = services.CancelBotMatch
 
 	// -----------------------------------------------------------------------
-	// 5.6 INITIALIZE PAYMENT MANAGER
+	// 5.6 INITIALIZE PAYMENT SERVICE (Razorpay)
 	// -----------------------------------------------------------------------
-	handlers.PaymentMgr = payment.NewManager(&payment.StubProvider{})
 	if config.PaymentProviderName == "razorpay" {
 		handlers.PaymentSvc = sdkpay.NewRazorpayService()
 		log.Println("[boot] Payment service initialized (razorpay)")
 	} else {
-		log.Println("[boot] Payment manager initialized (stub provider)")
+		log.Println("[boot] Payment service not configured — donations disabled")
 	}
 
 	// -----------------------------------------------------------------------
@@ -207,7 +205,6 @@ func main() {
 	mux.HandleFunc("POST /api/v1/vanity/{slug}", mw.Auth(handlers.JoinGroupByVanityHandler))
 
 	// --- Donations (protected) ---
-	mux.HandleFunc("POST /api/v1/donate", mw.Auth(handlers.DonateHandler))
 	mux.HandleFunc("POST /api/v1/donate/create-order", mw.Auth(handlers.CreateDonationOrderHandler))
 	mux.HandleFunc("GET /api/v1/donate/status/{orderId}", mw.Auth(handlers.GetDonationStatusHandler))
 	mux.HandleFunc("GET /api/v1/donate/history", mw.Auth(handlers.GetDonationHistoryHandler))

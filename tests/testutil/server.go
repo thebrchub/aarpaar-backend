@@ -23,7 +23,6 @@ import (
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/handlers"
 	mw "github.com/thebrchub/aarpaar/middleware"
-	"github.com/thebrchub/aarpaar/payment"
 	"github.com/thebrchub/aarpaar/services"
 )
 
@@ -95,9 +94,6 @@ func SetupTestInfra(t *testing.T) {
 		if err := redis.InitCache(config.RedisCacheName, config.RedisHost, config.RedisPort); err != nil {
 			log.Fatalf("[test] Redis init failed: %v", err)
 		}
-
-		// Payment stub
-		handlers.PaymentMgr = payment.NewManager(&payment.StubProvider{})
 
 		// RTC optional stub
 		handlers.RTC = rtc.NewClientOptional(rtc.Config{})
@@ -184,9 +180,13 @@ func BuildTestMux(engine *chat.Engine) http.Handler {
 	mux.HandleFunc("POST /api/v1/vanity/{slug}", mw.Auth(handlers.JoinGroupByVanityHandler))
 
 	// Donations
-	mux.HandleFunc("POST /api/v1/donate", mw.Auth(handlers.DonateHandler))
+	mux.HandleFunc("POST /api/v1/donate/create-order", mw.Auth(handlers.CreateDonationOrderHandler))
+	mux.HandleFunc("GET /api/v1/donate/status/{orderId}", mw.Auth(handlers.GetDonationStatusHandler))
 	mux.HandleFunc("GET /api/v1/donate/history", mw.Auth(handlers.GetDonationHistoryHandler))
 	mux.HandleFunc("GET /api/v1/badges/tiers", mw.Auth(handlers.GetBadgeTiersHandler))
+
+	// Razorpay Webhook
+	mux.HandleFunc("POST /api/v1/webhook/razorpay", handlers.RazorpayWebhookHandler)
 
 	// Leaderboard
 	mux.HandleFunc("GET /api/v1/leaderboard", mw.Auth(handlers.GetLeaderboardHandler))

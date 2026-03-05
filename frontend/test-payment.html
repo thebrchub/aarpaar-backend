@@ -108,8 +108,8 @@
       <input type="text" id="baseUrl" placeholder="http://localhost:2028" />
     </div>
     <div class="form-row">
-      <label>JWT Token</label>
-      <input type="text" id="jwtToken" placeholder="Bearer eyJhbGci..." />
+      <label>Auth Status</label>
+      <p id="authStatus" style="font-size:.85rem;color:var(--text-muted);padding:8px 0">Checking...</p>
     </div>
   </div>
 </div>
@@ -194,10 +194,13 @@
 function getBaseUrl() {
   return (document.getElementById('baseUrl').value || 'http://localhost:2028').replace(/\/+$/, '');
 }
+function getToken() {
+  return localStorage.getItem('aarpaar_access_token') || '';
+}
 function getHeaders() {
-  const token = document.getElementById('jwtToken').value.trim();
+  const token = getToken();
   const h = { 'Content-Type': 'application/json' };
-  if (token) h['Authorization'] = token.startsWith('Bearer ') ? token : 'Bearer ' + token;
+  if (token) h['Authorization'] = 'Bearer ' + token;
   return h;
 }
 function showPanel(id, data, isError) {
@@ -358,6 +361,16 @@ async function fetchHistory() {
   document.getElementById('baseUrl').addEventListener('change', function() {
     localStorage.setItem('aarpaar_base_url', this.value);
   });
+
+  // Show auth status from shared token (set by test-frontend.html)
+  const el = document.getElementById('authStatus');
+  if (getToken()) {
+    el.textContent = 'Signed in (token loaded from console)';
+    el.style.color = 'var(--success)';
+  } else {
+    el.innerHTML = 'Not signed in — <a href="test-frontend.html">sign in on the Test Console</a> first.';
+    el.style.color = 'var(--error)';
+  }
 })();
 </script>
 </body>
