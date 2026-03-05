@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aarpaar – Razorpay Payment Test</title>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242836;
+      --border: #2e3345;
+      --text: #e4e6f0;
+      --text-muted: #8b8fa3;
+      --accent: #6c5ce7;
+      --accent-hover: #7f71ed;
+      --success: #00cec9;
+      --error: #ff6b6b;
+      --warn: #fdcb6e;
+      --radius: 10px;
+      --shadow: 0 2px 12px rgba(0,0,0,.35);
+      --mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      --sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 14px; }
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.55;
+      padding: 20px;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    h1 {
+      font-size: 1.4rem; font-weight: 700; margin-bottom: 20px;
+      background: linear-gradient(135deg, var(--accent), var(--success));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px; margin-bottom: 20px;
+      box-shadow: var(--shadow);
+    }
+    .card h3 { font-size: 1rem; margin-bottom: 14px; }
+    .form-row { margin-bottom: 12px; }
+    .form-row label {
+      display: block; font-size: .78rem; color: var(--text-muted);
+      margin-bottom: 4px; font-weight: 500;
+    }
+    .form-row input, .form-row select {
+      width: 100%; padding: 8px 12px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text); font-size: .85rem;
+      font-family: var(--sans);
+    }
+    .form-row input:focus, .form-row select:focus {
+      outline: none; border-color: var(--accent);
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 18px; border: none; border-radius: 6px;
+      font-size: .82rem; font-weight: 600; cursor: pointer;
+      transition: .2s; font-family: var(--sans);
+    }
+    .btn-success { background: var(--success); color: #000; }
+    .btn-success:hover { filter: brightness(1.1); }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 700px) { .grid-2 { grid-template-columns: 1fr; } }
+    .response-panel {
+      margin-top: 14px; padding: 12px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; font-family: var(--mono); font-size: .78rem;
+      white-space: pre-wrap; word-break: break-all; max-height: 300px;
+      overflow-y: auto;
+    }
+    .hidden { display: none; }
+    .status-pending { color: var(--warn); }
+    .status-completed { color: var(--success); }
+    .status-failed { color: var(--error); }
+    .scroll-box {
+      max-height: 300px; overflow-y: auto;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: var(--surface2); padding: 10px;
+      font-family: var(--mono); font-size: .78rem;
+    }
+    .inline-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .back-link { display: inline-block; margin-bottom: 16px; font-size: .85rem; }
+  </style>
+</head>
+<body>
+
+<a href="test-frontend.html" class="back-link">&larr; Back to Test Console</a>
+<h1>Razorpay Checkout Test</h1>
+
+<!-- Auth Configuration -->
+<div class="card">
+  <h3>Auth Configuration</h3>
+  <div class="grid-2">
+    <div class="form-row">
+      <label>Base URL</label>
+      <input type="text" id="baseUrl" placeholder="http://localhost:2028" />
+    </div>
+    <div class="form-row">
+      <label>JWT Token</label>
+      <input type="text" id="jwtToken" placeholder="Bearer eyJhbGci..." />
+    </div>
+  </div>
+</div>
+
+<!-- Donation Form -->
+<div class="grid-2">
+  <div class="card">
+    <h3>Make a Payment</h3>
+    <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+      Creates a Razorpay order, then opens checkout popup.
+    </p>
+    <div class="form-row">
+      <label>Amount</label>
+      <input type="number" id="payAmount" placeholder="100" min="1" step="any" />
+    </div>
+    <div class="form-row">
+      <label>Currency</label>
+      <select id="payCurrency">
+        <option value="INR">INR (Indian Rupee)</option>
+        <option value="USD">USD (US Dollar)</option>
+        <option value="GBP">GBP (British Pound)</option>
+        <option value="EUR">EUR (Euro)</option>
+      </select>
+    </div>
+    <button class="btn btn-success" id="payBtn" onclick="startPayment()">Pay Now</button>
+    <div id="payResponse" class="response-panel hidden"></div>
+  </div>
+
+  <!-- Payment Status -->
+  <div class="card">
+    <h3>Payment Status</h3>
+    <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+      Poll for order status after checkout.
+    </p>
+    <div id="statusPanel">
+      <p style="color:var(--text-muted);font-size:.85rem">Complete a payment to see status here.</p>
+    </div>
+    <div id="statusResponse" class="response-panel hidden"></div>
+  </div>
+</div>
+
+<!-- Donation History -->
+<div class="card">
+  <h3>Donation History</h3>
+  <div class="inline-form">
+    <div class="form-row" style="max-width:100px">
+      <label>Limit</label>
+      <input type="number" id="histLimit" value="10" min="1" max="100" />
+    </div>
+    <div class="form-row" style="max-width:100px">
+      <label>Offset</label>
+      <input type="number" id="histOffset" value="0" min="0" />
+    </div>
+    <button class="btn btn-primary" onclick="fetchHistory()">Fetch History</button>
+  </div>
+  <div id="histResult" class="scroll-box hidden" style="margin-top:14px"></div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Locale → Currency auto-detection
+// ---------------------------------------------------------------------------
+(function detectCurrency() {
+  const lang = (navigator.language || 'en-IN').toLowerCase();
+  const map = {
+    'en-in': 'INR', 'hi': 'INR', 'hi-in': 'INR',
+    'en-us': 'USD',
+    'en-gb': 'GBP',
+    'de': 'EUR', 'fr': 'EUR', 'es': 'EUR', 'it': 'EUR',
+  };
+  // Try exact match, then prefix match, fallback INR
+  const currency = map[lang] || map[lang.split('-')[0]] || 'INR';
+  const sel = document.getElementById('payCurrency');
+  for (let i = 0; i < sel.options.length; i++) {
+    if (sel.options[i].value === currency) { sel.selectedIndex = i; break; }
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function getBaseUrl() {
+  return (document.getElementById('baseUrl').value || 'http://localhost:2028').replace(/\/+$/, '');
+}
+function getHeaders() {
+  const token = document.getElementById('jwtToken').value.trim();
+  const h = { 'Content-Type': 'application/json' };
+  if (token) h['Authorization'] = token.startsWith('Bearer ') ? token : 'Bearer ' + token;
+  return h;
+}
+function showPanel(id, data, isError) {
+  const el = document.getElementById(id);
+  el.classList.remove('hidden');
+  el.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
+  el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+}
+
+let lastOrderId = null;
+
+// ---------------------------------------------------------------------------
+// Start Payment
+// ---------------------------------------------------------------------------
+async function startPayment() {
+  const amount = parseFloat(document.getElementById('payAmount').value);
+  const currency = document.getElementById('payCurrency').value;
+  const btn = document.getElementById('payBtn');
+
+  if (!amount || amount <= 0) {
+    showPanel('payResponse', 'Please enter a valid amount', true);
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Creating order...';
+
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/donate/create-order', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ amount, currency }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      showPanel('payResponse', data, true);
+      btn.disabled = false;
+      btn.textContent = 'Pay Now';
+      return;
+    }
+
+    showPanel('payResponse', data);
+    lastOrderId = data.order_id;
+
+    // Open Razorpay Checkout
+    const options = {
+      key: data.key_id,
+      amount: data.amount,
+      currency: data.currency,
+      name: 'Aarpaar',
+      description: 'Donation',
+      order_id: data.razorpay_order_id,
+      handler: function(response) {
+        showPanel('payResponse', {
+          status: 'Payment successful!',
+          razorpay_payment_id: response.razorpay_payment_id,
+          razorpay_order_id: response.razorpay_order_id,
+          razorpay_signature: response.razorpay_signature,
+        });
+        // Start polling for webhook confirmation
+        pollStatus(data.order_id);
+      },
+      modal: {
+        ondismiss: function() {
+          showPanel('payResponse', 'Payment cancelled by user', true);
+          btn.disabled = false;
+          btn.textContent = 'Pay Now';
+        },
+      },
+      theme: { color: '#6c5ce7' },
+    };
+
+    const rzp = new Razorpay(options);
+    rzp.on('payment.failed', function(response) {
+      showPanel('payResponse', {
+        status: 'Payment failed',
+        error: response.error,
+      }, true);
+      btn.disabled = false;
+      btn.textContent = 'Pay Now';
+    });
+    rzp.open();
+
+  } catch (err) {
+    showPanel('payResponse', 'Error: ' + err.message, true);
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Pay Now';
+}
+
+// ---------------------------------------------------------------------------
+// Poll Status
+// ---------------------------------------------------------------------------
+async function pollStatus(orderId) {
+  const panel = document.getElementById('statusPanel');
+  const maxAttempts = 30;
+  let attempt = 0;
+
+  panel.innerHTML = '<p class="status-pending">Waiting for webhook confirmation...</p>';
+
+  const interval = setInterval(async () => {
+    attempt++;
+    try {
+      const res = await fetch(getBaseUrl() + '/api/v1/donate/status/' + encodeURIComponent(orderId), {
+        headers: getHeaders(),
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        const statusClass = 'status-' + (data.status || 'pending');
+        panel.innerHTML = '<p class="' + statusClass + '">Order: ' + data.order_id + '<br>Status: <strong>' + data.status + '</strong></p>';
+        showPanel('statusResponse', data);
+
+        if (data.status === 'completed' || data.status === 'failed') {
+          clearInterval(interval);
+        }
+      }
+    } catch (err) {
+      // Ignore polling errors
+    }
+
+    if (attempt >= maxAttempts) {
+      clearInterval(interval);
+      panel.innerHTML += '<p style="color:var(--text-muted);font-size:.78rem;margin-top:8px">Polling stopped after ' + maxAttempts + ' attempts. Webhook may still arrive.</p>';
+    }
+  }, 2000);
+}
+
+// ---------------------------------------------------------------------------
+// Fetch Donation History
+// ---------------------------------------------------------------------------
+async function fetchHistory() {
+  const limit = document.getElementById('histLimit').value || 10;
+  const offset = document.getElementById('histOffset').value || 0;
+  const el = document.getElementById('histResult');
+
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/donate/history?limit=' + limit + '&offset=' + offset, {
+      headers: getHeaders(),
+    });
+    const data = await res.json();
+    el.classList.remove('hidden');
+    el.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    el.classList.remove('hidden');
+    el.textContent = 'Error: ' + err.message;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Restore base URL from localStorage
+// ---------------------------------------------------------------------------
+(function() {
+  const saved = localStorage.getItem('aarpaar_base_url');
+  if (saved) document.getElementById('baseUrl').value = saved;
+  document.getElementById('baseUrl').addEventListener('change', function() {
+    localStorage.setItem('aarpaar_base_url', this.value);
+  });
+})();
+</script>
+</body>
+</html>

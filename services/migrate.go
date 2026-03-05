@@ -353,6 +353,29 @@ var migrationStatements = []string{
 	// COLUMN: friend_requests.is_premium (premium connect feature)
 	// ===================================================================
 	`ALTER TABLE friend_requests ADD COLUMN IF NOT EXISTS is_premium BOOLEAN NOT NULL DEFAULT false`,
+
+	// ===================================================================
+	// TABLE: pending_orders (maps Razorpay orders to users for webhook)
+	// ===================================================================
+	`CREATE TABLE IF NOT EXISTS pending_orders (
+		id                 BIGSERIAL PRIMARY KEY,
+		order_id           TEXT NOT NULL,
+		razorpay_order_id  TEXT,
+		user_id            UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		amount             BIGINT NOT NULL,
+		currency           VARCHAR(3) NOT NULL DEFAULT 'INR',
+		status             TEXT NOT NULL DEFAULT 'pending',
+		created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_orders_order_id ON pending_orders (order_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_pending_orders_user_id ON pending_orders (user_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_pending_orders_razorpay_order_id ON pending_orders (razorpay_order_id) WHERE razorpay_order_id IS NOT NULL`,
+
+	// ===================================================================
+	// COLUMN: donations.razorpay_order_id (link donation to Razorpay order)
+	// ===================================================================
+	`ALTER TABLE donations ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

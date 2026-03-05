@@ -25,6 +25,8 @@ import (
 	mw "github.com/thebrchub/aarpaar/middleware"
 	"github.com/thebrchub/aarpaar/payment"
 	"github.com/thebrchub/aarpaar/services"
+
+	sdkpay "github.com/shivanand-burli/go-starter-kit/payment"
 )
 
 //	@title						Aarpaar API
@@ -108,10 +110,15 @@ func main() {
 	engine.OnUserOffline = services.CancelBotMatch
 
 	// -----------------------------------------------------------------------
-	// 5.6 INITIALIZE PAYMENT MANAGER (stub provider for now)
+	// 5.6 INITIALIZE PAYMENT MANAGER
 	// -----------------------------------------------------------------------
 	handlers.PaymentMgr = payment.NewManager(&payment.StubProvider{})
-	log.Println("[boot] Payment manager initialized (stub provider)")
+	if config.PaymentProviderName == "razorpay" {
+		handlers.PaymentSvc = sdkpay.NewRazorpayService()
+		log.Println("[boot] Payment service initialized (razorpay)")
+	} else {
+		log.Println("[boot] Payment manager initialized (stub provider)")
+	}
 
 	// -----------------------------------------------------------------------
 	// 6. RATE LIMITER (10 requests/sec per IP, burst of 20)
@@ -201,8 +208,13 @@ func main() {
 
 	// --- Donations (protected) ---
 	mux.HandleFunc("POST /api/v1/donate", mw.Auth(handlers.DonateHandler))
+	mux.HandleFunc("POST /api/v1/donate/create-order", mw.Auth(handlers.CreateDonationOrderHandler))
+	mux.HandleFunc("GET /api/v1/donate/status/{orderId}", mw.Auth(handlers.GetDonationStatusHandler))
 	mux.HandleFunc("GET /api/v1/donate/history", mw.Auth(handlers.GetDonationHistoryHandler))
 	mux.HandleFunc("GET /api/v1/badges/tiers", mw.Auth(handlers.GetBadgeTiersHandler))
+
+	// --- Razorpay Webhook (public — uses webhook signature verification) ---
+	mux.HandleFunc("POST /api/v1/webhook/razorpay", handlers.RazorpayWebhookHandler)
 
 	// --- Leaderboard (protected) ---
 	mux.HandleFunc("GET /api/v1/leaderboard", mw.Auth(handlers.GetLeaderboardHandler))

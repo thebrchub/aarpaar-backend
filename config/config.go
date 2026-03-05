@@ -50,6 +50,12 @@ var (
 
 	// Domain (for vanity links)
 	Domain string // Public domain for vanity URLs (e.g. "zquab.com")
+
+	// Razorpay / Payment configuration
+	RazorpayKeyID         string // Razorpay API key ID (for frontend checkout)
+	RazorpayKeySecret     string // Razorpay API key secret
+	RazorpayWebhookSecret string // Razorpay webhook signature secret
+	PaymentProviderName   string // "razorpay" or "stub" (default "stub")
 )
 
 // ---------------------------------------------------------------------------
@@ -161,4 +167,10 @@ func Init() {
 
 	// Domain
 	Domain = helper.GetEnv("DOMAIN", "")
+
+	// Payment provider
+	PaymentProviderName = helper.GetEnv("PAYMENT_PROVIDER", "stub")
+	RazorpayKeyID = helper.GetEnv("RAZORPAY_KEY_ID", "")
+	RazorpayKeySecret = helper.GetEnv("RAZORPAY_KEY_SECRET", "")
+	RazorpayWebhookSecret = helper.GetEnv("RAZORPAY_WEBHOOK_SECRET", "")
 }

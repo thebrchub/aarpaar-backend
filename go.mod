@@ -60,7 +60,9 @@ require (
 	github.com/pion/webrtc/v4 v4.2.3 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
+	github.com/razorpay/razorpay-go v1.4.0 // indirect
 	github.com/stoewer/go-strcase v1.3.1 // indirect
+	github.com/stripe/stripe-go/v84 v84.1.0 // indirect
 	github.com/swaggo/files v0.0.0-20220610200504-28940afbdbfe // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
@@ -101,7 +103,7 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/redis/go-redis/v9 v9.17.2
-	github.com/shivanand-burli/go-starter-kit v0.0.0-20260228190822-574669dcbfe6
+	github.com/shivanand-burli/go-starter-kit v0.0.0-20260305080831-cb792e4472b7
 	github.com/tidwall/gjson v1.18.0
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
