@@ -115,6 +115,9 @@ const (
 	// Server -> Client: Current participants in a call
 	MsgTypeCallParticipants = "call_participants"
 
+	// Server -> Client: Dismiss ringing on other devices (accepted/rejected/ended elsewhere)
+	MsgTypeCallDismiss = "call_dismiss"
+
 	// Participant -> Server: Leave a group call (without ending it)
 	MsgTypeCallLeave = "call_leave"
 

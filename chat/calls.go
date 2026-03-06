@@ -423,6 +423,9 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		// Cancel the ring timeout
 		cancelRingTimeout(callID)
 
+		// Dismiss ringing on the callee's OTHER devices
+		e.dismissCallOnOtherDevices(c, callID)
+
 		// Mark both users' calls as answered
 		markCallAnswered(c.UserID)
 		markCallAnswered(targetUser)
@@ -443,6 +446,9 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		// Cancel the ring timeout
 		cancelRingTimeout(callID)
 
+		// Dismiss ringing on the callee's OTHER devices
+		e.dismissCallOnOtherDevices(c, callID)
+
 		// Clear both users' call state
 		clearActiveCall(c.UserID)
 		clearActiveCall(targetUser)
@@ -453,6 +459,9 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 	case config.MsgTypeCallEnd:
 		// Cancel any pending ring timeout
 		cancelRingTimeout(callID)
+
+		// Dismiss call UI on the sender's OTHER devices
+		e.dismissCallOnOtherDevices(c, callID)
 
 		// Calculate duration if call was answered
 		callerCall := getActiveCall(c.UserID)
@@ -542,6 +551,38 @@ func (e *Engine) handleCallDisconnect(userID string) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// dismissCallOnOtherDevices sends a call_dismiss message to ALL of the
+// acting user's other connected devices (same user, different connections).
+// This stops ringing / call UI on devices that didn't accept/reject/end.
+func (e *Engine) dismissCallOnOtherDevices(sender *Client, callID string) {
+	dismissMsg, _ := json.Marshal(map[string]string{
+		config.FieldType:   config.MsgTypeCallDismiss,
+		config.FieldCallID: callID,
+	})
+
+	e.userMu.RLock()
+	clients, ok := e.users[sender.UserID]
+	if !ok {
+		e.userMu.RUnlock()
+		return
+	}
+	targets := make([]*Client, 0, len(clients))
+	for c := range clients {
+		if c != sender {
+			targets = append(targets, c)
+		}
+	}
+	e.userMu.RUnlock()
+
+	for _, c := range targets {
+		select {
+		case c.Send <- dismissMsg:
+		default:
+			droppedMessages.Add(1)
+		}
+	}
+}
 
 // extractField is a fast JSON field extractor using gjson.
 func extractField(payload []byte, field string) string {
