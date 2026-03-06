@@ -432,7 +432,7 @@ func (e *Engine) subscribeAndListen() {
 			case config.MsgTypeCallRing, config.MsgTypeCallAccept, config.MsgTypeCallReject,
 				config.MsgTypeCallOffer, config.MsgTypeCallAnswer, config.MsgTypeICECandidate,
 				config.MsgTypeCallEnd, config.MsgTypeCallMissed, config.MsgTypeCallBusy,
-				config.MsgTypeCallLeave:
+				config.MsgTypeCallLeave, config.MsgTypeCallDismiss:
 				if targetUser != "" {
 					e.deliverToUser(targetUser, payload)
 				}
