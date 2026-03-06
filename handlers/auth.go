@@ -123,7 +123,7 @@ func upsertUser(googleID, email, name, avatar string) (string, bool, error) {
 		ON CONFLICT (google_id) DO UPDATE 
 		SET email = EXCLUDED.email,
 		    name = CASE WHEN users.name = '' OR users.name IS NULL THEN EXCLUDED.name ELSE users.name END,
-		    avatar_url = EXCLUDED.avatar_url,
+		    avatar_url = CASE WHEN users.avatar_url = '' OR users.avatar_url IS NULL THEN EXCLUDED.avatar_url ELSE users.avatar_url END,
 		    updated_at = NOW()
 		RETURNING id, is_banned;
 	`
