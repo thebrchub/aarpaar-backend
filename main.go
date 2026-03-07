@@ -165,6 +165,9 @@ func main() {
 	mux.HandleFunc("POST /api/v1/auth/google", handlers.GoogleLoginHandler)
 	mux.HandleFunc("POST /api/v1/auth/refresh", handlers.RefreshTokenHandler)
 
+	// --- Config (public) ---
+	mux.HandleFunc("GET /api/v1/config/firebase", handlers.GetFirebaseConfigHandler)
+
 	// --- Auth (protected) ---
 	mux.HandleFunc("POST /api/v1/auth/device", mw.Auth(handlers.RegisterDeviceHandler))
 

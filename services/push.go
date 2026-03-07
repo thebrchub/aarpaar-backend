@@ -25,6 +25,15 @@ var pushSvc push.PushService
 // PushConfigured returns true if the push service was initialized.
 func PushConfigured() bool { return pushSvc != nil }
 
+// GetPublicConfig returns the Firebase public config from the push SDK.
+// Returns nil, error if push is not configured or public config is not set.
+func GetPublicConfig() (*push.FirebasePublicConfig, error) {
+	if pushSvc == nil {
+		return nil, push.ErrNotConfigured
+	}
+	return pushSvc.GetPublicConfig()
+}
+
 // InitPush initializes the FCM push service. Call once at startup.
 // Returns nil if credentials are not set (push disabled).
 func InitPush() error {

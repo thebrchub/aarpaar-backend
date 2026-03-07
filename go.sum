@@ -269,6 +269,10 @@ github.com/shivanand-burli/go-starter-kit v0.0.0-20260307105902-6e335bd308b7 h1:
 github.com/shivanand-burli/go-starter-kit v0.0.0-20260307105902-6e335bd308b7/go.mod h1:pFV6eBhxBbe/G+7lhMGh7bifK0XKyRQQu/AvkmPVOuM=
 github.com/shivanand-burli/go-starter-kit v0.0.0-20260307110833-22936ae1ab1f h1:A9qMe6cgRZ1TBrFjtugUnNkCR67SkW4IOdtmFmuyZ1I=
 github.com/shivanand-burli/go-starter-kit v0.0.0-20260307110833-22936ae1ab1f/go.mod h1:pFV6eBhxBbe/G+7lhMGh7bifK0XKyRQQu/AvkmPVOuM=
+github.com/shivanand-burli/go-starter-kit v0.0.0-20260307134327-f35fdd47670d h1:FeZvI4LeiFatP9aTAT0MqcuPpyEpgQQNsR9uZfQLx8Q=
+github.com/shivanand-burli/go-starter-kit v0.0.0-20260307134327-f35fdd47670d/go.mod h1:pFV6eBhxBbe/G+7lhMGh7bifK0XKyRQQu/AvkmPVOuM=
+github.com/shivanand-burli/go-starter-kit v0.0.0-20260307140040-bebf93e7a919 h1:xaJjPbTBiuAdBtifsEvL1XTt6PsKT/d/0c+1Zmxw0sI=
+github.com/shivanand-burli/go-starter-kit v0.0.0-20260307140040-bebf93e7a919/go.mod h1:pFV6eBhxBbe/G+7lhMGh7bifK0XKyRQQu/AvkmPVOuM=
 github.com/shoenig/test v1.7.0 h1:eWcHtTXa6QLnBvm0jgEabMRN/uJ4DMV3M8xUGgRkZmk=
 github.com/shoenig/test v1.7.0/go.mod h1:UxJ6u/x2v/TNs/LoLxBNJRV9DiwBBKYxXSyczsBHFoI=
 github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=

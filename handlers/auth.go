@@ -11,6 +11,7 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/jwt"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/thebrchub/aarpaar/services"
 	"google.golang.org/api/idtoken"
 )
 
@@ -241,4 +242,27 @@ func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Confirm success
 	JSONMessage(w, "success", "Device registered for push notifications")
+}
+
+// GetFirebaseConfigHandler returns the public Firebase web SDK configuration.
+// This is non-sensitive data that frontends need to initialize Firebase Messaging
+// and obtain an FCM token for push notifications.
+//
+// @Summary		Get Firebase web config
+// @Description	Returns the public Firebase configuration needed by web/mobile clients.
+// @Tags		Config
+// @Produce		json
+// @Success		200	{object}	map[string]string
+// @Router		/config/firebase [get]
+func GetFirebaseConfigHandler(w http.ResponseWriter, r *http.Request) {
+	cfg, err := services.GetPublicConfig()
+	if err != nil {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{})
+		return
+	}
+	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(cfg)
 }
