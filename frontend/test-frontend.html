@@ -2573,10 +2573,12 @@ async function fetchFirebaseConfig() {
     const r = await apiCall('GET', '/api/v1/config/firebase', null, null);
     if (r.data && r.data.apiKey) {
       firebaseConfig = {
-        apiKey: r.data.apiKey,
-        projectId: r.data.projectId,
+        apiKey:            r.data.apiKey,
+        authDomain:        r.data.authDomain || '',
+        projectId:         r.data.projectId,
+        storageBucket:     r.data.storageBucket || '',
         messagingSenderId: r.data.messagingSenderId,
-        appId: r.data.appId,
+        appId:             r.data.appId,
       };
       firebaseVapidKey = r.data.vapidKey || '';
       console.log('[FCM] Config fetched from backend, project:', firebaseConfig.projectId);
@@ -2599,17 +2601,19 @@ async function initFirebaseMessaging() {
   }
 
   try {
-    // Register service worker
+    // Build SW URL with Firebase config as query params so it can init at top level
     if ('serviceWorker' in navigator) {
-      fcmServiceWorkerReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
-      // Send config to the SW so it can initialize Firebase there too
-      if (fcmServiceWorkerReg.active) {
-        fcmServiceWorkerReg.active.postMessage({ type: 'FIREBASE_CONFIG', config: firebaseConfig });
-      }
-      // Also post when SW activates (first install)
-      navigator.serviceWorker.ready.then((reg) => {
-        if (reg.active) reg.active.postMessage({ type: 'FIREBASE_CONFIG', config: firebaseConfig });
+      const swParams = new URLSearchParams({
+        apiKey:            firebaseConfig.apiKey,
+        authDomain:        firebaseConfig.authDomain || '',
+        projectId:         firebaseConfig.projectId,
+        storageBucket:     firebaseConfig.storageBucket || '',
+        messagingSenderId: firebaseConfig.messagingSenderId,
+        appId:             firebaseConfig.appId,
       });
+      fcmServiceWorkerReg = await navigator.serviceWorker.register(
+        '/firebase-messaging-sw.js?' + swParams.toString()
+      );
     }
 
     firebaseApp = firebase.initializeApp(firebaseConfig);
