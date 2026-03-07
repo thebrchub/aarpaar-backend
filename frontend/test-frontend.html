@@ -3517,6 +3517,15 @@ function wsConnect() {
         if (parsed.code === 'NOT_A_MEMBER') errMsg = '🚫 ' + errMsg;
         toast('WS Error: ' + errMsg, 'error');
       }
+      if (parsed.type === 'call_dismiss') {
+        wsLog('Call dismissed on another device: ' + (parsed.callId || ''), 'system');
+      }
+      if (parsed.type === 'group_invite') {
+        wsLog('Group invite received: ' + (parsed.groupId || ''), 'system');
+      }
+      if (parsed.type === 'group_invite_accepted') {
+        wsLog('Group invite accepted: ' + (parsed.groupId || ''), 'system');
+      }
       chatHandleWsEvent(parsed);
     } catch {}
     wsLog(display, 'inbound');
@@ -4281,6 +4290,10 @@ function chatHandleWsEvent(parsed) {
     case 'call_end':        callHandleEnd(parsed); break;
     case 'call_missed':     callHandleMissed(parsed); break;
     case 'call_busy':       callHandleBusy(parsed); break;
+    case 'call_dismiss':    callHandleDismiss(parsed); break;
+    case 'call_started':    callHandleStarted(parsed); break;
+    case 'call_participants': callHandleParticipants(parsed); break;
+    case 'sfu_redirect':    callHandleSfuRedirect(parsed); break;
     // ---- Group lifecycle events ----
     case 'group_created':
       grpLogEvent('Group created: ' + (parsed.roomId || parsed.groupId || ''), 'in');
@@ -4385,6 +4398,16 @@ function chatHandleWsEvent(parsed) {
       break;
     case 'group_call_admin_granted':
       grpLogEvent('Call admin granted in ' + (parsed.callId || '') + ': ' + (parsed.userId || ''), 'in');
+      break;
+    // ---- Group invite events ----
+    case 'group_invite':
+      toast('You were invited to a group', 'info');
+      showBrowserNotification('Group Invite', 'You have been invited to join a group', 'gi-' + (parsed.groupId || ''));
+      break;
+    case 'group_invite_accepted':
+      grpLogEvent('Invite accepted — user joined ' + (parsed.roomId || parsed.groupId || ''), 'in');
+      chatLoadRooms();
+      toast('A user accepted a group invite', 'info');
       break;
   }
 }
@@ -5257,6 +5280,51 @@ function callHandleMissed(parsed) {
 function callHandleBusy(parsed) {
   toast('User is busy on another call', 'info');
   callCleanup();
+}
+
+// ---- Handle call_dismiss (multi-device: accepted/rejected/ended on another device) ----
+function callHandleDismiss(parsed) {
+  // If we're ringing for this call, clear ringing UI on this device
+  if (callState.ringing && callState.incomingData && callState.incomingData.callId === parsed.callId) {
+    stopRingtone();
+    if (callState._browserNotif) { callState._browserNotif.close(); callState._browserNotif = null; }
+    document.getElementById('incomingCallOverlay').classList.add('hidden');
+    callState.ringing = false;
+    callState.incomingData = null;
+    toast('Call handled on another device', 'info');
+    return;
+  }
+  // If we're in the active call (e.g. ended on another device), clean up
+  if (callState.active && callState.callId === parsed.callId) {
+    callCleanup();
+    toast('Call ended on another device', 'info');
+  }
+}
+
+// ---- Handle call_started (group call started for late joiners) ----
+function callHandleStarted(parsed) {
+  const roomId = parsed.roomId || '';
+  const callId = parsed.callId || '';
+  toast('A call has started in room ' + roomId, 'info');
+  // Track as an active group call if applicable
+  if (roomId && callId) {
+    activeGroupCalls.set(roomId, { callId, callType: parsed.callType || 'video', initiator: parsed.from || '' });
+    gcallUpdateSidebarIndicators();
+    if (chatState.activeRoomId === roomId) {
+      gcallShowHeaderJoin(roomId, callId, parsed.callType || 'video');
+    }
+  }
+}
+
+// ---- Handle call_participants (current participants list) ----
+function callHandleParticipants(parsed) {
+  console.log('[call] Participants:', parsed.participants || []);
+}
+
+// ---- Handle sfu_redirect (P2P → SFU upgrade when 3rd person joins) ----
+function callHandleSfuRedirect(parsed) {
+  toast('Call upgraded to group — reconnecting via server', 'info');
+  console.log('[call] SFU redirect:', parsed);
 }
 
 // ---- Hang up ----
