@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"time"
@@ -217,10 +218,14 @@ func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), config.RedisOpTimeout)
 	defer cancel()
 	rdb := redis.GetRawClient()
-	rdb.SRem(ctx, config.DefaultMatchQueue, userID)
+	if err := rdb.SRem(ctx, config.DefaultMatchQueue, userID).Err(); err != nil {
+		log.Printf("[match] SRem from queue failed user=%s: %v", userID, err)
+	}
 
 	// Clean up stored location
-	rdb.Del(ctx, config.MATCH_LOCATION_COLON+userID)
+	if err := rdb.Del(ctx, config.MATCH_LOCATION_COLON+userID).Err(); err != nil {
+		log.Printf("[match] Del location failed user=%s: %v", userID, err)
+	}
 
 	// Cancel any pending bot match timer
 	services.CancelBotMatch(userID)
@@ -310,10 +315,13 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 			})
 			rdb.Set(ctx, config.CHAT_CLOSED_COLON+req.RoomID, "1", 24*time.Hour)
 			rdb.Del(ctx, config.STRANGER_MEMBERS_COLON+req.RoomID)
-			closedEvent, _ := json.Marshal(map[string]string{
+			closedEvent, err := json.Marshal(map[string]string{
 				config.FieldType:   config.MsgTypeRoomClosed,
 				config.FieldRoomID: req.RoomID,
 			})
+			if err != nil {
+				log.Printf("[match] Marshal closedEvent failed: %v", err)
+			}
 			redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent)
 			JSONMessage(w, "disconnected", "Stranger has left the chat")
 			return
@@ -326,12 +334,14 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		rdb.Set(ctx, myKey, "1", 1*time.Hour)
 
 		// Also persist to Postgres so it survives logout/restart
-		postgress.Exec(
+		if _, err := postgress.Exec(
 			`INSERT INTO friend_requests (sender_id, receiver_id, status, stranger_room_id)
 			 VALUES ($1, $2, $3, $4)
 			 ON CONFLICT (sender_id, receiver_id) DO UPDATE SET status = $3, stranger_room_id = $4, updated_at = NOW()`,
 			userID, partnerID, config.FriendReqPending, req.RoomID,
-		)
+		); err != nil {
+			log.Printf("[match] friend request insert failed user=%s partner=%s: %v", userID, partnerID, err)
+		}
 
 		// Check if the partner already sent a friend request (Redis fast path)
 		exists, _ := rdb.Exists(ctx, partnerKey).Result()
@@ -364,22 +374,27 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		rdb.Del(ctx, myKey, partnerKey)
 
 		// Update both friend_requests to accepted
-		postgress.Exec(
+		if _, err := postgress.Exec(
 			`UPDATE friend_requests SET status = $1, updated_at = NOW()
 			 WHERE (sender_id = $2 AND receiver_id = $3) OR (sender_id = $3 AND receiver_id = $2)`,
 			config.FriendReqAccepted, userID, partnerID,
-		)
+		); err != nil {
+			log.Printf("[match] update friend_requests accepted failed user=%s partner=%s: %v", userID, partnerID, err)
+		}
 
 		// Create friendship
 		uid1, uid2 := sortUUIDs(userID, partnerID)
-		postgress.Exec(
+		if _, err := postgress.Exec(
 			`INSERT INTO friendships (user_id_1, user_id_2) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 			uid1, uid2,
-		)
+		); err != nil {
+			log.Printf("[match] insert friendship failed user=%s partner=%s: %v", userID, partnerID, err)
+		}
 
 		// Create a permanent DM room in Postgres
 		tx, err := postgress.GetRawDB().Begin()
 		if err != nil {
+			log.Printf("[match] begin tx failed: %v", err)
 			JSONError(w, "Database error", http.StatusInternalServerError)
 			return
 		}
@@ -388,6 +403,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		var dmRoomID string
 		err = tx.QueryRow(`INSERT INTO rooms (type) VALUES ('DM') RETURNING id`).Scan(&dmRoomID)
 		if err != nil {
+			log.Printf("[match] insert DM room failed: %v", err)
 			JSONError(w, "Failed to create room", http.StatusInternalServerError)
 			return
 		}
@@ -397,11 +413,13 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 			dmRoomID, userID, partnerID,
 		)
 		if err != nil {
+			log.Printf("[match] insert room members failed room=%s: %v", dmRoomID, err)
 			JSONError(w, "Failed to add members", http.StatusInternalServerError)
 			return
 		}
 
 		if err := tx.Commit(); err != nil {
+			log.Printf("[match] commit failed: %v", err)
 			JSONError(w, "Failed to commit", http.StatusInternalServerError)
 			return
 		}
@@ -422,10 +440,13 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		// Close the stranger room — they now have a permanent DM
 		rdb.Set(ctx, config.CHAT_CLOSED_COLON+req.RoomID, "1", 24*time.Hour)
 		rdb.Del(ctx, config.STRANGER_MEMBERS_COLON+req.RoomID) // clean up members set
-		closedEvent, _ := json.Marshal(map[string]string{
+		closedEvent, err := json.Marshal(map[string]string{
 			config.FieldType:   config.MsgTypeRoomClosed,
 			config.FieldRoomID: req.RoomID,
 		})
+		if err != nil {
+			log.Printf("[match] Marshal closedEvent failed: %v", err)
+		}
 		redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent)
 
 		JSONSuccess(w, map[string]string{
@@ -449,7 +470,9 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 			INSERT INTO blocked_users (blocker_id, blocked_id) 
 			VALUES ($1, $2) ON CONFLICT DO NOTHING;
 		`
-		postgress.Exec(query, userID, partnerID)
+		if _, err := postgress.Exec(query, userID, partnerID); err != nil {
+			log.Printf("[match] block user insert failed user=%s partner=%s: %v", userID, partnerID, err)
+		}
 	}
 
 	// 2. Notify the partner that the stranger disconnected (skip for bots)
@@ -466,10 +489,13 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		rdb.Del(ctx, config.STRANGER_MEMBERS_COLON+req.RoomID) // clean up members set
 
 		// Broadcast room_closed to all servers so every connected client gets kicked
-		closedEvent, _ := json.Marshal(map[string]string{
+		closedEvent, err := json.Marshal(map[string]string{
 			config.FieldType:   config.MsgTypeRoomClosed,
 			config.FieldRoomID: req.RoomID,
 		})
+		if err != nil {
+			log.Printf("[match] Marshal closedEvent failed: %v", err)
+		}
 		redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent)
 	}
 
@@ -481,11 +507,13 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		)
 		// Also clean up Postgres friend requests for this stranger room
 		if partnerID != "" {
-			postgress.Exec(
+			if _, err := postgress.Exec(
 				`DELETE FROM friend_requests WHERE stranger_room_id = $1
 				 AND ((sender_id = $2 AND receiver_id = $3) OR (sender_id = $3 AND receiver_id = $2))`,
 				req.RoomID, userID, partnerID,
-			)
+			); err != nil {
+				log.Printf("[match] cleanup friend_requests failed room=%s: %v", req.RoomID, err)
+			}
 		}
 	}
 
@@ -550,14 +578,20 @@ func ReportUserHandler(w http.ResponseWriter, r *http.Request) {
 	err := postgress.GetRawDB().QueryRow(
 		`SELECT id FROM users WHERE username = $1`, req.ReportedUsername,
 	).Scan(&reportedID)
-	if err != nil || reportedID == "" {
-		JSONError(w, "Reported user not found", http.StatusNotFound)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			JSONError(w, "Reported user not found", http.StatusNotFound)
+		} else {
+			log.Printf("[match] ReportUser username lookup failed username=%s: %v", req.ReportedUsername, err)
+			JSONError(w, "Database error", http.StatusInternalServerError)
+		}
 		return
 	}
 
 	query := `INSERT INTO user_reports (reporter_id, reported_id, reason) VALUES ($1, $2, $3)`
 	_, err = postgress.Exec(query, userID, reportedID, req.Reason)
 	if err != nil {
+		log.Printf("[match] ReportUser insert failed reporter=%s reported=%s: %v", userID, reportedID, err)
 		JSONError(w, "Failed to submit report", http.StatusInternalServerError)
 		return
 	}

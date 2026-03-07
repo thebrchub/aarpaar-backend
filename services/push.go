@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"log"
 	"time"
 
@@ -80,17 +81,8 @@ func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 		return
 	}
 
-	log.Printf("[push] Sending push to user=%s tokens=%d title=%q type=%s", userID, len(tokens), p.Title, p.Data["type"])
-	for i, t := range tokens {
-		if len(t) > 20 {
-			log.Printf("[push]   token[%d]: %s...", i, t[:20])
-		} else {
-			log.Printf("[push]   token[%d]: %s", i, t)
-		}
-	}
-
 	if len(tokens) == 1 {
-		resp, err := pushSvc.Send(ctx, &push.Notification{
+		_, err := pushSvc.Send(ctx, &push.Notification{
 			Token:    tokens[0],
 			Title:    p.Title,
 			Body:     p.Body,
@@ -99,9 +91,12 @@ func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 		})
 		if err != nil {
 			log.Printf("[push] Send failed user=%s: %v", userID, err)
+			if errors.Is(err, push.ErrInvalidToken) {
+				log.Printf("[push] Single token stale user=%s, cleaning", userID)
+				cleanStaleTokens(ctx, []push.FailedToken{{Token: tokens[0], IsStale: true}})
+			}
 			return
 		}
-		_ = resp
 		return
 	}
 
@@ -117,7 +112,6 @@ func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 		log.Printf("[push] SendMulticast failed user=%s: %v", userID, err)
 		return
 	}
-	log.Printf("[push] SendMulticast result user=%s: success=%d failure=%d", userID, resp.SuccessCount, resp.FailureCount)
 	if resp.FailureCount > 0 {
 		for _, ft := range resp.FailedTokens {
 			tokenPrefix := ft.Token
@@ -194,6 +188,7 @@ func ShouldPushMessage(ctx context.Context, roomID, userID string) bool {
 	key := "push:sent:" + roomID + ":" + userID
 	set, err := redis.GetRawClient().SetNX(ctx, key, "1", pushDebounceTTL).Result()
 	if err != nil {
+		log.Printf("[push] ShouldPushMessage Redis SetNX failed room=%s user=%s: %v", roomID, userID, err)
 		return true // On error, allow the push (fail open)
 	}
 	return set
@@ -216,9 +211,11 @@ func getDeviceTokens(ctx context.Context, userID string) []string {
 	var tokens []string
 	for rows.Next() {
 		var t string
-		if err := rows.Scan(&t); err == nil {
-			tokens = append(tokens, t)
+		if err := rows.Scan(&t); err != nil {
+			log.Printf("[push] Scan device token failed user=%s: %v", userID, err)
+			continue
 		}
+		tokens = append(tokens, t)
 	}
 	return tokens
 }
@@ -240,9 +237,11 @@ func getDeviceTokensMulti(ctx context.Context, userIDs []string) []string {
 	var tokens []string
 	for rows.Next() {
 		var t string
-		if err := rows.Scan(&t); err == nil {
-			tokens = append(tokens, t)
+		if err := rows.Scan(&t); err != nil {
+			log.Printf("[push] Scan device token multi failed: %v", err)
+			continue
 		}
+		tokens = append(tokens, t)
 	}
 	return tokens
 }

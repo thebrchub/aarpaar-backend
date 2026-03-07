@@ -55,6 +55,7 @@ func GetDonationHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 	var raw []byte
 	if err := postgress.GetRawDB().QueryRowContext(ctx, query, userID, limit, offset).Scan(&raw); err != nil {
+		log.Printf("[donations] GetDonationHistory query failed user=%s: %v", userID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -88,6 +89,7 @@ func GetBadgeTiersHandler(w http.ResponseWriter, r *http.Request) {
 		) t`,
 	).Scan(&raw)
 	if err != nil {
+		log.Printf("[donations] GetBadgeTiers query failed: %v", err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -121,6 +123,7 @@ func computeBadgeFromDB(ctx context.Context, totalDonated float64) *BadgeInfo {
 		totalDonated,
 	)
 	if err != nil {
+		log.Printf("[donations] computeBadgeFromDB query failed: %v", err)
 		return nil
 	}
 	defer rows.Close()
@@ -277,16 +280,20 @@ func RazorpayWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Update pending order status
-		_, _ = postgress.Exec(
+		if _, err := postgress.Exec(
 			`UPDATE pending_orders SET status = 'completed' WHERE order_id = $1`,
 			resp.OrderId,
-		)
+		); err != nil {
+			log.Printf("[webhook] update pending_orders completed failed order=%s: %v", resp.OrderId, err)
+		}
 
 	case sdkpay.PaymentStatusFailed:
-		_, _ = postgress.Exec(
+		if _, err := postgress.Exec(
 			`UPDATE pending_orders SET status = 'failed' WHERE order_id = $1`,
 			resp.OrderId,
-		)
+		); err != nil {
+			log.Printf("[webhook] update pending_orders failed order=%s: %v", resp.OrderId, err)
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -318,6 +325,7 @@ func GetDonationStatusHandler(w http.ResponseWriter, r *http.Request) {
 		orderID, userID,
 	).Scan(&status)
 	if err != nil {
+		log.Printf("[donations] GetDonationStatus query failed order=%s user=%s: %v", orderID, userID, err)
 		JSONError(w, "Order not found", http.StatusNotFound)
 		return
 	}

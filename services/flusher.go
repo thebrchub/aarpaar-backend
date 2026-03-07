@@ -126,7 +126,7 @@ func FlushAllDirtyRooms() {
 	result, err := atomicSMembersAndDel.Run(ctx, rdb, []string{config.CHAT_DIRTY_TARGETS}).StringSlice()
 	if err != nil {
 		// redis.Nil means the key doesn't exist (nothing to flush)
-		if err.Error() != "redis: nil" {
+		if err != goredis.Nil {
 			log.Printf("[flusher] Lua script error reading dirty targets: %v", err)
 		}
 		return
@@ -313,7 +313,7 @@ func flushReceiptHash(redisKey string, column string) {
 	// Uses EVALSHA — script is sent once, then referenced by SHA1 hash.
 	result, err := atomicHGetAllAndDel.Run(ctx, rdb, []string{redisKey}).Result()
 	if err != nil {
-		if err.Error() != "redis: nil" {
+		if err != goredis.Nil {
 			log.Printf("[flusher] Lua script error reading %s: %v", redisKey, err)
 		}
 		return

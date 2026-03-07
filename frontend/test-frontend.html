@@ -2625,6 +2625,11 @@ async function initFirebaseMessaging() {
       const data = payload.data || {};
       switch (data.type) {
         case 'incoming_call':
+          // If WS is connected, the call_ring message handles the UI — skip duplicate notification
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            console.log('[FCM] Suppressing incoming_call push — WS is connected, call_ring handles it');
+            break;
+          }
           toast('📞 ' + (data.callerName || 'Someone') + ' is calling', 'info');
           showBrowserNotification(
             (data.callerName || 'Someone') + ' is calling you',
@@ -4688,6 +4693,24 @@ async function directCallStart(withVideo) {
   if (!ws || ws.readyState !== 1) { toast('WebSocket not connected', 'error'); return; }
 
   const callId = 'call_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+
+  const statusEl = document.getElementById('directCallStatus');
+
+  // Get local media FIRST — must be ready before call_ring so that
+  // when call_accept arrives, callCreatePeerConnection can add local tracks.
+  let localStream;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: withVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false
+    });
+  } catch (e) {
+    console.error('getUserMedia failed', e);
+    toast('Cannot access microphone/camera: ' + e.message, 'error');
+    statusEl.innerHTML = '<span style="color:var(--error)">Media access failed</span>';
+    return;
+  }
+
   callState.active = true;
   callState.direction = 'outgoing';
   callState.callId = callId;
@@ -4697,8 +4720,9 @@ async function directCallStart(withVideo) {
   callState.hasVideo = withVideo;
   callState.isMuted = false;
   callState.isCamOff = !withVideo;
+  callState.localStream = localStream;
 
-  const statusEl = document.getElementById('directCallStatus');
+  document.getElementById('localVideo').srcObject = localStream;
   statusEl.innerHTML = '<span style="color:var(--warn)">Ringing ' + callState.peerName + '...</span>';
   updateActiveCallInfo();
 
@@ -4712,19 +4736,6 @@ async function directCallStart(withVideo) {
 
   callShowOverlay(withVideo, 'Ringing...');
   toast('Calling ' + callState.peerName, 'info');
-
-  try {
-    callState.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: withVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false
-    });
-    document.getElementById('localVideo').srcObject = callState.localStream;
-  } catch (e) {
-    console.error('getUserMedia failed', e);
-    toast('Cannot access microphone/camera: ' + e.message, 'error');
-    callCleanup();
-    statusEl.innerHTML = '<span style="color:var(--error)">Media access failed</span>';
-  }
 }
 
 // ---- Fetch and display ICE config ----
@@ -4871,6 +4882,21 @@ async function callStart(withVideo) {
   }
 
   const callId = 'call_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+
+  // Get local media FIRST — must be ready before call_ring so that
+  // when call_accept arrives, callCreatePeerConnection can add local tracks.
+  let localStream;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: withVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false
+    });
+  } catch (e) {
+    console.error('getUserMedia failed', e);
+    toast('Cannot access microphone/camera: ' + e.message, 'error');
+    return;
+  }
+
   callState.active = true;
   callState.direction = 'outgoing';
   callState.callId = callId;
@@ -4880,8 +4906,11 @@ async function callStart(withVideo) {
   callState.hasVideo = withVideo;
   callState.isMuted = false;
   callState.isCamOff = !withVideo;
+  callState.localStream = localStream;
 
-  // Send ring signal to peer
+  document.getElementById('localVideo').srcObject = localStream;
+
+  // Send ring signal to peer (local media is ready)
   wsSend({
     type: 'call_ring',
     to: peer.id,
@@ -4893,21 +4922,6 @@ async function callStart(withVideo) {
 
   callShowOverlay(withVideo, 'Ringing...');
   toast('Calling ' + peer.name + '...', 'info');
-
-  // Get local media
-  try {
-    callState.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: withVideo ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false
-    });
-    const localVid = document.getElementById('localVideo');
-    localVid.srcObject = callState.localStream;
-  } catch (e) {
-    console.error('getUserMedia failed', e);
-    toast('Cannot access microphone/camera: ' + e.message, 'error');
-    callCleanup();
-    return;
-  }
 }
 
 // ---- Show/hide call overlay ----
@@ -4987,6 +5001,8 @@ async function callCreatePeerConnection() {
       if (!remoteVid.srcObject) remoteVid.srcObject = new MediaStream();
       remoteVid.srcObject.addTrack(e.track);
     }
+    // Explicitly play — autoplay attribute can fail silently in some browsers
+    remoteVid.play().catch(err => console.warn('[call] remoteVideo.play() failed:', err));
     // If video track, show the video element
     if (e.track.kind === 'video') {
       document.getElementById('callAudioPlaceholder').classList.add('hidden');
@@ -5205,6 +5221,7 @@ async function callHandleAccept(parsed) {
 // ---- Handle call_reject ----
 function callHandleReject(parsed) {
   if (!callState.active) return;
+  if (parsed.callId && parsed.callId !== callState.callId) return;
   const reason = parsed.reason || 'rejected';
   toast('Call ' + reason, 'info');
   callCleanup();
@@ -5272,12 +5289,14 @@ function callHandleEnd(parsed) {
 
 // ---- Handle call_missed ----
 function callHandleMissed(parsed) {
+  if (callState.active && parsed.callId && parsed.callId !== callState.callId) return;
   toast('Missed call from ' + (callState.peerName || parsed.from || 'unknown'), 'info');
   callCleanup();
 }
 
 // ---- Handle call_busy ----
 function callHandleBusy(parsed) {
+  if (callState.active && parsed.callId && parsed.callId !== callState.callId) return;
   toast('User is busy on another call', 'info');
   callCleanup();
 }

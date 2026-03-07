@@ -251,7 +251,9 @@ func matchWithBot(userID string) {
 	}
 
 	// Remove from queue
-	rdb.SRem(ctx, config.DefaultMatchQueue, userID)
+	if err := rdb.SRem(ctx, config.DefaultMatchQueue, userID).Err(); err != nil {
+		log.Printf("[bot] SRem from match queue failed user=%s: %v", userID, err)
+	}
 
 	// Pick a random persona
 	persona := pickPersona()
@@ -270,8 +272,12 @@ func matchWithBot(userID string) {
 	roomID := config.STRANGER_PREFIX + uuid.New().String()
 
 	// Store both participants in Redis (same as human match)
-	rdb.SAdd(ctx, config.STRANGER_MEMBERS_COLON+roomID, userID, botUserID)
-	rdb.Expire(ctx, config.STRANGER_MEMBERS_COLON+roomID, 24*time.Hour)
+	if err := rdb.SAdd(ctx, config.STRANGER_MEMBERS_COLON+roomID, userID, botUserID).Err(); err != nil {
+		log.Printf("[bot] SAdd stranger members failed room=%s: %v", roomID, err)
+	}
+	if err := rdb.Expire(ctx, config.STRANGER_MEMBERS_COLON+roomID, 24*time.Hour).Err(); err != nil {
+		log.Printf("[bot] Expire stranger members failed room=%s: %v", roomID, err)
+	}
 
 	// Create bot session
 	session := &BotSession{
@@ -294,8 +300,6 @@ func matchWithBot(userID string) {
 	if e := chat.GetEngine(); e != nil {
 		e.JoinRoomForUser(userID, roomID)
 	}
-
-	log.Printf("[bot] Matched user %s with bot %s (%s) in room %s", userID, botName, botUserID, roomID)
 
 	// 50% chance: bot initiates the conversation, 50% chance: bot waits
 	// for the stranger to speak first. This prevents the pattern of the bot
@@ -334,8 +338,6 @@ func matchWithBot(userID string) {
 			sendBotTypingEnd(greetCtx, session)
 			sendBotMessage(greetCtx, session, reply.Text)
 		}()
-	} else {
-		log.Printf("[bot] Bot waiting for user %s to start conversation in room %s", userID, session.RoomID)
 	}
 
 	// Start the session watchdog (max duration + inactivity)
@@ -379,7 +381,9 @@ func notifyBotMatch(ctx context.Context, targetUser, roomID, partnerName string)
 		log.Printf("[bot] Failed to marshal match notification: %v", err)
 		return
 	}
-	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, envBytes)
+	if err := redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, envBytes); err != nil {
+		log.Printf("[bot] Publish match notification failed room=%s: %v", roomID, err)
+	}
 }
 
 // sendBotMessage publishes a chat message from the bot to the room.
@@ -397,7 +401,9 @@ func sendBotMessage(ctx context.Context, session *BotSession, text string) {
 		log.Printf("[bot] Failed to marshal bot message: %v", err)
 		return
 	}
-	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes)
+	if err := redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes); err != nil {
+		log.Printf("[bot] Publish bot message failed room=%s: %v", session.RoomID, err)
+	}
 }
 
 // sendBotTypingStart publishes a typing_start event from the bot.
@@ -407,8 +413,14 @@ func sendBotTypingStart(ctx context.Context, session *BotSession) {
 		config.FieldFrom:   session.BotUserID,
 		config.FieldRoomID: session.RoomID,
 	}
-	msgBytes, _ := json.Marshal(msg)
-	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes)
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[bot] Marshal typing_start failed room=%s: %v", session.RoomID, err)
+		return
+	}
+	if err := redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes); err != nil {
+		log.Printf("[bot] Publish typing_start failed room=%s: %v", session.RoomID, err)
+	}
 }
 
 // sendBotTypingEnd publishes a typing_end event from the bot.
@@ -418,8 +430,14 @@ func sendBotTypingEnd(ctx context.Context, session *BotSession) {
 		config.FieldFrom:   session.BotUserID,
 		config.FieldRoomID: session.RoomID,
 	}
-	msgBytes, _ := json.Marshal(msg)
-	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes)
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[bot] Marshal typing_end failed room=%s: %v", session.RoomID, err)
+		return
+	}
+	if err := redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes); err != nil {
+		log.Printf("[bot] Publish typing_end failed room=%s: %v", session.RoomID, err)
+	}
 }
 
 // sendBotDeliveryReceipt publishes a message_delivered event from the bot.
@@ -430,8 +448,14 @@ func sendBotDeliveryReceipt(ctx context.Context, session *BotSession) {
 		config.FieldUserID:      session.BotUserID,
 		config.FieldDeliveredAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	msgBytes, _ := json.Marshal(msg)
-	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes)
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[bot] Marshal delivery receipt failed room=%s: %v", session.RoomID, err)
+		return
+	}
+	if err := redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes); err != nil {
+		log.Printf("[bot] Publish delivery receipt failed room=%s: %v", session.RoomID, err)
+	}
 }
 
 // sendBotReadReceipt publishes a message_read event from the bot.
@@ -442,8 +466,14 @@ func sendBotReadReceipt(ctx context.Context, session *BotSession) {
 		config.FieldUserID: session.BotUserID,
 		config.FieldReadAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	msgBytes, _ := json.Marshal(msg)
-	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes)
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[bot] Marshal read receipt failed room=%s: %v", session.RoomID, err)
+		return
+	}
+	if err := redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, msgBytes); err != nil {
+		log.Printf("[bot] Publish read receipt failed room=%s: %v", session.RoomID, err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -694,7 +724,6 @@ func handleBotReply(session *BotSession, userText string) {
 		if errors.Is(err, bot.ErrNoMatch) {
 			// Safety net: if StrictMatch is on and no match found, send a
 			// generic deflection instead of force-ending the session.
-			log.Printf("[bot] No match for input %q in room %s — sending fallback", userText, session.RoomID)
 			sendBotMessage(ctx, session, "haha thats interesting! tell me more")
 			return
 		}
@@ -818,19 +847,31 @@ func forceEndSession(session *BotSession) {
 		config.FieldFrom: config.SystemSender,
 		config.FieldData: disconnectData,
 	}
-	notifyBytes, _ := json.Marshal(envelope)
-	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, notifyBytes)
+	notifyBytes, err := json.Marshal(envelope)
+	if err != nil {
+		log.Printf("[bot] Marshal disconnect notification failed room=%s: %v", session.RoomID, err)
+	} else if err := redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, notifyBytes); err != nil {
+		log.Printf("[bot] Publish disconnect notification failed room=%s: %v", session.RoomID, err)
+	}
 
 	// 3. Mark the room as closed
-	rdb.Set(ctx, config.CHAT_CLOSED_COLON+session.RoomID, "1", 24*time.Hour)
-	rdb.Del(ctx, config.STRANGER_MEMBERS_COLON+session.RoomID)
+	if err := rdb.Set(ctx, config.CHAT_CLOSED_COLON+session.RoomID, "1", 24*time.Hour).Err(); err != nil {
+		log.Printf("[bot] Set room closed failed room=%s: %v", session.RoomID, err)
+	}
+	if err := rdb.Del(ctx, config.STRANGER_MEMBERS_COLON+session.RoomID).Err(); err != nil {
+		log.Printf("[bot] Del stranger members failed room=%s: %v", session.RoomID, err)
+	}
 
 	// 4. Broadcast room_closed so the engine evicts clients
-	closedEvent, _ := json.Marshal(map[string]string{
+	closedEvent, err := json.Marshal(map[string]string{
 		config.FieldType:   config.MsgTypeRoomClosed,
 		config.FieldRoomID: session.RoomID,
 	})
-	redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent)
+	if err != nil {
+		log.Printf("[bot] Marshal room_closed event failed room=%s: %v", session.RoomID, err)
+	} else if err := redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent); err != nil {
+		log.Printf("[bot] Publish room_closed failed room=%s: %v", session.RoomID, err)
+	}
 }
 
 // ---------------------------------------------------------------------------

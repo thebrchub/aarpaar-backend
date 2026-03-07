@@ -71,7 +71,9 @@ func setActiveCall(userID string, call *activeCall) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
 	defer cancel()
-	redis.GetRawClient().Set(ctx, config.CALL_ACTIVE_COLON+userID, data, callActiveTTL)
+	if err := redis.GetRawClient().Set(ctx, config.CALL_ACTIVE_COLON+userID, data, callActiveTTL).Err(); err != nil {
+		log.Printf("[calls] Redis Set activeCall failed user=%s: %v", userID, err)
+	}
 }
 
 // getActiveCall retrieves a user's current call state, or nil if not in a call.
@@ -84,6 +86,7 @@ func getActiveCall(userID string) *activeCall {
 	}
 	var call activeCall
 	if err := json.Unmarshal([]byte(val), &call); err != nil {
+		log.Printf("[calls] Unmarshal activeCall failed user=%s: %v", userID, err)
 		return nil
 	}
 	return &call
@@ -93,7 +96,9 @@ func getActiveCall(userID string) *activeCall {
 func clearActiveCall(userID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
 	defer cancel()
-	redis.GetRawClient().Del(ctx, config.CALL_ACTIVE_COLON+userID)
+	if err := redis.GetRawClient().Del(ctx, config.CALL_ACTIVE_COLON+userID).Err(); err != nil {
+		log.Printf("[calls] Redis Del activeCall failed user=%s: %v", userID, err)
+	}
 }
 
 // markCallAnsweredScript is a Lua script for atomic read-modify-write of call state.
@@ -200,6 +205,9 @@ func canUserCall(callerID, targetID string) bool {
 			   OR (user_id_1 = $2 AND user_id_2 = $1)
 		)`, callerID, targetID,
 	).Scan(&exists)
+	if err != nil {
+		log.Printf("[calls] canUserCall query failed caller=%s target=%s: %v", callerID, targetID, err)
+	}
 	return err == nil && exists
 }
 
@@ -215,6 +223,9 @@ func isUserBlocked(callerID, targetID string) bool {
 			   OR (blocker_id = $2 AND blocked_id = $1)
 		)`, callerID, targetID,
 	).Scan(&exists)
+	if err != nil {
+		log.Printf("[calls] isUserBlocked query failed caller=%s target=%s: %v", callerID, targetID, err)
+	}
 	return err == nil && exists
 }
 
@@ -279,6 +290,7 @@ func sendCallPushNotification(calleeID, callerID, callID string, hasVideo bool) 
 		`SELECT COALESCE(name, 'Unknown') FROM users WHERE id = $1`, callerID,
 	).Scan(&callerName)
 	if err != nil {
+		log.Printf("[calls] sendCallPush caller name query failed caller=%s: %v", callerID, err)
 		callerName = "Unknown"
 	}
 
@@ -315,6 +327,7 @@ func sendMissedCallPush(calleeID, callerID, callID string) {
 		`SELECT COALESCE(name, 'Unknown') FROM users WHERE id = $1`, callerID,
 	).Scan(&callerName)
 	if err != nil {
+		log.Printf("[calls] sendMissedCallPush caller name query failed caller=%s: %v", callerID, err)
 		callerName = "Unknown"
 	}
 
@@ -383,8 +396,10 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		}
 
 		// --- Check if callee is online ---
-		if !e.IsUserOnline(targetUser) {
-			// Callee is offline — send call_missed immediately
+		calleeOnline := e.IsUserOnline(targetUser)
+
+		// If callee is offline and push is not configured, fail fast
+		if !calleeOnline && e.SendPushToUser == nil {
 			missedMsg, _ := json.Marshal(map[string]string{
 				config.FieldType:   config.MsgTypeCallMissed,
 				config.FieldCallID: callID,
@@ -396,11 +411,6 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			default:
 				droppedMessages.Add(1)
 			}
-
-			// Send push notification so callee sees the missed call
-			runBackground(func() { sendCallPushNotification(targetUser, c.UserID, callID, hasVideo) })
-
-			// Log as missed call
 			runBackground(func() { logCall(callID, "", c.UserID, hasVideo, "missed", 0) })
 			return true
 		}
@@ -424,8 +434,11 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		// --- Start ring timeout ---
 		e.startRingTimeout(callID, c.UserID, targetUser, hasVideo)
 
-		// --- Send push notification to callee ---
-		runBackground(func() { sendCallPushNotification(targetUser, c.UserID, callID, hasVideo) })
+		// --- Send push notification only when callee is offline ---
+		// When online, call_ring is delivered via WebSocket (no push needed).
+		if !calleeOnline {
+			runBackground(func() { sendCallPushNotification(targetUser, c.UserID, callID, hasVideo) })
+		}
 
 		// --- Log call initiation ---
 		runBackground(func() { logCall(callID, "", c.UserID, hasVideo, "ringing", 0) })

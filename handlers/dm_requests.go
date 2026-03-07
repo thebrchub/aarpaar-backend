@@ -59,6 +59,7 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	var raw []byte
 	err := postgress.GetRawDB().QueryRow(query, userID, limit, offset).Scan(&raw)
 	if err != nil {
+		log.Printf("[dm] GetDMRequests query failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to fetch DM requests", http.StatusInternalServerError)
 		return
 	}
@@ -101,6 +102,7 @@ func AcceptDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 		config.RoomMemberActive, roomID, userID, config.RoomMemberPending,
 	)
 	if err != nil {
+		log.Printf("[dm] AcceptDMRequest update failed room=%s user=%s: %v", roomID, userID, err)
 		JSONError(w, "Failed to accept", http.StatusInternalServerError)
 		return
 	}
@@ -168,6 +170,7 @@ func RejectDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 		roomID, userID, config.RoomMemberPending,
 	).Scan(&exists)
 	if err != nil {
+		log.Printf("[dm] RejectDMRequest EXISTS check failed room=%s user=%s: %v", roomID, userID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}

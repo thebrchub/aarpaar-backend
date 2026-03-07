@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -92,6 +93,7 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 		)
 		rows, err := postgress.GetRawDB().QueryContext(ctx, query, args...)
 		if err != nil {
+			log.Printf("[groups] validate members query failed group=%s: %v", req.Name, err)
 			JSONError(w, "Database error", http.StatusInternalServerError)
 			return
 		}
@@ -121,6 +123,7 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 		)
 		blockRows, err := postgress.GetRawDB().QueryContext(ctx, blockQuery, blockArgs...)
 		if err != nil {
+			log.Printf("[groups] block check query failed: %v", err)
 			JSONError(w, "Database error", http.StatusInternalServerError)
 			return
 		}
@@ -144,6 +147,7 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 	// Create room + members in a transaction
 	tx, err := postgress.GetRawDB().Begin()
 	if err != nil {
+		log.Printf("[groups] CreateGroup begin tx failed: %v", err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -157,6 +161,7 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 		req.Name, config.RoomTypeGroup, req.AvatarURL, userID, getGroupCapacity(ctx), visibility, inviteCode,
 	).Scan(&roomID)
 	if err != nil {
+		log.Printf("[groups] CreateGroup insert room failed: %v", err)
 		JSONError(w, "Failed to create group", http.StatusInternalServerError)
 		return
 	}
@@ -168,6 +173,7 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 		roomID, userID,
 	)
 	if err != nil {
+		log.Printf("[groups] CreateGroup insert creator failed room=%s: %v", roomID, err)
 		JSONError(w, "Failed to add creator to group", http.StatusInternalServerError)
 		return
 	}
@@ -184,12 +190,14 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 			args = append(args, roomID, memberID)
 		}
 		if _, err = tx.Exec(insertSQL, args...); err != nil {
+			log.Printf("[groups] CreateGroup insert members failed room=%s: %v", roomID, err)
 			JSONError(w, "Failed to add members to group", http.StatusInternalServerError)
 			return
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
+		log.Printf("[groups] CreateGroup commit failed: %v", err)
 		JSONError(w, "Failed to create group", http.StatusInternalServerError)
 		return
 	}
@@ -265,6 +273,7 @@ func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 		 FROM rooms WHERE id = $1 AND type = 'GROUP'`, groupID,
 	).Scan(&name, &avatarURL, &createdBy, &maxMembers, &visibility, &inviteCode)
 	if err != nil {
+		log.Printf("[groups] GetGroup query failed group=%s: %v", groupID, err)
 		JSONError(w, "Group not found", http.StatusNotFound)
 		return
 	}
@@ -277,6 +286,7 @@ func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 		groupID,
 	)
 	if err != nil {
+		log.Printf("[groups] GetGroup members query failed group=%s: %v", groupID, err)
 		JSONError(w, "Failed to fetch members", http.StatusInternalServerError)
 		return
 	}
@@ -287,6 +297,7 @@ func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 	for memberRows.Next() {
 		var m models.GroupMember
 		if err := memberRows.Scan(&m.ID, &m.Username, &m.Name, &m.AvatarURL, &m.Role); err != nil {
+			log.Printf("[groups] Scan member row failed group=%s: %v", groupID, err)
 			continue
 		}
 		if e != nil {
@@ -367,18 +378,24 @@ func UpdateGroupHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Build update query dynamically
 	if req.Name != nil {
-		postgress.GetRawDB().ExecContext(ctx,
-			`UPDATE rooms SET name = $1 WHERE id = $2`, *req.Name, groupID)
+		if _, err := postgress.GetRawDB().ExecContext(ctx,
+			`UPDATE rooms SET name = $1 WHERE id = $2`, *req.Name, groupID); err != nil {
+			log.Printf("[groups] UpdateGroup name failed group=%s: %v", groupID, err)
+		}
 	}
 	if req.AvatarURL != nil {
-		postgress.GetRawDB().ExecContext(ctx,
-			`UPDATE rooms SET avatar_url = $1 WHERE id = $2`, *req.AvatarURL, groupID)
+		if _, err := postgress.GetRawDB().ExecContext(ctx,
+			`UPDATE rooms SET avatar_url = $1 WHERE id = $2`, *req.AvatarURL, groupID); err != nil {
+			log.Printf("[groups] UpdateGroup avatar failed group=%s: %v", groupID, err)
+		}
 	}
 	if req.Visibility != nil {
 		v := *req.Visibility
 		if v == config.VisibilityPublic || v == config.VisibilityPrivate {
-			postgress.GetRawDB().ExecContext(ctx,
-				`UPDATE rooms SET visibility = $1 WHERE id = $2`, v, groupID)
+			if _, err := postgress.GetRawDB().ExecContext(ctx,
+				`UPDATE rooms SET visibility = $1 WHERE id = $2`, v, groupID); err != nil {
+				log.Printf("[groups] UpdateGroup visibility failed group=%s: %v", groupID, err)
+			}
 		}
 	}
 
@@ -461,6 +478,7 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 		 GROUP BY r.max_members`, groupID,
 	).Scan(&maxMembers, &currentCount)
 	if err != nil {
+		log.Printf("[groups] AddGroupMembers count query failed group=%s: %v", groupID, err)
 		JSONError(w, "Group not found", http.StatusNotFound)
 		return
 	}
@@ -477,6 +495,7 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	rows, err := postgress.GetRawDB().QueryContext(ctx, query, args...)
 	if err != nil {
+		log.Printf("[groups] AddGroupMembers validate query failed group=%s: %v", groupID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -533,6 +552,7 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 				groupID, memberID,
 			)
 			if err != nil {
+				log.Printf("[groups] invite member failed group=%s user=%s: %v", groupID, memberID, err)
 				continue
 			}
 			invited = append(invited, memberID)
@@ -548,6 +568,7 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 			groupID, memberID,
 		)
 		if err != nil {
+			log.Printf("[groups] add member failed group=%s user=%s: %v", groupID, memberID, err)
 			continue
 		}
 		added = append(added, memberID)
@@ -647,6 +668,7 @@ func RemoveGroupMemberHandler(w http.ResponseWriter, r *http.Request) {
 		groupID, targetID,
 	)
 	if err != nil {
+		log.Printf("[groups] RemoveMember update failed group=%s user=%s: %v", groupID, targetID, err)
 		JSONError(w, "Failed to remove member", http.StatusInternalServerError)
 		return
 	}
@@ -729,6 +751,7 @@ func PromoteAdminHandler(w http.ResponseWriter, r *http.Request) {
 		groupID, req.UserID,
 	)
 	if err != nil {
+		log.Printf("[groups] PromoteAdmin update failed group=%s user=%s: %v", groupID, req.UserID, err)
 		JSONError(w, "Failed to promote member", http.StatusInternalServerError)
 		return
 	}
@@ -800,18 +823,24 @@ func DeleteGroupHandler(w http.ResponseWriter, r *http.Request) {
 	if callErr == nil && callState != nil {
 		// End the LiveKit room
 		if RTC != nil && RTC.IsConfigured() && callState.LKRoomName != "" {
-			_ = RTC.DeleteRoom(ctx, callState.LKRoomName)
+			if err := RTC.DeleteRoom(ctx, callState.LKRoomName); err != nil {
+				log.Printf("[groups] DeleteGroup RTC.DeleteRoom failed group=%s: %v", groupID, err)
+			}
 		}
 		// Delete Redis key
-		rdb.Del(ctx, config.GROUP_CALL_COLON+groupID)
+		if err := rdb.Del(ctx, config.GROUP_CALL_COLON+groupID).Err(); err != nil {
+			log.Printf("[groups] DeleteGroup Redis Del call state failed group=%s: %v", groupID, err)
+		}
 		// Update call_logs
 		if callState.CallID != "" {
 			duration := int(time.Since(callState.StartedAt).Seconds())
-			postgress.GetRawDB().ExecContext(ctx,
+			if _, err := postgress.GetRawDB().ExecContext(ctx,
 				`UPDATE call_logs SET ended_at = NOW(), duration_seconds = $2
 				 WHERE call_id = $1 AND ended_at IS NULL`,
 				callState.CallID, duration,
-			)
+			); err != nil {
+				log.Printf("[groups] DeleteGroup update call_logs failed call=%s: %v", callState.CallID, err)
+			}
 		}
 	}
 
@@ -820,10 +849,13 @@ func DeleteGroupHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Close the room on the engine (unsubscribe everyone)
 	if e := chat.GetEngine(); e != nil {
-		closedPayload, _ := json.Marshal(map[string]string{
+		closedPayload, err := json.Marshal(map[string]string{
 			config.FieldType:   config.MsgTypeRoomClosed,
 			config.FieldRoomID: groupID,
 		})
+		if err != nil {
+			log.Printf("[groups] Marshal closedPayload failed group=%s: %v", groupID, err)
+		}
 		e.CloseRoom(groupID, closedPayload)
 	}
 
@@ -832,6 +864,7 @@ func DeleteGroupHandler(w http.ResponseWriter, r *http.Request) {
 		`DELETE FROM rooms WHERE id = $1`, groupID,
 	)
 	if err != nil {
+		log.Printf("[groups] DeleteGroup delete room failed group=%s: %v", groupID, err)
 		JSONError(w, "Failed to delete group", http.StatusInternalServerError)
 		return
 	}
@@ -885,6 +918,7 @@ func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := postgress.GetRawDB().QueryContext(ctx, baseQuery, args...)
 	if err != nil {
+		log.Printf("[groups] ListGroups query failed: %v", err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -894,6 +928,7 @@ func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var g models.GroupListItem
 		if err := rows.Scan(&g.RoomID, &g.Name, &g.AvatarURL, &g.Visibility, &g.CreatedBy, &g.MemberCount, &g.IsMember); err != nil {
+			log.Printf("[groups] Scan group list row failed: %v", err)
 			continue
 		}
 		groups = append(groups, g)
@@ -946,6 +981,7 @@ func JoinGroupHandler(w http.ResponseWriter, r *http.Request) {
 		 FROM rooms r WHERE r.id = $1 AND r.type = 'GROUP'`, groupID,
 	).Scan(&visibility, &maxMembers, &currentCount)
 	if err != nil {
+		log.Printf("[groups] JoinGroup query failed group=%s: %v", groupID, err)
 		JSONError(w, "Group not found", http.StatusNotFound)
 		return
 	}
@@ -985,6 +1021,7 @@ func JoinGroupHandler(w http.ResponseWriter, r *http.Request) {
 		groupID, userID,
 	)
 	if err != nil {
+		log.Printf("[groups] JoinGroup upsert failed group=%s user=%s: %v", groupID, userID, err)
 		JSONError(w, "Failed to join group", http.StatusInternalServerError)
 		return
 	}
@@ -1044,6 +1081,7 @@ func JoinGroupByInviteHandler(w http.ResponseWriter, r *http.Request) {
 		 FROM rooms r WHERE r.invite_code = $1 AND r.type = 'GROUP'`, code,
 	).Scan(&groupID, &maxMembers, &currentCount)
 	if err != nil {
+		log.Printf("[groups] JoinGroupByInvite lookup failed code=%s: %v", code, err)
 		JSONError(w, "Invalid or expired invite code", http.StatusNotFound)
 		return
 	}
@@ -1068,6 +1106,7 @@ func JoinGroupByInviteHandler(w http.ResponseWriter, r *http.Request) {
 		groupID, userID,
 	)
 	if err != nil {
+		log.Printf("[groups] JoinGroupByInvite upsert failed group=%s user=%s: %v", groupID, userID, err)
 		JSONError(w, "Failed to join group", http.StatusInternalServerError)
 		return
 	}
@@ -1130,6 +1169,7 @@ func GenerateInviteHandler(w http.ResponseWriter, r *http.Request) {
 		`UPDATE rooms SET invite_code = $1 WHERE id = $2 AND type = 'GROUP'`, newCode, groupID,
 	)
 	if err != nil {
+		log.Printf("[groups] GenerateInvite update failed group=%s: %v", groupID, err)
 		JSONError(w, "Failed to generate invite code", http.StatusInternalServerError)
 		return
 	}
@@ -1286,6 +1326,7 @@ func JoinGroupByVanityHandler(w http.ResponseWriter, r *http.Request) {
 		 FROM rooms r WHERE r.vanity_slug = $1 AND r.type = 'GROUP'`, strings.ToLower(slug),
 	).Scan(&groupID, &visibility, &maxMembers, &currentCount)
 	if err != nil {
+		log.Printf("[groups] JoinGroupByVanity lookup failed slug=%s: %v", slug, err)
 		JSONError(w, "Group not found", http.StatusNotFound)
 		return
 	}
@@ -1315,6 +1356,7 @@ func JoinGroupByVanityHandler(w http.ResponseWriter, r *http.Request) {
 		groupID, userID,
 	)
 	if err != nil {
+		log.Printf("[groups] JoinGroupByVanity upsert failed group=%s user=%s: %v", groupID, userID, err)
 		JSONError(w, "Failed to join group", http.StatusInternalServerError)
 		return
 	}
@@ -1383,6 +1425,7 @@ func GetGroupInvitesHandler(w http.ResponseWriter, r *http.Request) {
 	var raw []byte
 	err := postgress.GetRawDB().QueryRowContext(ctx, query, userID).Scan(&raw)
 	if err != nil {
+		log.Printf("[groups] GetGroupInvites query failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to fetch group invites", http.StatusInternalServerError)
 		return
 	}
@@ -1445,6 +1488,7 @@ func AcceptGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
 		groupID, userID,
 	)
 	if err != nil {
+		log.Printf("[groups] AcceptGroupInvite update failed group=%s user=%s: %v", groupID, userID, err)
 		JSONError(w, "Failed to accept invite", http.StatusInternalServerError)
 		return
 	}
@@ -1504,6 +1548,7 @@ func DeclineGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
 		groupID, userID,
 	)
 	if err != nil {
+		log.Printf("[groups] DeclineGroupInvite delete failed group=%s user=%s: %v", groupID, userID, err)
 		JSONError(w, "Failed to decline invite", http.StatusInternalServerError)
 		return
 	}

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -51,7 +52,12 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS (SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2 AND status = 'active')`,
 		roomID, userID,
 	).Scan(&isMember)
-	if err != nil || !isMember {
+	if err != nil {
+		log.Printf("[messages] membership check failed room=%s user=%s: %v", roomID, userID, err)
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if !isMember {
 		JSONError(w, "Not a member of this room", http.StatusForbidden)
 		return
 	}
@@ -109,6 +115,7 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	var rawJSONBytes []byte
 	err = postgress.GetRawDB().QueryRowContext(ctx, query, roomID, cursor, limit, userID).Scan(&rawJSONBytes)
 	if err != nil {
+		log.Printf("[messages] GetRoomMessages query failed room=%s: %v", roomID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}

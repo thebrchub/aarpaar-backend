@@ -156,6 +156,7 @@ func GetAdminUsersHandler(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &u.Username, &u.AvatarURL,
 			&u.Gender, &u.IsPrivate, &u.IsBanned, &u.CreatedAt, &u.LastSeenAt,
 			&u.ReportsCount, &u.TotalDonated); err != nil {
+			log.Printf("[admin] Scan user row failed: %v", err)
 			continue
 		}
 		users = append(users, u)
@@ -189,6 +190,7 @@ func BanUserHandler(w http.ResponseWriter, r *http.Request) {
 	// Set is_banned = true
 	rows, err := postgress.Exec(`UPDATE users SET is_banned = true WHERE id = $1 AND is_banned = false`, targetID)
 	if err != nil {
+		log.Printf("[admin] Ban user DB error user=%s: %v", targetID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -237,6 +239,7 @@ func UnbanUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := postgress.Exec(`UPDATE users SET is_banned = false WHERE id = $1 AND is_banned = true`, targetID)
 	if err != nil {
+		log.Printf("[admin] Unban user DB error user=%s: %v", targetID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -300,7 +303,7 @@ func GetAdminReportsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var raw []byte
 	if err := postgress.GetRawDB().QueryRowContext(ctx, query, args...).Scan(&raw); err != nil {
-		log.Printf("[admin] reports query failed: %v", err)
+		log.Printf("[admin] reports query failed reported_id=%s: %v", reportedID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -342,6 +345,7 @@ func GetAdminUserReportsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var raw []byte
 	if err := postgress.GetRawDB().QueryRowContext(ctx, query, targetID).Scan(&raw); err != nil {
+		log.Printf("[admin] user reports query failed user=%s: %v", targetID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -388,6 +392,7 @@ func CreateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 		req.Name, req.MinAmount, req.Icon, req.DisplayOrder,
 	).Scan(&id)
 	if err != nil {
+		log.Printf("[admin] create badge tier failed: %v", err)
 		JSONError(w, "Failed to create badge tier", http.StatusInternalServerError)
 		return
 	}
@@ -468,6 +473,7 @@ func UpdateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := postgress.Exec(query, args...)
 	if err != nil {
+		log.Printf("[admin] update badge tier failed id=%s: %v", tierID, err)
 		JSONError(w, "Failed to update badge tier", http.StatusInternalServerError)
 		return
 	}
@@ -498,6 +504,7 @@ func DeleteBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := postgress.Exec(`DELETE FROM badge_tiers WHERE id = $1`, tierID)
 	if err != nil {
+		log.Printf("[admin] delete badge tier failed id=%s: %v", tierID, err)
 		JSONError(w, "Failed to delete badge tier", http.StatusInternalServerError)
 		return
 	}
@@ -538,6 +545,7 @@ func GetAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT value FROM app_settings WHERE key = $1`, key,
 	).Scan(&value)
 	if err != nil {
+		log.Printf("[admin] get setting failed key=%s: %v", key, err)
 		JSONError(w, "Setting not found", http.StatusNotFound)
 		return
 	}
@@ -580,6 +588,7 @@ func UpdateAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 		value, key,
 	)
 	if err != nil {
+		log.Printf("[admin] update setting failed key=%s: %v", key, err)
 		JSONError(w, "Failed to update setting", http.StatusInternalServerError)
 		return
 	}
@@ -589,6 +598,7 @@ func UpdateAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 			`INSERT INTO app_settings (key, value) VALUES ($1, $2)`, key, value,
 		)
 		if err != nil {
+			log.Printf("[admin] insert setting failed key=%s: %v", key, err)
 			JSONError(w, "Failed to create setting", http.StatusInternalServerError)
 			return
 		}

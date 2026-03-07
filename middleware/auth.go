@@ -2,9 +2,11 @@ package middleware
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/shivanand-burli/go-starter-kit/jwt"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	redisKit "github.com/shivanand-burli/go-starter-kit/redis"
@@ -47,6 +49,7 @@ func Auth(next http.HandlerFunc) http.HandlerFunc {
 		// 2. Validate the token (go-starter-kit strips "Bearer " internally)
 		claims, err := jwt.VerifyToken(authHeader)
 		if err != nil {
+			log.Printf("[auth] JWT verification failed: %v", err)
 			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
 			return
 		}
@@ -85,6 +88,9 @@ func isUserBanned(userID string) bool {
 	if err == nil {
 		return val == "1"
 	}
+	if err != goredis.Nil {
+		log.Printf("[auth] Redis Get ban cache failed user=%s: %v", userID, err)
+	}
 
 	// Slow path: check Postgres
 	var isBanned bool
@@ -92,14 +98,19 @@ func isUserBanned(userID string) bool {
 		`SELECT is_banned FROM users WHERE id = $1`, userID,
 	).Scan(&isBanned)
 	if err != nil {
+		log.Printf("[auth] isUserBanned query failed user=%s: %v", userID, err)
 		return false // fail open (user may not exist yet)
 	}
 
 	// Cache result in Redis (24h TTL for both banned and not-banned)
 	if isBanned {
-		rdb.Set(ctx, banKey, "1", 24*time.Hour)
+		if err := rdb.Set(ctx, banKey, "1", 24*time.Hour).Err(); err != nil {
+			log.Printf("[auth] Redis Set ban cache failed user=%s: %v", userID, err)
+		}
 	} else {
-		rdb.Set(ctx, banKey, "0", 24*time.Hour)
+		if err := rdb.Set(ctx, banKey, "0", 24*time.Hour).Err(); err != nil {
+			log.Printf("[auth] Redis Set ban cache failed user=%s: %v", userID, err)
+		}
 	}
 
 	return isBanned

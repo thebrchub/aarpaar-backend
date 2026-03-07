@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -67,6 +68,7 @@ func GetLeaderboardHandler(w http.ResponseWriter, r *http.Request) {
 
 	var raw []byte
 	if err := postgress.GetRawDB().QueryRowContext(ctx, query, limit).Scan(&raw); err != nil {
+		log.Printf("[leaderboard] query failed scope=%s: %v", scope, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}

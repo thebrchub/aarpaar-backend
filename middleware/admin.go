@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -38,6 +39,7 @@ func BenkiAdminOnly(next http.HandlerFunc) http.HandlerFunc {
 			`SELECT email FROM users WHERE id = $1`, userID,
 		).Scan(&email)
 		if err != nil || email == "" {
+			log.Printf("[admin] Email lookup failed user=%s: %v", userID, err)
 			http.Error(w, `{"status":"error","message":"User not found"}`, http.StatusForbidden)
 			return
 		}

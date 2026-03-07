@@ -324,9 +324,11 @@ func getUserActiveRoomIDs(userID string) []string {
 	var roomIDs []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err == nil {
-			roomIDs = append(roomIDs, id)
+		if err := rows.Scan(&id); err != nil {
+			log.Printf("[engine] Scan room ID failed for user=%s: %v", userID, err)
+			continue
 		}
+		roomIDs = append(roomIDs, id)
 	}
 	return roomIDs
 }
@@ -467,7 +469,11 @@ func (e *Engine) subscribeAndListen() {
 					targets := gjson.GetBytes(payload, "targets")
 					if targets.Exists() && targets.IsArray() {
 						// Build per-user payload without the targets array (strip it for the client)
-						cleanPayload, _ := sjson.DeleteBytes(payload, "targets")
+						cleanPayload, err := sjson.DeleteBytes(payload, "targets")
+						if err != nil {
+							log.Printf("[engine] Failed to strip targets from payload: %v", err)
+							cleanPayload = payload
+						}
 						targets.ForEach(func(_, target gjson.Result) bool {
 							e.deliverToUser(target.String(), cleanPayload)
 							return true
@@ -608,7 +614,9 @@ func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 		config.FieldRoomID:      roomID,
 		config.FieldDeliveredAt: now,
 	})
-	if err == nil {
+	if err != nil {
+		log.Printf("[engine] delivery receipt marshal failed room=%s: %v", roomID, err)
+	} else {
 		e.deliverToUser(senderID, receipt)
 	}
 
@@ -658,6 +666,7 @@ func (e *Engine) sendMessagePush(roomID, senderID, senderName, preview string) {
 	for rows.Next() {
 		var memberID string
 		if err := rows.Scan(&memberID); err != nil {
+			log.Printf("[engine] sendMessagePush scan failed room=%s: %v", roomID, err)
 			continue
 		}
 
@@ -773,9 +782,11 @@ func getFriendIDs(userID string) []string {
 	var ids []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err == nil {
-			ids = append(ids, id)
+		if err := rows.Scan(&id); err != nil {
+			log.Printf("[engine] getFriendIDs scan failed user=%s: %v", userID, err)
+			continue
 		}
+		ids = append(ids, id)
 	}
 	return ids
 }
@@ -790,7 +801,11 @@ func (e *Engine) broadcastPresence(userID string, online bool) {
 	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT show_last_seen, is_private FROM users WHERE id = $1`, userID,
 	).Scan(&showLastSeen, &isPrivate)
-	if err != nil || !showLastSeen || isPrivate {
+	if err != nil {
+		log.Printf("[engine] broadcastPresence query failed user=%s: %v", userID, err)
+		return
+	}
+	if !showLastSeen || isPrivate {
 		return // User has presence hidden or is private
 	}
 

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"log"
 	"net/http"
 	"time"
 
@@ -54,6 +55,7 @@ func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Verify the Google ID token (checks signature + expiry)
 	payload, err := idtoken.Validate(context.Background(), req.GoogleIDToken, config.GoogleClientID)
 	if err != nil {
+		log.Printf("[auth] Google token validation failed: %v", err)
 		JSONError(w, "Invalid Google Token", http.StatusUnauthorized)
 		return
 	}
@@ -80,6 +82,7 @@ func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 	// 3. Create or update the user in Postgres
 	userID, isBanned, err := upsertUser(googleID, email, name, picture)
 	if err != nil {
+		log.Printf("[auth] upsertUser failed email=%s: %v", email, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -93,6 +96,7 @@ func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 	// 4. Generate JWT access and refresh tokens
 	accessToken, refreshToken, err := jwt.GenerateToken(userID, nil)
 	if err != nil {
+		log.Printf("[auth] GenerateToken failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to generate tokens", http.StatusInternalServerError)
 		return
 	}
@@ -171,7 +175,8 @@ func RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate the refresh token and get a new access token
 	accessToken, _, err := jwt.RefreshToken(req.RefreshToken)
 	if err != nil {
-		JSONError(w, err.Error(), http.StatusUnauthorized)
+		log.Printf("[auth] RefreshToken failed: %v", err)
+		JSONError(w, "Invalid or expired refresh token", http.StatusUnauthorized)
 		return
 	}
 
@@ -236,6 +241,7 @@ func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
 	`
 	_, err := postgress.Exec(query, userID, req.Token, req.DeviceType)
 	if err != nil {
+		log.Printf("[auth] RegisterDevice failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to save device token", http.StatusInternalServerError)
 		return
 	}

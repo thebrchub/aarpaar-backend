@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -121,6 +122,7 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	var rawJSONBytes []byte
 	err := postgress.GetRawDB().QueryRowContext(ctx, query, userID, cursor, limit).Scan(&rawJSONBytes)
 	if err != nil {
+		log.Printf("[rooms] GetRooms query failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to fetch rooms", http.StatusInternalServerError)
 		return
 	}
@@ -184,8 +186,13 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 	err := postgress.GetRawDB().QueryRow(
 		`SELECT id, is_private FROM users WHERE username = $1 AND is_banned = false`, req.Username,
 	).Scan(&targetUserID, &targetIsPrivate)
-	if err != nil || targetUserID == "" {
-		JSONError(w, "User not found", http.StatusNotFound)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			JSONError(w, "User not found", http.StatusNotFound)
+		} else {
+			log.Printf("[rooms] CreateDM user lookup failed username=%s: %v", req.Username, err)
+			JSONError(w, "Database error", http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -201,6 +208,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 			(blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1))`,
 		userID, targetUserID,
 	).Scan(&blocked); err != nil {
+		log.Printf("[rooms] CreateDM blocked check failed user=%s target=%s: %v", userID, targetUserID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -234,6 +242,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 	// race conditions where is_private toggles between the check and room creation.
 	tx, err := postgress.GetRawDB().Begin()
 	if err != nil {
+		log.Printf("[rooms] CreateDM begin tx failed: %v", err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -244,6 +253,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT is_private FROM users WHERE id = $1 FOR UPDATE`, targetUserID,
 	).Scan(&targetIsPrivate)
 	if err != nil {
+		log.Printf("[rooms] CreateDM re-read is_private failed target=%s: %v", targetUserID, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -255,6 +265,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS (SELECT 1 FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2)`,
 		uid1, uid2,
 	).Scan(&areFriends); err != nil {
+		log.Printf("[rooms] CreateDM friendship check failed: %v", err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
@@ -292,6 +303,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO rooms (type) VALUES ('DM') RETURNING id`,
 	).Scan(&roomID)
 	if err != nil {
+		log.Printf("[rooms] CreateDM insert room failed: %v", err)
 		JSONError(w, "Failed to create room", http.StatusInternalServerError)
 		return
 	}
@@ -302,11 +314,13 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		roomID, userID, config.RoomMemberActive, targetUserID, targetStatus,
 	)
 	if err != nil {
+		log.Printf("[rooms] CreateDM insert members failed room=%s: %v", roomID, err)
 		JSONError(w, "Failed to add room members", http.StatusInternalServerError)
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
+		log.Printf("[rooms] CreateDM commit failed: %v", err)
 		JSONError(w, "Failed to create DM room", http.StatusInternalServerError)
 		return
 	}
@@ -333,9 +347,12 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 			defer cancel()
 			var senderName string
-			_ = postgress.GetRawDB().QueryRowContext(ctx,
+			if err := postgress.GetRawDB().QueryRowContext(ctx,
 				`SELECT COALESCE(name, 'Someone') FROM users WHERE id = $1`, userID,
-			).Scan(&senderName)
+			).Scan(&senderName); err != nil {
+				log.Printf("[rooms] CreateDM sender name lookup failed user=%s: %v", userID, err)
+				senderName = "Someone"
+			}
 			services.SendPushToUser(ctx, targetUserID, services.PushPayload{
 				Data: map[string]string{
 					"type":       "dm_request",

@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"log"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -55,7 +56,9 @@ func runBackground(fn func()) {
 			defer func() { <-bgSem }()
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[bgpool] Recovered panic in background task: %v", r)
+					buf := make([]byte, 4096)
+					n := runtime.Stack(buf, false)
+					log.Printf("[bgpool] Recovered panic in background task: %v\n%s", r, buf[:n])
 				}
 			}()
 			fn()
@@ -114,7 +117,10 @@ func ScanOrphanGroupCalls() {
 			var state orphanGroupCallState
 			if err := json.Unmarshal([]byte(val), &state); err != nil {
 				// Corrupt state — clean up
-				rdb.Del(ctx, key)
+				log.Printf("[bgpool] Corrupt group call state key=%s, deleting: %v", key, err)
+				if err := rdb.Del(ctx, key).Err(); err != nil {
+					log.Printf("[bgpool] Failed to delete corrupt key=%s: %v", key, err)
+				}
 				continue
 			}
 
@@ -130,20 +136,27 @@ func ScanOrphanGroupCalls() {
 
 				// Destroy the LiveKit room to release server-side resources
 				if RTC != nil && RTC.IsConfigured() && state.LKRoomName != "" {
-					_ = RTC.DeleteRoom(ctx, state.LKRoomName)
+					if err := RTC.DeleteRoom(ctx, state.LKRoomName); err != nil {
+						log.Printf("[bgpool] RTC.DeleteRoom failed room=%s callId=%s: %v", state.LKRoomName, state.CallID, err)
+					}
 				}
 
 				// Update call_logs
 				if state.CallID != "" {
 					duration := int(time.Since(state.StartedAt).Seconds())
-					postgress.GetRawDB().ExecContext(ctx,
+					_, err := postgress.GetRawDB().ExecContext(ctx,
 						`UPDATE call_logs SET ended_at = NOW(), duration_seconds = $2
 						 WHERE call_id = $1 AND ended_at IS NULL`,
 						state.CallID, duration,
 					)
+					if err != nil {
+						log.Printf("[bgpool] Failed to update call_logs callId=%s: %v", state.CallID, err)
+					}
 				}
 
-				rdb.Del(ctx, key)
+				if err := rdb.Del(ctx, key).Err(); err != nil {
+					log.Printf("[bgpool] Failed to delete orphan group call key=%s: %v", key, err)
+				}
 			}
 		}
 

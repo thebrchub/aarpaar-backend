@@ -89,7 +89,9 @@ func (c *Client) getFromName() string {
 	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT COALESCE(name, '') FROM users WHERE id = $1`, c.UserID,
 	).Scan(&name)
-	if err == nil && name != "" {
+	if err != nil {
+		log.Printf("[client] getFromName query failed user=%s: %v", c.UserID, err)
+	} else if name != "" {
 		c.cachedName = name
 	}
 	return c.cachedName
@@ -159,6 +161,9 @@ func (c *Client) readPump() {
 	for {
 		_, payload, err := c.Conn.ReadMessage()
 		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				log.Printf("[client] WebSocket read error user=%s: %v", c.UserID, err)
+			}
 			break // Connection closed or error — exit the loop
 		}
 
@@ -201,12 +206,17 @@ func (c *Client) readPump() {
 				pipe.HSet(ctx, config.CHAT_READ_RECEIPTS, roomID+":"+c.UserID, now)
 			}
 			// Broadcast read receipt to room members for real-time blue ticks
-			readReceipt, _ := json.Marshal(map[string]string{
+			readReceipt, err := json.Marshal(map[string]string{
 				config.FieldType:   config.MsgTypeMessageRead,
 				config.FieldRoomID: roomID,
 				config.FieldUserID: c.UserID,
 				config.FieldReadAt: now,
 			})
+			if err != nil {
+				log.Printf("[client] mark_read marshal failed user=%s room=%s: %v", c.UserID, roomID, err)
+				cancel()
+				continue
+			}
 			pipe.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, readReceipt)
 			if _, err := pipe.Exec(ctx); err != nil {
 				log.Printf("[client] mark_read buffer failed for user=%s room=%s: %v", c.UserID, roomID, err)
@@ -236,11 +246,16 @@ func (c *Client) readPump() {
 				pipe.HSet(ctx, config.CHAT_DELIVERY_RECEIPTS, roomID+":"+c.UserID, now)
 			}
 			// Broadcast delivery receipt so the sender sees double ticks
-			deliveryReceipt, _ := json.Marshal(map[string]string{
+			deliveryReceipt, err := json.Marshal(map[string]string{
 				config.FieldType:        config.MsgTypeMessageDelivered,
 				config.FieldRoomID:      roomID,
 				config.FieldDeliveredAt: now,
 			})
+			if err != nil {
+				log.Printf("[client] mark_delivered marshal failed user=%s room=%s: %v", c.UserID, roomID, err)
+				cancel()
+				continue
+			}
 			pipe.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, deliveryReceipt)
 			if _, err := pipe.Exec(ctx); err != nil {
 				log.Printf("[client] mark_delivered buffer failed for user=%s room=%s: %v", c.UserID, roomID, err)
@@ -421,6 +436,7 @@ func (c *Client) writePump() {
 
 			w, err := c.Conn.NextWriter(websocket.TextMessage)
 			if err != nil {
+				log.Printf("[client] WebSocket NextWriter error user=%s: %v", c.UserID, err)
 				return
 			}
 			w.Write(payload)
@@ -433,6 +449,7 @@ func (c *Client) writePump() {
 			}
 
 			if err := w.Close(); err != nil {
+				log.Printf("[client] WebSocket write close error user=%s: %v", c.UserID, err)
 				return
 			}
 
@@ -440,6 +457,7 @@ func (c *Client) writePump() {
 			// Send a WebSocket ping to check if the client is still alive
 			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("[client] WebSocket ping failed user=%s: %v", c.UserID, err)
 				return
 			}
 		}

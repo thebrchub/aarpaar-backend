@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -145,6 +146,7 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		userID, limit, offset,
 	)
 	if err != nil {
+		log.Printf("[calls] GetCallHistory query failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to fetch call history", http.StatusInternalServerError)
 		return
 	}
@@ -170,6 +172,7 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			&c.StartedAt, &c.EndedAt, &c.Duration,
 			&c.InitiatedBy, &c.CallerName, &c.CallerAvatar,
 		); err != nil {
+			log.Printf("[calls] Scan call history row failed: %v", err)
 			continue
 		}
 		calls = append(calls, c)
@@ -254,28 +257,34 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create LiveKit room (single shared client — no per-request allocation)
 	var maxMembers int
-	postgress.GetRawDB().QueryRowContext(ctx,
+	if err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT max_members FROM rooms WHERE id = $1`, groupID,
-	).Scan(&maxMembers)
+	).Scan(&maxMembers); err != nil {
+		log.Printf("[calls] maxMembers query failed group=%s: %v", groupID, err)
+	}
 	if maxMembers <= 0 {
 		maxMembers = 50
 	}
 
 	_, err := RTC.CreateRoom(ctx, lkRoomName, maxMembers)
 	if err != nil {
+		log.Printf("[calls] RTC.CreateRoom failed group=%s: %v", groupID, err)
 		JSONError(w, "Failed to create call room", http.StatusInternalServerError)
 		return
 	}
 
 	// Get initiator's name for token
 	var userName string
-	postgress.GetRawDB().QueryRowContext(ctx,
+	if err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT COALESCE(name, '') FROM users WHERE id = $1`, userID,
-	).Scan(&userName)
+	).Scan(&userName); err != nil {
+		log.Printf("[calls] userName query failed user=%s: %v", userID, err)
+	}
 
 	// Generate token for the initiator (CPU-only, ~1-2μs, no network call)
 	token, err := RTC.GenerateToken(lkRoomName, userID, userName, true, true)
 	if err != nil {
+		log.Printf("[calls] RTC.GenerateToken failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to generate call token", http.StatusInternalServerError)
 		return
 	}
@@ -290,15 +299,22 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		Participants: []string{userID},
 		Admins:       []string{userID}, // initiator is first call admin
 	}
-	callState, _ := json.Marshal(state)
-	rdb.Set(ctx, config.GROUP_CALL_COLON+groupID, callState, 24*time.Hour)
+	callState, err := json.Marshal(state)
+	if err != nil {
+		log.Printf("[calls] Marshal call state failed group=%s: %v", groupID, err)
+	}
+	if err := rdb.Set(ctx, config.GROUP_CALL_COLON+groupID, callState, 24*time.Hour).Err(); err != nil {
+		log.Printf("[calls] Redis Set call state failed group=%s: %v", groupID, err)
+	}
 
 	// Log the call to Postgres
-	postgress.GetRawDB().ExecContext(ctx,
+	if _, err := postgress.GetRawDB().ExecContext(ctx,
 		`INSERT INTO call_logs (call_id, room_id, initiated_by, call_type, tier, max_participants, participants)
 		 VALUES ($1, $2, $3, $4, 'sfu', $5, ARRAY[$3])`,
 		callID, groupID, userID, req.CallType, maxMembers,
-	)
+	); err != nil {
+		log.Printf("[calls] Insert call_logs failed call=%s: %v", callID, err)
+	}
 
 	// Broadcast group_call_started to all group members
 	memberIDs := getActiveGroupMemberIDs(ctx, groupID)
@@ -382,13 +398,16 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get user's name for token
 	var userName string
-	postgress.GetRawDB().QueryRowContext(ctx,
+	if err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT COALESCE(name, '') FROM users WHERE id = $1`, userID,
-	).Scan(&userName)
+	).Scan(&userName); err != nil {
+		log.Printf("[calls] userName query failed user=%s: %v", userID, err)
+	}
 
 	// Generate token (CPU-only, ~1-2μs, no network call)
 	token, err := RTC.GenerateToken(lkRoomName, userID, userName, true, true)
 	if err != nil {
+		log.Printf("[calls] RTC.GenerateToken failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to generate call token", http.StatusInternalServerError)
 		return
 	}
@@ -407,13 +426,15 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	saveGroupCallState(ctx, rdb, groupID, state)
 
 	// Update participants array in call_logs
-	postgress.GetRawDB().ExecContext(ctx,
+	if _, err := postgress.GetRawDB().ExecContext(ctx,
 		`UPDATE call_logs SET participants = array_append(
 			CASE WHEN $2 = ANY(participants) THEN participants
 			     ELSE participants END, $2)
 		 WHERE call_id = $1 AND NOT ($2 = ANY(participants))`,
 		callID, userID,
-	)
+	); err != nil {
+		log.Printf("[calls] Update call_logs participants failed call=%s: %v", callID, err)
+	}
 
 	// Broadcast participant joined
 	memberIDs := getActiveGroupMemberIDs(ctx, groupID)
@@ -479,7 +500,9 @@ func LeaveGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Remove participant from LiveKit
 	if RTC != nil && RTC.IsConfigured() {
-		_ = RTC.RemoveParticipant(ctx, lkRoomName, userID)
+		if err := RTC.RemoveParticipant(ctx, lkRoomName, userID); err != nil {
+			log.Printf("[calls] RTC.RemoveParticipant failed user=%s room=%s: %v", userID, lkRoomName, err)
+		}
 	}
 
 	// Remove user from participants (typed slice filtering)
@@ -515,10 +538,12 @@ func LeaveGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		duration := int(time.Since(state.StartedAt).Seconds())
 
 		// Update call log
-		postgress.GetRawDB().ExecContext(ctx,
+		if _, err := postgress.GetRawDB().ExecContext(ctx,
 			`UPDATE call_logs SET ended_at = NOW(), duration_seconds = $2
 			 WHERE call_id = $1`, callID, duration,
-		)
+		); err != nil {
+			log.Printf("[calls] Update call_logs ended_at failed call=%s: %v", callID, err)
+		}
 
 		// Broadcast call ended
 		broadcastGroupEvent(ctx, groupID, config.MsgTypeGroupCallEnded, map[string]interface{}{
@@ -672,8 +697,14 @@ func loadGroupCallState(ctx context.Context, rdb *goredis.Client, groupID string
 
 // saveGroupCallState marshals and saves a GroupCallState to Redis with 24h TTL.
 func saveGroupCallState(ctx context.Context, rdb *goredis.Client, groupID string, state *models.GroupCallState) {
-	data, _ := json.Marshal(state)
-	rdb.Set(ctx, config.GROUP_CALL_COLON+groupID, data, 24*time.Hour)
+	data, err := json.Marshal(state)
+	if err != nil {
+		log.Printf("[calls] Marshal call state failed group=%s: %v", groupID, err)
+		return
+	}
+	if err := rdb.Set(ctx, config.GROUP_CALL_COLON+groupID, data, 24*time.Hour).Err(); err != nil {
+		log.Printf("[calls] Redis Set call state failed group=%s: %v", groupID, err)
+	}
 }
 
 // isCallAdmin checks if a user is a call admin or a group admin (fallback).
@@ -929,7 +960,9 @@ func KickParticipantHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove from LiveKit
-	_ = RTC.RemoveParticipant(ctx, state.LKRoomName, req.UserID)
+	if err := RTC.RemoveParticipant(ctx, state.LKRoomName, req.UserID); err != nil {
+		log.Printf("[calls] RTC.RemoveParticipant failed user=%s room=%s: %v", req.UserID, state.LKRoomName, err)
+	}
 
 	// Remove from state
 	state.Participants = removeString(state.Participants, req.UserID)
@@ -950,10 +983,12 @@ func KickParticipantHandler(w http.ResponseWriter, r *http.Request) {
 		rdb.Del(ctx, config.GROUP_CALL_COLON+groupID)
 
 		duration := int(time.Since(state.StartedAt).Seconds())
-		postgress.GetRawDB().ExecContext(ctx,
+		if _, err := postgress.GetRawDB().ExecContext(ctx,
 			`UPDATE call_logs SET ended_at = NOW(), duration_seconds = $2
 			 WHERE call_id = $1`, callID, duration,
-		)
+		); err != nil {
+			log.Printf("[calls] Update call_logs ended_at failed call=%s: %v", callID, err)
+		}
 
 		broadcastGroupEvent(ctx, groupID, config.MsgTypeGroupCallEnded, map[string]interface{}{
 			config.FieldRoomID: groupID,
@@ -1131,19 +1166,25 @@ func ForceEndCallHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete LiveKit room (kicks all participants at once — more efficient than looping)
-	_ = RTC.DeleteRoom(ctx, state.LKRoomName)
+	if err := RTC.DeleteRoom(ctx, state.LKRoomName); err != nil {
+		log.Printf("[calls] RTC.DeleteRoom failed room=%s: %v", state.LKRoomName, err)
+	}
 
 	// Delete Redis key
-	rdb.Del(ctx, config.GROUP_CALL_COLON+groupID)
+	if err := rdb.Del(ctx, config.GROUP_CALL_COLON+groupID).Err(); err != nil {
+		log.Printf("[calls] Redis Del call state failed group=%s: %v", groupID, err)
+	}
 
 	// Calculate duration
 	duration := int(time.Since(state.StartedAt).Seconds())
 
 	// Update call_logs
-	postgress.GetRawDB().ExecContext(ctx,
+	if _, err := postgress.GetRawDB().ExecContext(ctx,
 		`UPDATE call_logs SET ended_at = NOW(), duration_seconds = $2
 		 WHERE call_id = $1`, callID, duration,
-	)
+	); err != nil {
+		log.Printf("[calls] Update call_logs ended_at failed call=%s: %v", callID, err)
+	}
 
 	// Broadcast force-ended event
 	memberIDs := getActiveGroupMemberIDs(ctx, groupID)

@@ -45,7 +45,12 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 
 	var rawJSON string
 	err := postgress.GetRawDB().QueryRow(query, userID).Scan(&rawJSON)
-	if err != nil || rawJSON == "" {
+	if err != nil {
+		log.Printf("[users] GetMe query failed user=%s: %v", userID, err)
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if rawJSON == "" {
 		JSONError(w, "User not found or banned", http.StatusForbidden)
 		return
 	}
@@ -103,6 +108,7 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 	var rawJSONBytes []byte
 	err := postgress.GetRawDB().QueryRow(query, q, limit, offset).Scan(&rawJSONBytes)
 	if err != nil {
+		log.Printf("[users] SearchUsers query failed q=%s: %v", q, err)
 		JSONError(w, "Search failed", http.StatusInternalServerError)
 		return
 	}
@@ -143,6 +149,7 @@ func CheckUsernameHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, username,
 	).Scan(&exists)
 	if err != nil {
+		log.Printf("[users] CheckUsername query failed username=%s: %v", username, err)
 		JSONError(w, "Check failed", http.StatusInternalServerError)
 		return
 	}
