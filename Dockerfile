@@ -20,7 +20,8 @@ ENV GOPRIVATE=github.com/shivanand-burli/*
 
 # 5. Download dependencies (Cached layer)
 COPY ./go.mod ./go.sum ./
-RUN go mod download
+RUN go clean -modcache -i github.com/shivanand-burli/go-starter-kit 2>/dev/null; \
+    go mod download
 
 # 5.5 Install swag and generate OpenAPI spec
 RUN go install github.com/swaggo/swag/cmd/swag@latest
