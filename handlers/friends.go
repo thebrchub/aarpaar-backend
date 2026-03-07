@@ -11,6 +11,7 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/thebrchub/aarpaar/services"
 )
 
 // SendFriendRequestHandler sends a friend request to a user.
@@ -141,6 +142,23 @@ func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 		"username":       body.Username,
 	})
 
+	// Send push notification to offline target
+	go func() {
+		ctx, cancel := pgCtx(r)
+		defer cancel()
+		var senderName string
+		_ = postgress.GetRawDB().QueryRowContext(ctx,
+			`SELECT COALESCE(name, 'Someone') FROM users WHERE id = $1`, userID,
+		).Scan(&senderName)
+		services.SendPushToUser(ctx, targetID, services.PushPayload{
+			Data: map[string]string{
+				"type":       "friend_request",
+				"senderId":   userID,
+				"senderName": senderName,
+			},
+		})
+	}()
+
 	JSONMessage(w, "pending", "Friend request sent")
 }
 
@@ -247,6 +265,63 @@ func RejectFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	JSONMessage(w, "success", "Friend request rejected")
+}
+
+// WithdrawFriendRequestHandler withdraws a pending friend request sent by the caller.
+//
+// @Summary		Withdraw friend request
+// @Description	Withdraws a pending outgoing friend request.
+// @Tags		Friends
+// @Produce		json
+// @Param		username	path	string	true	"Target user's username"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/friends/request/{username} [delete]
+func WithdrawFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	username := r.PathValue("username")
+	if username == "" {
+		JSONError(w, "username is required", http.StatusBadRequest)
+		return
+	}
+
+	var targetID string
+	if err := postgress.GetRawDB().QueryRow(
+		`SELECT id FROM users WHERE username = $1`, username,
+	).Scan(&targetID); err != nil || targetID == "" {
+		JSONError(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	rows, err := postgress.Exec(
+		`DELETE FROM friend_requests WHERE sender_id = $1 AND receiver_id = $2 AND status = $3`,
+		userID, targetID, config.FriendReqPending,
+	)
+	if err != nil {
+		JSONError(w, "Failed to withdraw request", http.StatusInternalServerError)
+		return
+	}
+	if rows == 0 {
+		JSONError(w, "No pending friend request to this user", http.StatusNotFound)
+		return
+	}
+
+	// Notify the receiver to remove the request from their UI
+	notifyUser(context.Background(), targetID, map[string]interface{}{
+		config.FieldType: config.MsgTypeFriendRequestWithdrawn,
+		config.FieldFrom: userID,
+	})
+
+	JSONMessage(w, "success", "Friend request withdrawn")
 }
 
 // GetFriendsHandler returns the authenticated user's friends list.

@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -166,6 +165,9 @@ func (e *Engine) startRingTimeout(callID, callerID, calleeID string, hasVideo bo
 
 			// Log the missed call
 			logCall(callID, "", callerID, hasVideo, "missed", 0)
+
+			// Push missed call notification to the callee
+			runBackground(func() { sendMissedCallPush(calleeID, callerID, callID) })
 		}
 	})
 }
@@ -185,8 +187,8 @@ func cancelRingTimeout(callID string) {
 // ---------------------------------------------------------------------------
 
 // canUserCall checks if the caller is allowed to call the target user.
-// Returns true if they share a friendship or an active room membership.
-// Combined into a single query with UNION ALL for short-circuit behavior (P2-7 fix).
+// Returns true only if they share a friendship. Room membership alone is
+// insufficient — non-friends in shared DM rooms must not be able to call.
 func canUserCall(callerID, targetID string) bool {
 	var exists bool
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
@@ -196,12 +198,6 @@ func canUserCall(callerID, targetID string) bool {
 			SELECT 1 FROM friendships
 			WHERE (user_id_1 = $1 AND user_id_2 = $2)
 			   OR (user_id_1 = $2 AND user_id_2 = $1)
-			UNION ALL
-			SELECT 1 FROM room_members rm1
-			JOIN room_members rm2 ON rm1.room_id = rm2.room_id
-			WHERE rm1.user_id = $1 AND rm2.user_id = $2
-			  AND rm1.status = 'active' AND rm2.status = 'active'
-			LIMIT 1
 		)`, callerID, targetID,
 	).Scan(&exists)
 	return err == nil && exists
@@ -269,51 +265,60 @@ func logCall(callID, roomID, initiatedBy string, hasVideo bool, status string, d
 // when they receive an incoming call. This ensures the call rings even if
 // the app is in the background.
 func sendCallPushNotification(calleeID, callerID, callID string, hasVideo bool) {
+	e := GetEngine()
+	if e == nil || e.SendPushToUser == nil {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
 
-	// Query device tokens for the callee
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
-		`SELECT token, device_type FROM device_tokens WHERE user_id = $1`, calleeID,
-	)
-	if err != nil {
-		log.Printf("[calls] Failed to query device tokens for push user=%s: %v", calleeID, err)
-		return
-	}
-	defer rows.Close()
-
 	// Get caller's name for the notification
 	var callerName string
-	err = postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT COALESCE(name, 'Unknown') FROM users WHERE id = $1`, callerID,
 	).Scan(&callerName)
 	if err != nil {
 		callerName = "Unknown"
 	}
 
-	callType := "Audio"
+	callType := "audio"
 	if hasVideo {
-		callType = "Video"
+		callType = "video"
 	}
 
-	for rows.Next() {
-		var token, deviceType string
-		if err := rows.Scan(&token, &deviceType); err != nil {
-			continue
-		}
+	e.SendPushToUser(ctx, calleeID, map[string]string{
+		"type":       "incoming_call",
+		"callId":     callID,
+		"callerId":   callerID,
+		"callerName": callerName,
+		"hasVideo":   callType,
+	}, true)
+}
 
-		// TODO: Integrate with FCM/APNs push service
-		// For now, log the push notification intent
-		log.Printf("[calls] PUSH: %s call from %s to device=%s type=%s token=%s...",
-			callType, callerName, calleeID, deviceType, token[:min(10, len(token))])
-
-		// When integrating FCM, the payload should include:
-		// - High priority (for immediate delivery)
-		// - callId, callerID, callerName, hasVideo
-		// - data-only message (so the app can show a full-screen call UI)
-		_ = fmt.Sprintf(`{"to":"%s","priority":"high","data":{"type":"incoming_call","callId":"%s","callerId":"%s","callerName":"%s","hasVideo":%v}}`,
-			token, callID, callerID, callerName, hasVideo)
+// sendMissedCallPush sends a push notification to the callee about a missed call.
+func sendMissedCallPush(calleeID, callerID, callID string) {
+	e := GetEngine()
+	if e == nil || e.SendPushToUser == nil {
+		return
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+
+	var callerName string
+	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT COALESCE(name, 'Unknown') FROM users WHERE id = $1`, callerID,
+	).Scan(&callerName)
+	if err != nil {
+		callerName = "Unknown"
+	}
+
+	e.SendPushToUser(ctx, calleeID, map[string]string{
+		"type":       "missed_call",
+		"callId":     callID,
+		"callerName": callerName,
+	}, true)
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +350,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			return true
 		}
 		if !canUserCall(c.UserID, targetUser) {
-			sendError(c, "NOT_ALLOWED", "You can only call friends or active room members")
+			sendError(c, "NOT_ALLOWED", "You can only call friends")
 			return true
 		}
 

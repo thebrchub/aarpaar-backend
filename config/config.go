@@ -56,6 +56,9 @@ var (
 	RazorpayKeySecret     string // Razorpay API key secret
 	RazorpayWebhookSecret string // Razorpay webhook signature secret
 	PaymentProviderName   string // "razorpay" or "stub" (default "stub")
+
+	// Firebase Cloud Messaging (optional — push notifications disabled if not set)
+	FirebaseCredentials string // Raw JSON or base64-encoded Firebase service account key
 )
 
 // ---------------------------------------------------------------------------
@@ -173,4 +176,7 @@ func Init() {
 	RazorpayKeyID = helper.GetEnv("RAZORPAY_KEY_ID", "")
 	RazorpayKeySecret = helper.GetEnv("RAZORPAY_KEY_SECRET", "")
 	RazorpayWebhookSecret = helper.GetEnv("RAZORPAY_WEBHOOK_SECRET", "")
+
+	// Firebase Cloud Messaging (optional)
+	FirebaseCredentials = helper.GetEnv("FIREBASE_CREDENTIALS", "")
 }

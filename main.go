@@ -14,6 +14,7 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/jwt"
 	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/push"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/shivanand-burli/go-starter-kit/rtc"
 	httpSwagger "github.com/swaggo/http-swagger"
@@ -119,6 +120,29 @@ func main() {
 	}
 
 	// -----------------------------------------------------------------------
+	// 5.7 INITIALIZE PUSH NOTIFICATION SERVICE (FCM)
+	// -----------------------------------------------------------------------
+	if config.FirebaseCredentials != "" {
+		if err := services.InitPush(); err != nil {
+			log.Printf("[boot] Push notification init failed: %v", err)
+		} else {
+			log.Println("[boot] Push notification service initialized (FCM)")
+		}
+	} else {
+		log.Println("[boot] Push notifications not configured — FIREBASE_CREDENTIALS not set")
+	}
+
+	// Wire up push callbacks on the engine (breaks chat ↔ services import cycle)
+	engine.SendPushToUser = func(ctx context.Context, userID string, data map[string]string, highPriority bool) {
+		p := services.PushPayload{Data: data}
+		if highPriority {
+			p.Priority = push.PriorityHigh
+		}
+		services.SendPushToUser(ctx, userID, p)
+	}
+	engine.ShouldPushMessage = services.ShouldPushMessage
+
+	// -----------------------------------------------------------------------
 	// 6. RATE LIMITER (10 requests/sec per IP, burst of 20)
 	// -----------------------------------------------------------------------
 	limiter := middleware.NewIPRateLimiter(10, 20)
@@ -165,6 +189,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/friends/request", mw.Auth(handlers.SendFriendRequestHandler))
 	mux.HandleFunc("POST /api/v1/friends/accept", mw.Auth(handlers.AcceptFriendRequestHandler))
 	mux.HandleFunc("POST /api/v1/friends/reject", mw.Auth(handlers.RejectFriendRequestHandler))
+	mux.HandleFunc("DELETE /api/v1/friends/request/{username}", mw.Auth(handlers.WithdrawFriendRequestHandler))
 	mux.HandleFunc("DELETE /api/v1/friends/{username}", mw.Auth(handlers.RemoveFriendHandler))
 
 	// --- Matchmaking (protected) ---
@@ -189,6 +214,9 @@ func main() {
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/admins", mw.Auth(handlers.PromoteAdminHandler))
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/invite", mw.Auth(handlers.GenerateInviteHandler))
 	mux.HandleFunc("POST /api/v1/invite/{inviteCode}", mw.Auth(handlers.JoinGroupByInviteHandler))
+	mux.HandleFunc("GET /api/v1/groups/invites", mw.Auth(handlers.GetGroupInvitesHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/invites/accept", mw.Auth(handlers.AcceptGroupInviteHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/invites/decline", mw.Auth(handlers.DeclineGroupInviteHandler))
 
 	// --- Group Calls (protected) ---
 	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls", mw.Auth(handlers.StartGroupCallHandler))

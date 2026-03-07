@@ -61,6 +61,14 @@ type Engine struct {
 	// OnUserOffline is called when a user's last device disconnects.
 	// Used by the bot service to cancel pending bot match timers.
 	OnUserOffline func(userID string)
+
+	// SendPushToUser sends a push notification to a single user's devices.
+	// Wired up in main.go to services.SendPushToUser to break the import cycle.
+	SendPushToUser func(ctx context.Context, userID string, data map[string]string, highPriority bool)
+
+	// ShouldPushMessage checks debounce for a room+user combo.
+	// Wired up in main.go to services.ShouldPushMessage.
+	ShouldPushMessage func(ctx context.Context, roomID, userID string) bool
 }
 
 // NewEngine creates the engine and starts the Redis listener.
@@ -494,6 +502,20 @@ func (e *Engine) subscribeAndListen() {
 					if senderID != "" {
 						e.sendDeliveryReceipts(roomID, senderID)
 					}
+					// Send push notifications to offline room members (except sender).
+					// Online users already receive via WebSocket. Debounced per room+user.
+					if senderID != "" && !strings.HasPrefix(roomID, config.STRANGER_PREFIX) {
+						senderName := gjson.GetBytes(payload, config.FieldFromName).String()
+						preview := gjson.GetBytes(payload, config.FieldText).String()
+						if len(preview) > 100 {
+							preview = preview[:100]
+						}
+						capturedRoom := roomID
+						capturedSender := senderID
+						runBackground(func() {
+							e.sendMessagePush(capturedRoom, capturedSender, senderName, preview)
+						})
+					}
 				}
 
 			case config.MsgTypeTypingStart:
@@ -604,6 +626,59 @@ func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 }
 
 // ---------------------------------------------------------------------------
+// Push Notifications for Chat Messages
+// ---------------------------------------------------------------------------
+
+// sendMessagePush sends push notifications to all offline room members
+// (except the sender). Debounced per room+user to prevent spam on bursts.
+// Skips users who have at least one active WebSocket connection, since they
+// already receive the message in real-time (standard WhatsApp/Telegram pattern).
+func (e *Engine) sendMessagePush(roomID, senderID, senderName, preview string) {
+	if e.SendPushToUser == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+
+	// Query all room members except the sender
+	rows, err := postgress.GetRawDB().QueryContext(ctx,
+		`SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2`,
+		roomID, senderID,
+	)
+	if err != nil {
+		log.Printf("[engine] sendMessagePush query failed room=%s: %v", roomID, err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var memberID string
+		if err := rows.Scan(&memberID); err != nil {
+			continue
+		}
+
+		// Skip users who are online — they already get the message via WebSocket
+		if e.IsUserOnline(memberID) {
+			continue
+		}
+
+		// Debounce: skip if we already pushed this room+user recently
+		if e.ShouldPushMessage != nil && !e.ShouldPushMessage(ctx, roomID, memberID) {
+			continue
+		}
+
+		e.SendPushToUser(ctx, memberID, map[string]string{
+			"type":       "new_message",
+			"roomId":     roomID,
+			"senderId":   senderID,
+			"senderName": senderName,
+			"preview":    preview,
+		}, false)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Presence Helpers
 // ---------------------------------------------------------------------------
 
@@ -673,17 +748,17 @@ func getFriendIDs(userID string) []string {
 }
 
 // broadcastPresence publishes a presence event to all online friends via Redis.
-// If the user has show_last_seen disabled, we skip broadcasting.
+// If the user has show_last_seen disabled or is a private account, we skip broadcasting.
 func (e *Engine) broadcastPresence(userID string, online bool) {
 	// Check if the user allows presence visibility
-	var showLastSeen bool
+	var showLastSeen, isPrivate bool
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
 	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT show_last_seen FROM users WHERE id = $1`, userID,
-	).Scan(&showLastSeen)
-	if err != nil || !showLastSeen {
-		return // User has presence hidden
+		`SELECT show_last_seen, is_private FROM users WHERE id = $1`, userID,
+	).Scan(&showLastSeen, &isPrivate)
+	if err != nil || !showLastSeen || isPrivate {
+		return // User has presence hidden or is private
 	}
 
 	friendIDs := getFriendIDs(userID)

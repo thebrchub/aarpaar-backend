@@ -60,6 +60,9 @@ const (
 	// Server -> Client: Your DM request was accepted
 	MsgTypeDMAccepted = "dm_accepted"
 
+	// Server -> Client: A friend request you received was withdrawn by the sender
+	MsgTypeFriendRequestWithdrawn = "friend_request_withdrawn"
+
 	// Client -> Server: Mark a room as read (resets unread count)
 	MsgTypeMarkRead = "mark_read"
 
@@ -175,6 +178,12 @@ const (
 
 	// Server -> All members: A user joined the group via self-join or invite link
 	MsgTypeMemberJoined = "member_joined"
+
+	// Server -> Target user: You have been invited to a group
+	MsgTypeGroupInvite = "group_invite"
+
+	// Server -> All members: A user accepted a group invite and joined
+	MsgTypeGroupInviteAccepted = "group_invite_accepted"
 )
 
 // ---------------------------------------------------------------------------
@@ -221,6 +230,7 @@ const (
 const (
 	RoomMemberActive  = "active"  // Normal — messages visible in inbox
 	RoomMemberPending = "pending" // DM request — hidden until accepted
+	RoomMemberInvited = "invited" // Group invite — awaiting accept/decline
 )
 
 // ---------------------------------------------------------------------------
@@ -305,6 +315,8 @@ const (
 	FieldMuted           = "muted"          // Whether the track is muted
 	FieldRole            = "role"           // Role (admin, member)
 	FieldVisibility      = "visibility"     // Group visibility (public/private)
+	FieldInvitedBy       = "invitedBy"      // Who invited a member
+	FieldGroupName       = "groupName"      // Group name (for invite notifications)
 	FieldInviteCode      = "inviteCode"     // Group invite code for join links
 )
 

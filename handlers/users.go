@@ -92,7 +92,7 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
-			SELECT id, name, username, avatar_url
+			SELECT id, name, username, avatar_url, is_private
 			FROM users
 			WHERE is_banned = false
 			  AND (username ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%')
