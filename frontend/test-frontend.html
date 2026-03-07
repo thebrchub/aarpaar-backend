@@ -6,6 +6,8 @@
   <title>Aarpaar Backend – Test Console</title>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
   <style>
     /* ------------------------------------------------------------------ */
     /*  CSS Variables & Reset                                             */
@@ -908,18 +910,23 @@
         <div class="card">
           <h3><span class="badge badge-post">POST</span> Register Device</h3>
           <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-            <code>/api/v1/auth/device</code> — Register a device for push notifications.
+            <code>/api/v1/auth/device</code> — Register a device for push notifications.<br/>
+            Firebase config is <strong>auto-fetched</strong> from the backend on login.
+            FCM token is obtained automatically and registered.
           </p>
+          <div style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px">
+            FCM Status: <span id="fbConfigStatus" style="color:var(--success)">Not initialized</span>
+          </div>
           <div class="form-row">
-            <label>FCM / APNs Token</label>
-            <input type="text" id="deviceToken" placeholder="Device push token..." />
+            <label>FCM Token <span style="font-size:.72rem;color:var(--text-muted)">(auto-filled by Firebase SDK)</span></label>
+            <input type="text" id="deviceToken" placeholder="Auto-populated on login..." readonly />
           </div>
           <div class="form-row">
             <label>Device Type</label>
             <select id="deviceType">
+              <option value="web" selected>Web</option>
               <option value="android">Android</option>
               <option value="ios">iOS</option>
-              <option value="web">Web</option>
             </select>
           </div>
           <button class="btn btn-primary" onclick="registerDevice()">Register</button>
@@ -2550,9 +2557,118 @@ async function refreshToken() {
   }
 }
 
+// ======================================================================
+// FIREBASE CLOUD MESSAGING (real push tokens for Chrome)
+// ======================================================================
+
+let firebaseApp = null;
+let firebaseMessaging = null;
+let fcmServiceWorkerReg = null;
+let firebaseConfig = null; // fetched from backend
+let firebaseVapidKey = ''; // fetched from backend
+
+// Fetch Firebase web config from the backend (populated from env vars)
+async function fetchFirebaseConfig() {
+  try {
+    const r = await apiCall('GET', '/api/v1/config/firebase', null, null);
+    if (r.data && r.data.apiKey) {
+      firebaseConfig = {
+        apiKey: r.data.apiKey,
+        projectId: r.data.projectId,
+        messagingSenderId: r.data.messagingSenderId,
+        appId: r.data.appId,
+      };
+      firebaseVapidKey = r.data.vapidKey || '';
+      console.log('[FCM] Config fetched from backend, project:', firebaseConfig.projectId);
+      return true;
+    }
+    console.log('[FCM] Backend returned empty Firebase config — push disabled');
+    return false;
+  } catch (e) {
+    console.warn('[FCM] Failed to fetch Firebase config:', e);
+    return false;
+  }
+}
+
+async function initFirebaseMessaging() {
+  if (firebaseMessaging) return true; // already initialized
+
+  if (!firebaseConfig || !firebaseConfig.apiKey) {
+    console.log('[FCM] No Firebase config — skipping FCM init');
+    return false;
+  }
+
+  try {
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+      fcmServiceWorkerReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+      // Send config to the SW so it can initialize Firebase there too
+      if (fcmServiceWorkerReg.active) {
+        fcmServiceWorkerReg.active.postMessage({ type: 'FIREBASE_CONFIG', config: firebaseConfig });
+      }
+      // Also post when SW activates (first install)
+      navigator.serviceWorker.ready.then((reg) => {
+        if (reg.active) reg.active.postMessage({ type: 'FIREBASE_CONFIG', config: firebaseConfig });
+      });
+    }
+
+    firebaseApp = firebase.initializeApp(firebaseConfig);
+    firebaseMessaging = firebase.messaging();
+
+    // Handle foreground messages (tab is open) — show toast + browser notification
+    firebaseMessaging.onMessage((payload) => {
+      console.log('[FCM] Foreground message:', payload);
+      const data = payload.data || {};
+      switch (data.type) {
+        case 'incoming_call':
+          toast('📞 ' + (data.callerName || 'Someone') + ' is calling', 'info');
+          break;
+        case 'missed_call':
+          toast('📵 Missed call from ' + (data.callerName || 'Unknown'), 'warn');
+          showBrowserNotification('Missed call', 'from ' + (data.callerName || 'Unknown'), 'missed-' + data.callId);
+          break;
+        case 'new_message':
+          showBrowserNotification(data.senderName || 'New message', data.preview || 'Sent you a message', 'msg-' + data.roomId);
+          break;
+        case 'dm_request':
+          toast('💬 Message request from ' + (data.senderName || 'someone'), 'info');
+          break;
+        case 'friend_request':
+          toast('👋 Friend request from ' + (data.senderName || 'someone'), 'info');
+          break;
+        default:
+          toast('Push: ' + (data.type || JSON.stringify(data)), 'info');
+      }
+    });
+
+    const statusEl = document.getElementById('fbConfigStatus');
+    if (statusEl) statusEl.textContent = 'Initialized ✓ (project: ' + firebaseConfig.projectId + ')';
+    console.log('[FCM] Firebase Messaging initialized');
+    return true;
+  } catch (e) {
+    console.error('[FCM] Init failed:', e);
+    const statusEl = document.getElementById('fbConfigStatus');
+    if (statusEl) statusEl.textContent = 'Init failed: ' + e.message;
+    return false;
+  }
+}
+
+async function getFcmToken() {
+  if (!firebaseMessaging) return null;
+  try {
+    const token = await firebaseMessaging.getToken({
+      vapidKey: firebaseVapidKey || undefined,
+      serviceWorkerRegistration: fcmServiceWorkerReg,
+    });
+    return token || null;
+  } catch (e) {
+    console.error('[FCM] getToken failed:', e);
+    return null;
+  }
+}
+
 // AUTH: Register Device
 function generateDeviceToken() {
-  // Generate a realistic mock FCM token for testing purposes
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
   let token = '';
   for (let i = 0; i < 152; i++) token += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -2561,10 +2677,26 @@ function generateDeviceToken() {
 
 async function registerDevice(silent) {
   let token = document.getElementById('deviceToken').value.trim();
+
+  // Try to get a real FCM token from Firebase
+  if (!token) {
+    const fcmOk = await initFirebaseMessaging();
+    if (fcmOk) {
+      token = await getFcmToken();
+      if (token) {
+        document.getElementById('deviceToken').value = token;
+        if (!silent) toast('Got real FCM token from Firebase', 'success');
+      }
+    }
+  }
+
+  // Fallback: generate a mock token (push won't actually work, but API call succeeds)
   if (!token) {
     token = generateDeviceToken();
     document.getElementById('deviceToken').value = token;
+    if (!silent) toast('Using mock token — set FIREBASE_WEB_* env vars on backend for real push', 'warn');
   }
+
   const deviceType = document.getElementById('deviceType').value;
   const r = await apiCall('POST', '/api/v1/auth/device', { token, device_type: deviceType }, silent ? null : 'deviceResponse');
   if (r.status === 200 && !silent) {
@@ -2721,11 +2853,11 @@ async function postLoginFlow() {
   if (currentUserProfile && !currentUserProfile.username) {
     document.getElementById('usernameModal').classList.remove('hidden');
   }
-  // 3. Auto-register device for push notifications (generate token if needed)
-  await registerDevice(true);
-  toast('Device auto-registered for push notifications', 'info');
-  // 4. Request browser notification permission
+  // 3. Request browser notification permission (must happen before FCM token)
   requestNotificationPermission();
+  // 4. Fetch Firebase config from backend & auto-register device with real FCM token
+  await fetchFirebaseConfig();
+  await registerDevice(true);
   // 5. Auto-connect WebSocket
   deriveWsUrl();
   wsConnect();
