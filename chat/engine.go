@@ -164,6 +164,9 @@ func (e *Engine) Register(c *Client) {
 	if firstDevice {
 		runBackground(func() { e.broadcastPresence(c.UserID, true) })
 	}
+
+	// Deliver pending incoming call if user has an unanswered call as callee
+	runBackground(func() { e.deliverPendingCall(c) })
 }
 
 // Unregister removes a client when they disconnect (close tab / app).
@@ -689,6 +692,36 @@ func (e *Engine) IsUserOnline(userID string) bool {
 	online := ok && len(clients) > 0
 	e.userMu.RUnlock()
 	return online
+}
+
+// deliverPendingCall checks if a newly connected user has a pending incoming
+// call (as callee, not yet answered) and delivers a synthetic call_ring so
+// they can accept it. This handles the case where the callee was offline when
+// the call was initiated and came online via a push notification.
+func (e *Engine) deliverPendingCall(c *Client) {
+	call := getActiveCall(c.UserID)
+	if call == nil || call.Role != "callee" || call.Answered {
+		return
+	}
+	// Only deliver if the call is still within the ring timeout window
+	if time.Since(call.StartedAt) > CallRingTimeout {
+		return
+	}
+
+	ringMsg, _ := json.Marshal(map[string]interface{}{
+		config.FieldType:     config.MsgTypeCallRing,
+		config.FieldFrom:     call.PeerID,
+		config.FieldTo:       c.UserID,
+		config.FieldCallID:   call.CallID,
+		config.FieldHasVideo: call.HasVideo,
+	})
+
+	select {
+	case c.Send <- ringMsg:
+		log.Printf("[calls] Delivered pending call_ring to user=%s call=%s", c.UserID, call.CallID)
+	default:
+		droppedMessages.Add(1)
+	}
 }
 
 // OnlineUserCount returns the number of unique users with at least one WebSocket connection.

@@ -56,6 +56,8 @@ func InitPush() error {
 
 // PushPayload holds the key-value pairs for a push notification data message.
 type PushPayload struct {
+	Title    string // visible notification title (empty = data-only)
+	Body     string // visible notification body
 	Data     map[string]string
 	Priority push.Priority
 }
@@ -79,6 +81,8 @@ func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 	if len(tokens) == 1 {
 		resp, err := pushSvc.Send(ctx, &push.Notification{
 			Token:    tokens[0],
+			Title:    p.Title,
+			Body:     p.Body,
 			Data:     p.Data,
 			Priority: p.Priority,
 		})
@@ -93,6 +97,8 @@ func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 	// Multiple tokens → multicast
 	resp, err := pushSvc.SendMulticast(ctx, &push.MulticastNotification{
 		Tokens:   tokens,
+		Title:    p.Title,
+		Body:     p.Body,
 		Data:     p.Data,
 		Priority: p.Priority,
 	})
@@ -119,6 +125,8 @@ func SendPushToUsers(ctx context.Context, userIDs []string, p PushPayload) {
 
 	resp, err := pushSvc.SendMulticast(ctx, &push.MulticastNotification{
 		Tokens:   tokens,
+		Title:    p.Title,
+		Body:     p.Body,
 		Data:     p.Data,
 		Priority: p.Priority,
 	})

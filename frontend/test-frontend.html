@@ -3482,7 +3482,6 @@ function wsConnect() {
       if (parsed.type === 'friend_request') {
         const frName = parsed.username || parsed.from || 'Someone';
         toast('Friend request from ' + frName, 'info');
-        showBrowserNotification('Friend Request', frName + ' sent you a friend request', 'fr-' + parsed.from);
       }
       if (parsed.type === 'friend_request_withdrawn') {
         toast('Friend request withdrawn by ' + (parsed.from || ''), 'info');
@@ -3493,7 +3492,6 @@ function wsConnect() {
       }
       if (parsed.type === 'dm_request') {
         toast('New DM request – Room: ' + (parsed.roomId || ''), 'info');
-        showBrowserNotification('New Message Request', 'Someone wants to message you', 'dm-' + parsed.roomId);
       }
       if (parsed.type === 'dm_accepted') {
         toast('Your DM was accepted! Room: ' + (parsed.roomId || ''), 'success');
@@ -4402,7 +4400,6 @@ function chatHandleWsEvent(parsed) {
     // ---- Group invite events ----
     case 'group_invite':
       toast('You were invited to a group', 'info');
-      showBrowserNotification('Group Invite', 'You have been invited to join a group', 'gi-' + (parsed.groupId || ''));
       break;
     case 'group_invite_accepted':
       grpLogEvent('Invite accepted — user joined ' + (parsed.roomId || parsed.groupId || ''), 'in');
@@ -5118,12 +5115,7 @@ function callHandleRing(parsed) {
   // Play ringtone
   startRingtone();
 
-  // Browser notification (works when tab is in background)
-  callState._browserNotif = showBrowserNotification(
-    'Incoming ' + callType + ' call',
-    callerName + ' is calling you',
-    'call-' + parsed.callId
-  );
+  // Browser notification handled by FCM push (service worker)
 }
 
 // ---- Accept incoming call ----

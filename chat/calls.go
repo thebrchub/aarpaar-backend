@@ -287,12 +287,16 @@ func sendCallPushNotification(calleeID, callerID, callID string, hasVideo bool) 
 		callType = "video"
 	}
 
+	title := callerName + " is calling you"
+	body := "Incoming " + callType + " call"
 	e.SendPushToUser(ctx, calleeID, map[string]string{
 		"type":       "incoming_call",
 		"callId":     callID,
 		"callerId":   callerID,
 		"callerName": callerName,
 		"hasVideo":   callType,
+		"title":      title,
+		"body":       body,
 	}, true)
 }
 
@@ -318,6 +322,8 @@ func sendMissedCallPush(calleeID, callerID, callID string) {
 		"type":       "missed_call",
 		"callId":     callID,
 		"callerName": callerName,
+		"title":      "Missed call",
+		"body":       "from " + callerName,
 	}, true)
 }
 
