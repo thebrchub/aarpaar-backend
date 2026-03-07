@@ -117,7 +117,15 @@ func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 		log.Printf("[push] SendMulticast failed user=%s: %v", userID, err)
 		return
 	}
+	log.Printf("[push] SendMulticast result user=%s: success=%d failure=%d", userID, resp.SuccessCount, resp.FailureCount)
 	if resp.FailureCount > 0 {
+		for _, ft := range resp.FailedTokens {
+			tokenPrefix := ft.Token
+			if len(tokenPrefix) > 20 {
+				tokenPrefix = tokenPrefix[:20]
+			}
+			log.Printf("[push]   FAILED token=%s... stale=%v err=%s", tokenPrefix, ft.IsStale, ft.Error)
+		}
 		cleanStaleTokens(ctx, resp.FailedTokens)
 	}
 }
