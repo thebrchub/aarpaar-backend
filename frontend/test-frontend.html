@@ -2724,9 +2724,68 @@ async function postLoginFlow() {
   // 3. Auto-register device for push notifications (generate token if needed)
   await registerDevice(true);
   toast('Device auto-registered for push notifications', 'info');
-  // 4. Auto-connect WebSocket
+  // 4. Request browser notification permission
+  requestNotificationPermission();
+  // 5. Auto-connect WebSocket
   deriveWsUrl();
   wsConnect();
+}
+
+// ======================================================================
+// BROWSER NOTIFICATIONS (Chrome / desktop)
+// ======================================================================
+
+function requestNotificationPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    Notification.requestPermission().then(p => {
+      if (p === 'granted') toast('Browser notifications enabled', 'success');
+    });
+  }
+}
+
+// Ring tone using Web Audio API (no external file needed)
+let ringAudioCtx = null;
+let ringOscillator = null;
+let ringInterval = null;
+
+function startRingtone() {
+  stopRingtone();
+  try {
+    ringAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const gain = ringAudioCtx.createGain();
+    gain.gain.value = 0.15;
+    gain.connect(ringAudioCtx.destination);
+    // Ring pattern: 400Hz beep for 300ms, silence 200ms, repeat
+    function beep() {
+      const osc = ringAudioCtx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = 400;
+      osc.connect(gain);
+      osc.start();
+      osc.stop(ringAudioCtx.currentTime + 0.3);
+    }
+    beep();
+    ringInterval = setInterval(beep, 500);
+  } catch (e) { console.warn('Ringtone failed:', e); }
+}
+
+function stopRingtone() {
+  if (ringInterval) { clearInterval(ringInterval); ringInterval = null; }
+  if (ringAudioCtx) { ringAudioCtx.close().catch(() => {}); ringAudioCtx = null; }
+}
+
+function showBrowserNotification(title, body, tag) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return null;
+  // Only show if tab is hidden or not focused
+  if (document.visibilityState === 'visible' && document.hasFocus()) return null;
+  const n = new Notification(title, {
+    body: body,
+    tag: tag || 'aarpaar-' + Date.now(),
+    requireInteraction: tag && tag.startsWith('call-'),
+  });
+  n.onclick = () => { window.focus(); n.close(); };
+  return n;
 }
 
 async function searchUsers() {
@@ -3281,7 +3340,12 @@ function wsConnect() {
         getRooms();
       }
       if (parsed.type === 'friend_request') {
-        toast('Friend request from ' + (parsed.username || parsed.from || ''), 'info');
+        const frName = parsed.username || parsed.from || 'Someone';
+        toast('Friend request from ' + frName, 'info');
+        showBrowserNotification('Friend Request', frName + ' sent you a friend request', 'fr-' + parsed.from);
+      }
+      if (parsed.type === 'friend_request_withdrawn') {
+        toast('Friend request withdrawn by ' + (parsed.from || ''), 'info');
       }
       if (parsed.type === 'friend_accepted') {
         toast('Friend accepted! You are now friends with ' + (parsed.from || ''), 'success');
@@ -3289,6 +3353,7 @@ function wsConnect() {
       }
       if (parsed.type === 'dm_request') {
         toast('New DM request – Room: ' + (parsed.roomId || ''), 'info');
+        showBrowserNotification('New Message Request', 'Someone wants to message you', 'dm-' + parsed.roomId);
       }
       if (parsed.type === 'dm_accepted') {
         toast('Your DM was accepted! Room: ' + (parsed.roomId || ''), 'success');
@@ -4877,19 +4942,34 @@ function callHandleRing(parsed) {
 
   callState.peerName = callerName;
 
+  const callType = parsed.hasVideo ? 'video' : 'audio';
+
   const overlay = document.getElementById('incomingCallOverlay');
   overlay.classList.remove('hidden');
   document.getElementById('incomingCallName').textContent = callerName;
   document.getElementById('incomingCallType').textContent =
-    'Incoming ' + (parsed.hasVideo ? 'video' : 'audio') + ' call...';
+    'Incoming ' + callType + ' call...';
   document.getElementById('incomingCallAvatar').innerHTML =
     '<span>' + callerName.charAt(0).toUpperCase() + '</span>';
+
+  // Play ringtone
+  startRingtone();
+
+  // Browser notification (works when tab is in background)
+  callState._browserNotif = showBrowserNotification(
+    'Incoming ' + callType + ' call',
+    callerName + ' is calling you',
+    'call-' + parsed.callId
+  );
 }
 
 // ---- Accept incoming call ----
 async function callAcceptIncoming() {
   const parsed = callState.incomingData;
   if (!parsed) return;
+
+  stopRingtone();
+  if (callState._browserNotif) { callState._browserNotif.close(); callState._browserNotif = null; }
 
   document.getElementById('incomingCallOverlay').classList.add('hidden');
   callState.ringing = false;
@@ -4935,6 +5015,8 @@ async function callAcceptIncoming() {
 
 // ---- Reject incoming call ----
 function callRejectIncoming() {
+  stopRingtone();
+  if (callState._browserNotif) { callState._browserNotif.close(); callState._browserNotif = null; }
   const parsed = callState.incomingData;
   if (parsed) {
     wsSend({
@@ -5208,6 +5290,9 @@ function callCleanup() {
   callState.ringing = false;
   callState.incomingData = null;
   callState.negotiationReady = false;
+
+  stopRingtone();
+  if (callState._browserNotif) { callState._browserNotif.close(); callState._browserNotif = null; }
 
   callHideOverlay();
   document.getElementById('incomingCallOverlay').classList.add('hidden');
