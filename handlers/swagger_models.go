@@ -159,7 +159,25 @@ type GroupCreateResponse struct {
 
 // MembersAddedResponse is the doc-only response for adding group members.
 type MembersAddedResponse struct {
-	Added []string `json:"added"`
+	Added   []string             `json:"added"`
+	Invited []string             `json:"invited"`
+	Failed  []MemberAddFailure   `json:"failed"`
+}
+
+// MemberAddFailure describes why a specific user could not be added.
+type MemberAddFailure struct {
+	UserID string `json:"userId" example:"550e8400-e29b-41d4-a716-446655440000"`
+	Reason string `json:"reason" example:"blocked"`
+}
+
+// GroupInviteItem is the doc-only item in the group invites response array.
+type GroupInviteItem struct {
+	RoomID      string `json:"roomId" example:"550e8400-e29b-41d4-a716-446655440000"`
+	GroupName   string `json:"groupName" example:"My Group"`
+	AvatarURL   string `json:"avatarUrl"`
+	InvitedBy   string `json:"invitedBy" example:"550e8400-e29b-41d4-a716-446655440000"`
+	InviterName string `json:"inviterName" example:"Alice"`
+	InvitedAt   string `json:"invitedAt" example:"2026-03-07T10:00:00Z"`
 }
 
 // InviteCodeResponse is the doc-only response for generating an invite code.

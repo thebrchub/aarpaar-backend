@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/thebrchub/aarpaar/services"
 )
 
 // pgCtx creates a context from an HTTP request with PGTimeout.
@@ -176,7 +178,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve username to UUID + check privacy
+	// Resolve username to UUID + check privacy (initial check, re-verified under FOR UPDATE below)
 	var targetUserID string
 	var targetIsPrivate bool
 	err := postgress.GetRawDB().QueryRow(
@@ -228,28 +230,8 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check friendship
-	uid1, uid2 := sortUUIDs(userID, targetUserID)
-	var areFriends bool
-	if err := postgress.GetRawDB().QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2)`,
-		uid1, uid2,
-	).Scan(&areFriends); err != nil {
-		JSONError(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-
-	// Determine target's room member status:
-	// - Public account OR friends → active (instant DM)
-	// - Private account AND not friends → pending (DM request)
-	targetStatus := config.RoomMemberActive
-	isPending := false
-	if targetIsPrivate && !areFriends {
-		targetStatus = config.RoomMemberPending
-		isPending = true
-	}
-
-	// Create room + members in a transaction
+	// Use a transaction with FOR UPDATE on the target user row to prevent
+	// race conditions where is_private toggles between the check and room creation.
 	tx, err := postgress.GetRawDB().Begin()
 	if err != nil {
 		JSONError(w, "Database error", http.StatusInternalServerError)
@@ -257,6 +239,54 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	// Re-read is_private under FOR UPDATE lock to prevent TOCTOU race
+	err = tx.QueryRow(
+		`SELECT is_private FROM users WHERE id = $1 FOR UPDATE`, targetUserID,
+	).Scan(&targetIsPrivate)
+	if err != nil {
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Check friendship
+	uid1, uid2 := sortUUIDs(userID, targetUserID)
+	var areFriends bool
+	if err := tx.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2)`,
+		uid1, uid2,
+	).Scan(&areFriends); err != nil {
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Determine target's room member status using Instagram-style contact model:
+	// - Friends → both 'active' (direct DM)
+	// - Non-friend + target is private + sender is free → reject with 403
+	// - Non-friend + target is private + sender is paid → sender 'active', target 'pending' (message request)
+	// - Non-friend + target is public → sender 'active', target 'pending' (message request)
+	targetStatus := config.RoomMemberActive
+	isPending := false
+	if !areFriends {
+		if targetIsPrivate {
+			// Check if sender is a paid user (total donations >= premium_connect threshold)
+			ctx2, cancel2 := pgCtx(r)
+			defer cancel2()
+			var cfg struct {
+				MinDonation float64 `json:"min_donation"`
+			}
+			cfg.MinDonation = 50 // default threshold
+			_ = GetAppSetting(ctx2, "premium_connect", &cfg)
+			totalDonated := GetUserTotalDonation(ctx2, userID)
+			if totalDonated < cfg.MinDonation {
+				JSONError(w, "This user has a private account. Send a friend request first.", http.StatusForbidden)
+				return
+			}
+		}
+		targetStatus = config.RoomMemberPending
+		isPending = true
+	}
+
+	// Create room + members within the same transaction
 	var roomID string
 	err = tx.QueryRow(
 		`INSERT INTO rooms (type) VALUES ('DM') RETURNING id`,
@@ -297,6 +327,24 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 			config.FieldRoomID: roomID,
 			config.FieldFrom:   userID,
 		})
+
+		// Push notification for offline target
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+			defer cancel()
+			var senderName string
+			_ = postgress.GetRawDB().QueryRowContext(ctx,
+				`SELECT COALESCE(name, 'Someone') FROM users WHERE id = $1`, userID,
+			).Scan(&senderName)
+			services.SendPushToUser(ctx, targetUserID, services.PushPayload{
+				Data: map[string]string{
+					"type":       "dm_request",
+					"roomId":     roomID,
+					"senderId":   userID,
+					"senderName": senderName,
+				},
+			})
+		}()
 	}
 
 	JSONSuccess(w, map[string]interface{}{
@@ -347,9 +395,61 @@ func enrichRoomsWithOnlineStatus(raw []byte, currentUserID string) []byte {
 		return raw
 	}
 
+	// Build friend set + public user set for privacy filtering of is_online.
+	// Only expose online status for friends and public accounts.
+	friendSet := make(map[string]bool)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	friendRows, err := postgress.GetRawDB().QueryContext(ctx,
+		`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
+		 UNION ALL
+		 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`, currentUserID,
+	)
+	if err == nil {
+		for friendRows.Next() {
+			var fid string
+			if friendRows.Scan(&fid) == nil {
+				friendSet[fid] = true
+			}
+		}
+		friendRows.Close()
+	}
+
+	// Collect all unique member IDs to batch-check privacy
+	memberIDSet := make(map[string]bool)
 	for i := range rooms {
 		for j := range rooms[i].Members {
-			rooms[i].Members[j].IsOnline = e.IsUserOnline(rooms[i].Members[j].ID)
+			memberIDSet[rooms[i].Members[j].ID] = true
+		}
+	}
+	privateSet := make(map[string]bool)
+	if len(memberIDSet) > 0 {
+		ids := make([]string, 0, len(memberIDSet))
+		for id := range memberIDSet {
+			ids = append(ids, id)
+		}
+		ph, phArgs := buildINClause(ids, 1)
+		privRows, pErr := postgress.GetRawDB().QueryContext(ctx,
+			fmt.Sprintf(`SELECT id FROM users WHERE id IN (%s) AND is_private = true`, ph), phArgs...)
+		if pErr == nil {
+			for privRows.Next() {
+				var pid string
+				if privRows.Scan(&pid) == nil {
+					privateSet[pid] = true
+				}
+			}
+			privRows.Close()
+		}
+	}
+
+	for i := range rooms {
+		for j := range rooms[i].Members {
+			mid := rooms[i].Members[j].ID
+			// Show is_online only for self, friends, or public accounts
+			if mid == currentUserID || friendSet[mid] || !privateSet[mid] {
+				rooms[i].Members[j].IsOnline = e.IsUserOnline(mid)
+			}
+			// else: leave IsOnline as false (zero value)
 		}
 	}
 

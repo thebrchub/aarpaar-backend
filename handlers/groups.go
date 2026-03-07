@@ -269,7 +269,6 @@ func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch members
 	memberRows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT u.id, u.username, u.name, COALESCE(u.avatar_url,''), rm.role
 		 FROM room_members rm
@@ -474,7 +473,7 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate members exist and are not banned
 	placeholders, args := buildINClause(req.MemberIDs, 1)
 	query := fmt.Sprintf(
-		`SELECT id FROM users WHERE id IN (%s) AND is_banned = false`, placeholders,
+		`SELECT id, is_private FROM users WHERE id IN (%s) AND is_banned = false`, placeholders,
 	)
 	rows, err := postgress.GetRawDB().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -482,10 +481,15 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	validIDs := make(map[string]bool)
+	privateIDs := make(map[string]bool)
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err == nil {
+		var isPrivate bool
+		if err := rows.Scan(&id, &isPrivate); err == nil {
 			validIDs[id] = true
+			if isPrivate {
+				privateIDs[id] = true
+			}
 		}
 	}
 	rows.Close()
@@ -493,9 +497,45 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 	// Check blocks between adder and new members
 	blocked := getBlockedBetween(ctx, userID, req.MemberIDs)
 
+	// Build friend set of the adder to check private non-friends
+	friendSet := make(map[string]bool)
+	if len(privateIDs) > 0 {
+		friendRows, fErr := postgress.GetRawDB().QueryContext(ctx,
+			`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
+			 UNION ALL
+			 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`, userID,
+		)
+		if fErr == nil {
+			for friendRows.Next() {
+				var fid string
+				if friendRows.Scan(&fid) == nil {
+					friendSet[fid] = true
+				}
+			}
+			friendRows.Close()
+		}
+	}
+
 	added := make([]string, 0)
+	invited := make([]string, 0)
 	for _, memberID := range req.MemberIDs {
 		if !validIDs[memberID] || blocked[memberID] {
+			continue
+		}
+
+		// Private non-friend users get an invite instead of direct add
+		if privateIDs[memberID] && !friendSet[memberID] {
+			_, err := postgress.GetRawDB().ExecContext(ctx,
+				`INSERT INTO room_members (room_id, user_id, status, role, joined_at)
+				 VALUES ($1, $2, 'invited', 'member', NOW())
+				 ON CONFLICT (room_id, user_id)
+				 DO UPDATE SET status = 'invited', joined_at = NOW(), left_at = NULL`,
+				groupID, memberID,
+			)
+			if err != nil {
+				continue
+			}
+			invited = append(invited, memberID)
 			continue
 		}
 
@@ -513,14 +553,14 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 		added = append(added, memberID)
 	}
 
-	// Subscribe new members to the room
+	// Subscribe directly added members to the room
 	if e := chat.GetEngine(); e != nil {
 		for _, id := range added {
 			e.JoinRoomForUser(id, groupID)
 		}
 	}
 
-	// Notify all group members about newly added members
+	// Notify all group members about directly added members
 	allMembers := getActiveGroupMemberIDs(ctx, groupID)
 	for _, addedID := range added {
 		broadcastGroupEvent(ctx, groupID, config.MsgTypeMemberAdded, map[string]interface{}{
@@ -530,8 +570,25 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 		}, allMembers)
 	}
 
+	// Fetch group name for invite notifications
+	if len(invited) > 0 {
+		var groupName string
+		postgress.GetRawDB().QueryRowContext(ctx,
+			`SELECT COALESCE(name,'') FROM rooms WHERE id = $1`, groupID,
+		).Scan(&groupName)
+		for _, invitedID := range invited {
+			notifyUser(ctx, invitedID, map[string]interface{}{
+				config.FieldType:      config.MsgTypeGroupInvite,
+				config.FieldRoomID:    groupID,
+				config.FieldGroupName: groupName,
+				config.FieldInvitedBy: userID,
+			})
+		}
+	}
+
 	JSONSuccess(w, map[string]interface{}{
-		"added": added,
+		"added":   added,
+		"invited": invited,
 	})
 }
 
@@ -1278,6 +1335,185 @@ func JoinGroupByVanityHandler(w http.ResponseWriter, r *http.Request) {
 		"roomId":  groupID,
 		"message": "Joined group via vanity link",
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Group Invite Handlers (accept / decline / list)
+// ---------------------------------------------------------------------------
+
+// GetGroupInvitesHandler returns pending group invites for the authenticated user.
+//
+// @Summary		Get group invites
+// @Description	Returns groups the user has been invited to but hasn't accepted yet.
+// @Tags		Groups
+// @Produce		json
+// @Success		200	{array}	GroupInviteItem
+// @Failure		401	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/groups/invites [get]
+func GetGroupInvitesHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	query := `
+		SELECT COALESCE(json_agg(t), '[]')::text
+		FROM (
+			SELECT
+				r.id AS "roomId",
+				COALESCE(r.name,'') AS "groupName",
+				COALESCE(r.avatar_url,'') AS "avatarUrl",
+				COALESCE(r.created_by::text,'') AS "invitedBy",
+				COALESCE(u.name,'') AS "inviterName",
+				rm.joined_at AS "invitedAt"
+			FROM room_members rm
+			JOIN rooms r ON rm.room_id = r.id
+			LEFT JOIN users u ON u.id = r.created_by
+			WHERE rm.user_id = $1 AND rm.status = 'invited' AND r.type = 'GROUP'
+			ORDER BY rm.joined_at DESC
+		) t
+	`
+
+	var raw []byte
+	err := postgress.GetRawDB().QueryRowContext(ctx, query, userID).Scan(&raw)
+	if err != nil {
+		JSONError(w, "Failed to fetch group invites", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+	w.WriteHeader(http.StatusOK)
+	w.Write(raw)
+}
+
+// AcceptGroupInviteHandler accepts a pending group invite.
+//
+// @Summary		Accept group invite
+// @Description	Accepts a group invite, making the user an active member.
+// @Tags		Groups
+// @Produce		json
+// @Param		groupId	path	string	true	"Group room UUID"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/groups/{groupId}/invites/accept [post]
+func AcceptGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	groupID := r.PathValue("groupId")
+	if groupID == "" {
+		JSONError(w, "Missing group ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	// Check group is not full
+	var maxMembers, currentCount int
+	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT r.max_members,
+		        (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.id AND rm.status = 'active')
+		 FROM rooms r WHERE r.id = $1 AND r.type = 'GROUP'`, groupID,
+	).Scan(&maxMembers, &currentCount)
+	if err != nil {
+		JSONError(w, "Group not found", http.StatusNotFound)
+		return
+	}
+	if currentCount >= maxMembers {
+		JSONError(w, "Group is full", http.StatusBadRequest)
+		return
+	}
+
+	// Activate the invited membership
+	res, err := postgress.GetRawDB().ExecContext(ctx,
+		`UPDATE room_members SET status = 'active', joined_at = NOW()
+		 WHERE room_id = $1 AND user_id = $2 AND status = 'invited'`,
+		groupID, userID,
+	)
+	if err != nil {
+		JSONError(w, "Failed to accept invite", http.StatusInternalServerError)
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		JSONError(w, "No pending invite for this group", http.StatusNotFound)
+		return
+	}
+
+	// Subscribe to room
+	if e := chat.GetEngine(); e != nil {
+		e.JoinRoomForUser(userID, groupID)
+	}
+
+	// Notify all members
+	allMembers := getActiveGroupMemberIDs(ctx, groupID)
+	broadcastGroupEvent(ctx, groupID, config.MsgTypeGroupInviteAccepted, map[string]interface{}{
+		config.FieldRoomID: groupID,
+		config.FieldUserID: userID,
+	}, allMembers)
+
+	JSONMessage(w, "ok", "Group invite accepted")
+}
+
+// DeclineGroupInviteHandler declines a pending group invite.
+//
+// @Summary		Decline group invite
+// @Description	Declines and removes a pending group invite.
+// @Tags		Groups
+// @Produce		json
+// @Param		groupId	path	string	true	"Group room UUID"
+// @Success		200	{object}	StatusMessage
+// @Failure		400	{object}	StatusMessage
+// @Failure		401	{object}	StatusMessage
+// @Failure		404	{object}	StatusMessage
+// @Failure		500	{object}	StatusMessage
+// @Security	BearerAuth
+// @Router		/groups/{groupId}/invites/decline [post]
+func DeclineGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	groupID := r.PathValue("groupId")
+	if groupID == "" {
+		JSONError(w, "Missing group ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	res, err := postgress.GetRawDB().ExecContext(ctx,
+		`DELETE FROM room_members WHERE room_id = $1 AND user_id = $2 AND status = 'invited'`,
+		groupID, userID,
+	)
+	if err != nil {
+		JSONError(w, "Failed to decline invite", http.StatusInternalServerError)
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		JSONError(w, "No pending invite for this group", http.StatusNotFound)
+		return
+	}
+
+	JSONMessage(w, "ok", "Group invite declined")
 }
 
 // isGroupMember checks if a user is an active member of a group room.
