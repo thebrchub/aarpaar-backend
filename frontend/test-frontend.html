@@ -2689,7 +2689,10 @@ async function registerDevice(silent) {
       token = await getFcmToken();
       if (token) {
         document.getElementById('deviceToken').value = token;
+        console.log('[FCM] Got real FCM token (' + token.substring(0, 20) + '...)');
         if (!silent) toast('Got real FCM token from Firebase', 'success');
+      } else {
+        console.warn('[FCM] getToken returned null — is vapidKey set in FIREBASE_PUBLIC_CONFIG?');
       }
     }
   }
@@ -2698,7 +2701,8 @@ async function registerDevice(silent) {
   if (!token) {
     token = generateDeviceToken();
     document.getElementById('deviceToken').value = token;
-    if (!silent) toast('Using mock token — set FIREBASE_WEB_* env vars on backend for real push', 'warn');
+    console.warn('[FCM] Using MOCK token — push will NOT work. Set vapidKey in FIREBASE_PUBLIC_CONFIG.');
+    if (!silent) toast('Using mock token — add vapidKey to FIREBASE_PUBLIC_CONFIG for real push', 'warn');
   }
 
   const deviceType = document.getElementById('deviceType').value;
