@@ -81,6 +81,13 @@ func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 	}
 
 	log.Printf("[push] Sending push to user=%s tokens=%d title=%q type=%s", userID, len(tokens), p.Title, p.Data["type"])
+	for i, t := range tokens {
+		if len(t) > 20 {
+			log.Printf("[push]   token[%d]: %s...", i, t[:20])
+		} else {
+			log.Printf("[push]   token[%d]: %s", i, t)
+		}
+	}
 
 	if len(tokens) == 1 {
 		resp, err := pushSvc.Send(ctx, &push.Notification{
