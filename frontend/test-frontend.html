@@ -2712,8 +2712,11 @@ async function registerDevice(silent) {
 
   const deviceType = document.getElementById('deviceType').value;
   const r = await apiCall('POST', '/api/v1/auth/device', { token, device_type: deviceType }, silent ? null : 'deviceResponse');
-  if (r.status === 200 && !silent) {
-    toast('Device registered for push notifications', 'success');
+  if (r.status === 200) {
+    console.log('[FCM] Device token registered with backend (' + token.substring(0, 20) + '...)');
+    if (!silent) toast('Device registered for push notifications', 'success');
+  } else {
+    console.error('[FCM] Device registration FAILED:', r.status, r.data);
   }
   return r;
 }
