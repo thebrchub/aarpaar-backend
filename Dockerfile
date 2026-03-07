@@ -20,8 +20,13 @@ ENV GOPRIVATE=github.com/shivanand-burli/*
 
 # 5. Download dependencies (Cached layer)
 COPY ./go.mod ./go.sum ./
-RUN go clean -modcache -i github.com/shivanand-burli/go-starter-kit 2>/dev/null; \
-    go mod download
+RUN go mod download
+
+# 5.1 Force re-download go-starter-kit (bust Docker cache with CACHEBUST arg)
+# Set CACHEBUST to a unique value per build (e.g. Railway: $RAILWAY_DEPLOYMENT_ID)
+ARG CACHEBUST=0
+RUN rm -rf "$(go env GOMODCACHE)/github.com/shivanand-burli" && \
+    go mod download github.com/shivanand-burli/go-starter-kit
 
 # 5.5 Install swag and generate OpenAPI spec
 RUN go install github.com/swaggo/swag/cmd/swag@latest
