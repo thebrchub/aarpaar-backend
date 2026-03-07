@@ -2626,6 +2626,11 @@ async function initFirebaseMessaging() {
       switch (data.type) {
         case 'incoming_call':
           toast('📞 ' + (data.callerName || 'Someone') + ' is calling', 'info');
+          showBrowserNotification(
+            (data.callerName || 'Someone') + ' is calling you',
+            'Incoming ' + (data.hasVideo === 'video' ? 'video' : 'audio') + ' call',
+            'call-' + data.callId
+          );
           break;
         case 'missed_call':
           toast('📵 Missed call from ' + (data.callerName || 'Unknown'), 'warn');

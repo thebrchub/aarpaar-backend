@@ -70,13 +70,17 @@ type PushPayload struct {
 // No-op if push is not configured.
 func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 	if pushSvc == nil {
+		log.Printf("[push] pushSvc is nil — push not configured, skipping user=%s", userID)
 		return
 	}
 
 	tokens := getDeviceTokens(ctx, userID)
 	if len(tokens) == 0 {
+		log.Printf("[push] No device tokens found for user=%s — cannot send push", userID)
 		return
 	}
+
+	log.Printf("[push] Sending push to user=%s tokens=%d title=%q type=%s", userID, len(tokens), p.Title, p.Data["type"])
 
 	if len(tokens) == 1 {
 		resp, err := pushSvc.Send(ctx, &push.Notification{
