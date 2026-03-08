@@ -71,13 +71,13 @@ type PushPayload struct {
 // No-op if push is not configured.
 func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 	if pushSvc == nil {
-		log.Printf("[push] pushSvc is nil — push not configured, skipping user=%s", userID)
+		// log.Printf("[push] pushSvc is nil — push not configured, skipping user=%s", userID)
 		return
 	}
 
 	tokens := getDeviceTokens(ctx, userID)
 	if len(tokens) == 0 {
-		log.Printf("[push] No device tokens found for user=%s — cannot send push", userID)
+		// log.Printf("[push] No device tokens found for user=%s — cannot send push", userID)
 		return
 	}
 
@@ -92,7 +92,7 @@ func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 		if err != nil {
 			log.Printf("[push] Send failed user=%s: %v", userID, err)
 			if errors.Is(err, push.ErrInvalidToken) {
-				log.Printf("[push] Single token stale user=%s, cleaning", userID)
+				// log.Printf("[push] Single token stale user=%s, cleaning", userID)
 				cleanStaleTokens(ctx, []push.FailedToken{{Token: tokens[0], IsStale: true}})
 			}
 			return
@@ -283,7 +283,5 @@ func cleanStaleTokens(ctx context.Context, failed []push.FailedToken) {
 		`DELETE FROM device_tokens WHERE token = ANY($1)`, pgStringArray(stale))
 	if err != nil {
 		log.Printf("[push] stale token cleanup failed: %v", err)
-	} else {
-		log.Printf("[push] Cleaned %d stale device tokens", len(stale))
 	}
 }

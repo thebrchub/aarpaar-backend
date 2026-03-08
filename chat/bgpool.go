@@ -131,8 +131,8 @@ func ScanOrphanGroupCalls() {
 
 			// Clean up calls older than max duration OR with 0 participants
 			if time.Since(state.StartedAt) > maxGroupCallDuration || len(state.Participants) == 0 {
-				log.Printf("[bgpool] Cleaning orphan group call: key=%s callId=%s age=%v participants=%d",
-					key, state.CallID, time.Since(state.StartedAt).Round(time.Second), len(state.Participants))
+				// log.Printf("[bgpool] Cleaning orphan group call: key=%s callId=%s age=%v participants=%d",
+				// 	key, state.CallID, time.Since(state.StartedAt).Round(time.Second), len(state.Participants))
 
 				// Destroy the LiveKit room to release server-side resources
 				if RTC != nil && RTC.IsConfigured() && state.LKRoomName != "" {

@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -141,7 +140,7 @@ func (e *Engine) startRingTimeout(callID, callerID, calleeID string, hasVideo bo
 	}
 
 	callTimers[callID] = time.AfterFunc(CallRingTimeout, func() {
-		log.Printf("[calls] Ring timeout for call=%s caller=%s callee=%s", callID, callerID, calleeID)
+		// log.Printf("[calls] Ring timeout for call=%s caller=%s callee=%s", callID, callerID, calleeID)
 
 		// Clean up timer reference
 		callTimersMu.Lock()
@@ -538,7 +537,7 @@ func (e *Engine) handleCallDisconnect(userID string) {
 		return // Not in a call
 	}
 
-	log.Printf("[calls] User %s disconnected during call=%s, auto-ending", userID, call.CallID)
+	// log.Printf("[calls] User %s disconnected during call=%s, auto-ending", userID, call.CallID)
 
 	// Cancel ring timeout if still ringing
 	cancelRingTimeout(call.CallID)
@@ -688,9 +687,9 @@ func scanOrphanP2PCalls() {
 
 			// Clean up calls that have been ringing longer than timeout + grace period
 			if !call.Answered && time.Since(call.StartedAt) > CallRingTimeout+30*time.Second {
-				userID := strings.TrimPrefix(key, config.CALL_ACTIVE_COLON)
-				log.Printf("[calls] Cleaning orphan call state: user=%s call=%s (ringing for %v)",
-					userID, call.CallID, time.Since(call.StartedAt).Round(time.Second))
+				// userID := strings.TrimPrefix(key, config.CALL_ACTIVE_COLON)
+				// log.Printf("[calls] Cleaning orphan call state: user=%s call=%s (ringing for %v)",
+				// 	userID, call.CallID, time.Since(call.StartedAt).Round(time.Second))
 				rdb.Del(ctx, key)
 			}
 		}

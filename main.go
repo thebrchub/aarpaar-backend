@@ -138,15 +138,10 @@ func main() {
 		if highPriority {
 			p.Priority = push.PriorityHigh
 		}
-		// Set visible notification title/body from data so FCM delivers
-		// a notification payload (not just data-only). This ensures the
-		// push is shown even when the service worker is inactive.
-		if t, ok := data["title"]; ok {
-			p.Title = t
-		}
-		if b, ok := data["body"]; ok {
-			p.Body = b
-		}
+		// Data-only FCM messages — the service worker's onBackgroundMessage
+		// is the sole handler for displaying notifications. Setting Title/Body
+		// would add a notification payload that causes duplicate browser
+		// notifications (one auto-displayed + one from the SW).
 		services.SendPushToUser(ctx, userID, p)
 	}
 	engine.ShouldPushMessage = services.ShouldPushMessage

@@ -727,7 +727,7 @@ func (e *Engine) deliverPendingCall(c *Client) {
 
 	select {
 	case c.Send <- ringMsg:
-		log.Printf("[calls] Delivered pending call_ring to user=%s call=%s", c.UserID, call.CallID)
+		// log.Printf("[calls] Delivered pending call_ring to user=%s call=%s", c.UserID, call.CallID)
 	default:
 		droppedMessages.Add(1)
 	}
