@@ -48,6 +48,19 @@ temp/
 .DS_Store
 Thumbs.db
 
+# Test reports & temp files
+test-report.txt
+*.tmp
+
+# k6 load test outputs
+lean_summary.json
+max_summary.json
+
+# Swagger generated (re-generate with swag init)
+docs/swagger.json
+docs/swagger.yaml
+docs/docs.go
+
 # Auto-generated test keys (regenerated via: go run ./tests/keygen/)
 tests/testutil/jwt_keys.go
 

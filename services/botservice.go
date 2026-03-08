@@ -47,6 +47,12 @@ var personaNames []string
 // sessions tracks active bot chat sessions (roomID → *BotSession).
 var sessions sync.Map
 
+// sessionCount tracks the number of active bot sessions for admission control.
+var sessionCount atomic.Int64
+
+// maxBotSessions caps concurrent bot sessions to prevent unbounded memory growth.
+const maxBotSessions = 5000
+
 // botUserIDs is a reverse lookup map (botUserID → roomID) for O(1) IsBotUser checks.
 var botUserIDs sync.Map
 
@@ -154,6 +160,34 @@ func InitBot() {
 	botConfigured = true
 	log.Printf("[bot] Bot service initialized (retrieval engine, %d personas)", len(personaNames))
 	go botRedisListener()
+	go staleBotSessionSweeper()
+}
+
+// staleBotSessionSweeper periodically checks for stale bot sessions where
+// the done channel is already closed (session ended) but the map entry
+// wasn't cleaned up. This acts as a safety net against leaks.
+func staleBotSessionSweeper() {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-botDone:
+			return
+		case <-ticker.C:
+			sessions.Range(func(key, value any) bool {
+				session := value.(*BotSession)
+				select {
+				case <-session.done:
+					// Session already ended but still in map — clean up
+					sessions.Delete(key)
+					sessionCount.Add(-1)
+					botUserIDs.Delete(session.BotUserID)
+				default:
+				}
+				return true
+			})
+		}
+	}
 }
 
 // extractPersonaNames parses the corpus TSV and extracts unique persona tags,
@@ -255,6 +289,12 @@ func matchWithBot(userID string) {
 		log.Printf("[bot] SRem from match queue failed user=%s: %v", userID, err)
 	}
 
+	// Admission control — reject if too many concurrent sessions
+	if sessionCount.Load() >= maxBotSessions {
+		log.Printf("[bot] Max bot sessions (%d) reached — skipping bot match for user=%s", maxBotSessions, userID)
+		return
+	}
+
 	// Pick a random persona
 	persona := pickPersona()
 
@@ -291,6 +331,7 @@ func matchWithBot(userID string) {
 	}
 	session.lastUserMsg.Store(time.Now().UnixNano())
 	sessions.Store(roomID, session)
+	sessionCount.Add(1)
 	botUserIDs.Store(botUserID, roomID)
 
 	// Notify user with match_found — identical payload to human match
@@ -483,6 +524,8 @@ func sendBotReadReceipt(ctx context.Context, session *BotSession) {
 // botRedisListener subscribes to chat:global and processes messages
 // destined for rooms with active bot sessions.
 func botRedisListener() {
+	backoff := 1 * time.Second
+	const maxBackoff = 30 * time.Second
 	for {
 		select {
 		case <-botDone:
@@ -492,12 +535,16 @@ func botRedisListener() {
 
 		botSubscribeAndListen()
 
-		// Subscription broke — wait and reconnect
-		log.Println("[bot] Redis Pub/Sub disconnected. Reconnecting in 2s...")
+		// Subscription broke — exponential backoff
+		log.Printf("[bot] Redis Pub/Sub disconnected. Reconnecting in %v...", backoff)
 		select {
 		case <-botDone:
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
 		}
 	}
 }
@@ -884,6 +931,7 @@ func StopBotSession(roomID string) {
 	if !loaded {
 		return
 	}
+	sessionCount.Add(-1)
 	session := val.(*BotSession)
 	session.once.Do(func() {
 		close(session.done)
@@ -912,6 +960,7 @@ func StopAllSessions() {
 		session.session.Close()
 		botUserIDs.Delete(session.BotUserID)
 		sessions.Delete(key)
+		sessionCount.Add(-1)
 		return true
 	})
 

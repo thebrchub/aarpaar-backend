@@ -84,7 +84,7 @@ func main() {
 		APIKey:    config.LiveKitAPIKey,
 		APISecret: config.LiveKitAPISecret,
 	})
-	chat.RTC = handlers.RTC // Share RTC client with bgpool for orphan cleanup
+	chat.SetRTC(handlers.RTC) // Share RTC client with bgpool for orphan cleanup
 	if handlers.RTC.IsConfigured() {
 		log.Println("[boot] RTC (LiveKit) client initialized")
 	} else {
@@ -321,17 +321,18 @@ func main() {
 	}
 	log.Println("[shutdown] HTTP server stopped")
 
-	// Close all WebSocket connections and stop Redis Pub/Sub listener
-	engine.Shutdown()
-	log.Println("[shutdown] WebSocket engine stopped")
-
-	// Stop all active bot sessions and close bot client
+	// Stop all active bot sessions first (they may still publish to Redis)
 	services.StopAllSessions()
 	log.Println("[shutdown] Bot service stopped")
 
 	// Stop the flusher (runs one final flush before returning)
 	services.StopFlusher()
 	log.Println("[shutdown] Message flusher stopped")
+
+	// Close all WebSocket connections and stop Redis Pub/Sub listener LAST
+	// so that bot/flusher can still publish/receive during their shutdown.
+	engine.Shutdown()
+	log.Println("[shutdown] WebSocket engine stopped")
 
 	// Close Redis connection cleanly
 	if err := redis.GetRawClient().Close(); err != nil {

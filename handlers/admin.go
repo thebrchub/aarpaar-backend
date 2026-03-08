@@ -98,16 +98,20 @@ func GetAdminUsersHandler(w http.ResponseWriter, r *http.Request) {
 
 	query := `SELECT u.id, u.email, u.name, COALESCE(u.username,''), COALESCE(u.avatar_url,''),
 		u.gender, u.is_private, u.is_banned, u.created_at, u.last_seen_at,
-		(SELECT COUNT(*) FROM user_reports ur WHERE ur.reported_id = u.id) AS reports_count,
-		COALESCE((SELECT SUM(d.amount) FROM donations d WHERE d.user_id = u.id), 0) AS total_donated
-	 FROM users u WHERE 1=1`
+		COALESCE(rc.cnt, 0) AS reports_count,
+		COALESCE(dt.total, 0) AS total_donated
+	 FROM users u
+	 LEFT JOIN (SELECT reported_id, COUNT(*) AS cnt FROM user_reports GROUP BY reported_id) rc ON rc.reported_id = u.id
+	 LEFT JOIN (SELECT user_id, SUM(amount) AS total FROM donations GROUP BY user_id) dt ON dt.user_id = u.id
+	 WHERE 1=1`
 
 	args := []interface{}{}
 	argIdx := 1
 
-	if banned == "true" {
+	switch banned {
+	case "true":
 		query += ` AND u.is_banned = true`
-	} else if banned == "false" {
+	case "false":
 		query += ` AND u.is_banned = false`
 	}
 

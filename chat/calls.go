@@ -112,6 +112,34 @@ var markCallAnsweredScript = goredis.NewScript(`
 	return 1
 `)
 
+// setActiveCallPairScript atomically sets call state for BOTH caller and callee
+// only if NEITHER currently has an active call. Returns:
+//
+//	0 = success (both keys set)
+//	1 = caller already busy
+//	2 = callee already busy
+var setActiveCallPairScript = goredis.NewScript(`
+	if redis.call('EXISTS', KEYS[1]) == 1 then return 1 end
+	if redis.call('EXISTS', KEYS[2]) == 1 then return 2 end
+	redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[3])
+	redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+	return 0
+`)
+
+// clearCallIfMatchScript atomically clears a call state key only if the stored
+// callId matches the expected one and the call is unanswered. Used by ring timeout
+// to prevent race with concurrent call_accept/call_end.
+// Returns 1 if cleared, 0 if no match (already accepted/cleared).
+var clearCallIfMatchScript = goredis.NewScript(`
+	local val = redis.call('GET', KEYS[1])
+	if not val then return 0 end
+	local call = cjson.decode(val)
+	if call.callId ~= ARGV[1] then return 0 end
+	if call.answered then return 0 end
+	redis.call('DEL', KEYS[1])
+	return 1
+`)
+
 // markCallAnswered atomically updates the call state to reflect that the call
 // was accepted. Uses a Lua script to prevent GET-then-SET race conditions.
 func markCallAnswered(userID string) {
@@ -140,37 +168,36 @@ func (e *Engine) startRingTimeout(callID, callerID, calleeID string, hasVideo bo
 	}
 
 	callTimers[callID] = time.AfterFunc(CallRingTimeout, func() {
-		// log.Printf("[calls] Ring timeout for call=%s caller=%s callee=%s", callID, callerID, calleeID)
-
 		// Clean up timer reference
 		callTimersMu.Lock()
 		delete(callTimers, callID)
 		callTimersMu.Unlock()
 
-		// Only fire if both users still have this call active (not already accepted/rejected)
-		callerCall := getActiveCall(callerID)
-		_ = getActiveCall(calleeID) // verify callee state exists
+		// Atomically clear both users' call state only if the callId still
+		// matches and the call is unanswered. This prevents the race between
+		// ring timeout and concurrent call_accept/call_end.
+		ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+		defer cancel()
+		rdb := redis.GetRawClient()
+		callerCleared, _ := clearCallIfMatchScript.Run(ctx, rdb,
+			[]string{config.CALL_ACTIVE_COLON + callerID}, callID).Int()
+		clearCallIfMatchScript.Run(ctx, rdb,
+			[]string{config.CALL_ACTIVE_COLON + calleeID}, callID)
 
-		if callerCall != nil && callerCall.CallID == callID && !callerCall.Answered {
-			// Send call_missed to the caller
+		// Only send call_missed if we actually cleared the caller's state
+		// (meaning nobody else handled this call before us)
+		if callerCleared == 1 {
 			missedMsg, _ := json.Marshal(map[string]string{
 				config.FieldType:   config.MsgTypeCallMissed,
 				config.FieldCallID: callID,
 				config.FieldFrom:   calleeID,
 				config.FieldTo:     callerID,
 			})
-			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
-			redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, missedMsg)
-			cancel()
+			pubCtx, pubCancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+			redis.Publish(pubCtx, config.CHAT_GLOBAL_CHANNEL, missedMsg)
+			pubCancel()
 
-			// Clear both users' call state
-			clearActiveCall(callerID)
-			clearActiveCall(calleeID)
-
-			// Log the missed call
 			logCall(callID, "", callerID, hasVideo, "missed", 0)
-
-			// Push missed call notification to the callee
 			runBackground(func() { sendMissedCallPush(calleeID, callerID, callID) })
 		}
 	})
@@ -372,33 +399,65 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			return true
 		}
 
-		// --- Busy Detection ---
-		// Check if caller is already in a call
-		if existing := getActiveCall(c.UserID); existing != nil {
-			sendError(c, "ALREADY_IN_CALL", "You are already in a call")
-			return true
-		}
-		// Check if callee is already in a call
-		if existing := getActiveCall(targetUser); existing != nil {
-			busyMsg, _ := json.Marshal(map[string]string{
-				config.FieldType:   config.MsgTypeCallBusy,
-				config.FieldCallID: callID,
-				config.FieldFrom:   targetUser,
-				config.FieldTo:     c.UserID,
-			})
-			select {
-			case c.Send <- busyMsg:
-			default:
-				droppedMessages.Add(1)
+		// --- Atomically set call state for both users ---
+		// Uses a Lua script to SET both keys only if neither exists,
+		// preventing the TOCTOU race where two concurrent call_ring
+		// messages could put a user in two simultaneous calls.
+		now := time.Now().UTC()
+		callerState, _ := json.Marshal(&activeCall{
+			CallID:    callID,
+			PeerID:    targetUser,
+			Role:      "caller",
+			HasVideo:  hasVideo,
+			StartedAt: now,
+		})
+		calleeState, _ := json.Marshal(&activeCall{
+			CallID:    callID,
+			PeerID:    c.UserID,
+			Role:      "callee",
+			HasVideo:  hasVideo,
+			StartedAt: now,
+		})
+		{
+			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+			result, err := setActiveCallPairScript.Run(ctx, redis.GetRawClient(),
+				[]string{config.CALL_ACTIVE_COLON + c.UserID, config.CALL_ACTIVE_COLON + targetUser},
+				callerState, calleeState, int(callActiveTTL.Seconds()),
+			).Int()
+			cancel()
+			if err != nil {
+				log.Printf("[calls] setActiveCallPair Lua failed caller=%s callee=%s: %v", c.UserID, targetUser, err)
+				sendError(c, "INTERNAL_ERROR", "Failed to initiate call")
+				return true
 			}
-			return true
+			if result == 1 {
+				sendError(c, "ALREADY_IN_CALL", "You are already in a call")
+				return true
+			}
+			if result == 2 {
+				busyMsg, _ := json.Marshal(map[string]string{
+					config.FieldType:   config.MsgTypeCallBusy,
+					config.FieldCallID: callID,
+					config.FieldFrom:   targetUser,
+					config.FieldTo:     c.UserID,
+				})
+				select {
+				case c.Send <- busyMsg:
+				default:
+					droppedMessages.Add(1)
+				}
+				return true
+			}
 		}
 
 		// --- Check if callee is online ---
 		calleeOnline := e.IsUserOnline(targetUser)
 
-		// If callee is offline and push is not configured, fail fast
+		// If callee is offline and push is not configured, auto-miss
 		if !calleeOnline && e.SendPushToUser == nil {
+			// Clean up the state we just atomically set
+			clearActiveCall(c.UserID)
+			clearActiveCall(targetUser)
 			missedMsg, _ := json.Marshal(map[string]string{
 				config.FieldType:   config.MsgTypeCallMissed,
 				config.FieldCallID: callID,
@@ -413,22 +472,6 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			runBackground(func() { logCall(callID, "", c.UserID, hasVideo, "missed", 0) })
 			return true
 		}
-
-		// --- Set call state for both users ---
-		setActiveCall(c.UserID, &activeCall{
-			CallID:    callID,
-			PeerID:    targetUser,
-			Role:      "caller",
-			HasVideo:  hasVideo,
-			StartedAt: time.Now().UTC(),
-		})
-		setActiveCall(targetUser, &activeCall{
-			CallID:    callID,
-			PeerID:    c.UserID,
-			Role:      "callee",
-			HasVideo:  hasVideo,
-			StartedAt: time.Now().UTC(),
-		})
 
 		// --- Start ring timeout ---
 		e.startRingTimeout(callID, c.UserID, targetUser, hasVideo)

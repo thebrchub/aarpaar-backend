@@ -97,7 +97,7 @@ func SetupTestInfra(t *testing.T) {
 
 		// RTC optional stub
 		handlers.RTC = rtc.NewClientOptional(rtc.Config{})
-		chat.RTC = handlers.RTC
+		chat.SetRTC(handlers.RTC)
 	})
 }
 
@@ -240,11 +240,25 @@ func StartTestServer(t *testing.T) (*httptest.Server, *chat.Engine, func()) {
 func CleanAll(t *testing.T) {
 	t.Helper()
 	db := postgress.GetRawDB()
-	tables := []string{
-		"call_logs", "donations", "messages", "room_members",
-		"rooms", "blocked_users", "user_reports", "friend_requests",
-		"friendships", "device_tokens", "badge_tiers", "app_settings", "users",
+
+	// Dynamically discover all user-created tables to avoid hard-coded list going stale
+	rows, err := db.Query(
+		`SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`)
+	if err != nil {
+		t.Fatalf("[cleanup] Failed to list tables: %v", err)
 	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Logf("[cleanup] Scan table name: %v", err)
+			continue
+		}
+		tables = append(tables, name)
+	}
+
 	for _, table := range tables {
 		_, err := db.Exec("TRUNCATE " + table + " CASCADE")
 		if err != nil {

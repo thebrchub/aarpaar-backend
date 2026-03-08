@@ -68,6 +68,7 @@ type Client struct {
 	JoinedRooms sync.Map        // Set of room IDs this client is subscribed to (concurrent-safe)
 	closeOnce   sync.Once       // Ensures c.Send is closed exactly once
 	fromPrefix  []byte          // Pre-computed `{"from":"<userID>",` prefix (zero-alloc per message)
+	nameOnce    sync.Once       // Ensures cachedName DB lookup happens exactly once
 	cachedName  string          // User's display name (cached after first lookup)
 	ready       chan struct{}   // Closed after Register completes; gates readPump
 }
@@ -79,21 +80,21 @@ func (c *Client) closeSend() {
 
 // getFromName queries the user's display name from the database.
 // Cached in-memory after first lookup for the lifetime of the connection.
+// Thread-safe via sync.Once.
 func (c *Client) getFromName() string {
-	if c.cachedName != "" {
-		return c.cachedName
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	var name string
-	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT COALESCE(name, '') FROM users WHERE id = $1`, c.UserID,
-	).Scan(&name)
-	if err != nil {
-		log.Printf("[client] getFromName query failed user=%s: %v", c.UserID, err)
-	} else if name != "" {
-		c.cachedName = name
-	}
+	c.nameOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var name string
+		err := postgress.GetRawDB().QueryRowContext(ctx,
+			`SELECT COALESCE(name, '') FROM users WHERE id = $1`, c.UserID,
+		).Scan(&name)
+		if err != nil {
+			log.Printf("[client] getFromName query failed user=%s: %v", c.UserID, err)
+		} else if name != "" {
+			c.cachedName = name
+		}
+	})
 	return c.cachedName
 }
 
@@ -355,6 +356,10 @@ func (c *Client) readPump() {
 			// Turns {"type":...} into {"from":"<userID>","type":...}
 			// NOTE: We must allocate a new slice — append(c.fromPrefix, ...) can
 			// mutate the fromPrefix backing array if it has spare capacity.
+			if len(payload) == 0 || payload[0] != '{' {
+				sendError(c, "INVALID_PAYLOAD", "Malformed JSON")
+				continue
+			}
 			stamped := make([]byte, 0, len(c.fromPrefix)+len(payload)-1)
 			stamped = append(stamped, c.fromPrefix...)
 			stamped = append(stamped, payload[1:]...) // skip the leading '{'
@@ -441,8 +446,12 @@ func (c *Client) writePump() {
 			}
 			w.Write(payload)
 
-			// Batch: if more messages are queued, write them in the same frame
+			// Batch: if more messages are queued, write them in the same frame.
+			// Cap at 64 to bound write latency under burst load.
 			n := len(c.Send)
+			if n > 64 {
+				n = 64
+			}
 			for i := 0; i < n; i++ {
 				w.Write([]byte{'\n'})
 				w.Write(<-c.Send)

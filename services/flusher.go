@@ -212,7 +212,11 @@ func flushOneRoom(targetID string) bool {
 		rePipe.Rename(reCtx, processingKey, bufferKey)
 		rePipe.SAdd(reCtx, config.CHAT_DIRTY_TARGETS, targetID)
 		if _, pipeErr := rePipe.Exec(reCtx); pipeErr != nil {
-			log.Printf("[flusher] Failed to re-queue %s: %v", targetID, pipeErr)
+			// Rename-back failed: move to dead-letter key so messages aren't lost forever
+			log.Printf("[flusher] Re-queue failed for %s: %v — moving to dead-letter", targetID, pipeErr)
+			dlCtx, dlCancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+			defer dlCancel()
+			rdb.Rename(dlCtx, processingKey, "chat:deadletter:"+targetID)
 		}
 		return false
 	}
@@ -229,18 +233,23 @@ func flushOneRoom(targetID string) bool {
 // ---------------------------------------------------------------------------
 
 func bulkInsertToPostgres(roomID string, rawMessages []string) error {
-	// Process in chunks to avoid giant SQL statements
+	// Process in chunks to avoid giant SQL statements.
+	// Continue on individual chunk failures to avoid losing the remaining chunks.
 	const chunkSize = 500
+	var firstErr error
 	for i := 0; i < len(rawMessages); i += chunkSize {
 		end := i + chunkSize
 		if end > len(rawMessages) {
 			end = len(rawMessages)
 		}
 		if err := insertMessageChunk(roomID, rawMessages[i:end]); err != nil {
-			return err
+			log.Printf("[flusher] Chunk insert failed for room=%s offset=%d: %v", roomID, i, err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func insertMessageChunk(roomID string, chunk []string) error {

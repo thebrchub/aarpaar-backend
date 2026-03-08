@@ -9,9 +9,9 @@ const latency = new Trend("latency_ms");
 
 export const options = {
   stages: [
-    { duration: "1m", target: 30 },    // ramp up
-    { duration: "10m", target: 30 },   // sustain
-    { duration: "1m", target: 0 },     // ramp down
+    { duration: "2m", target: 1000 },   // ramp up
+    { duration: "15m", target: 1000 },  // sustain
+    { duration: "1m", target: 0 },      // ramp down
   ],
   thresholds: {
     http_req_duration: ["p(95)<500", "p(99)<1500"],

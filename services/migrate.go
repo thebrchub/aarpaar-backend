@@ -303,6 +303,11 @@ var migrationStatements = []string{
 
 	`CREATE INDEX IF NOT EXISTS idx_donations_user_id ON donations (user_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_donations_created_at ON donations (created_at DESC)`,
+	// Covering index for admin dashboard: SUM(amount) GROUP BY user_id
+	`CREATE INDEX IF NOT EXISTS idx_donations_user_amount ON donations (user_id, amount)`,
+
+	// Index for flusher unread count query: WHERE sender_id != $1
+	`CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages (sender_id)`,
 
 	// ===================================================================
 	// TABLE: badge_tiers (configurable badge tiers managed by BENKI_ADMIN)
