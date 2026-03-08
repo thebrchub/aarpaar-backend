@@ -345,17 +345,15 @@ func (e *Engine) CloseRoom(roomID string, payload []byte) {
 		return
 	}
 
-	// Collect all clients to notify and remove
+	// Collect all clients to notify
 	targets := make([]*Client, 0, len(clients))
 	for c := range clients {
 		targets = append(targets, c)
 	}
 
-	// Remove the room entirely
-	delete(shard.rooms, roomID)
-	shard.mu.Unlock()
-
-	// Notify each client and remove the room from their local set
+	// Notify each client WHILE the room still exists in the shard.
+	// This prevents a race where a concurrent message for this room
+	// could arrive after delete but before notification.
 	for _, c := range targets {
 		c.JoinedRooms.Delete(roomID)
 		select {
@@ -364,6 +362,10 @@ func (e *Engine) CloseRoom(roomID string, payload []byte) {
 			droppedMessages.Add(1)
 		}
 	}
+
+	// Remove the room entirely AFTER notifying clients
+	delete(shard.rooms, roomID)
+	shard.mu.Unlock()
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +381,8 @@ func (e *Engine) CloseRoom(roomID string, payload []byte) {
 // ---------------------------------------------------------------------------
 
 func (e *Engine) listenToRedis() {
+	backoff := 1 * time.Second
+	const maxBackoff = 30 * time.Second
 	for {
 		select {
 		case <-e.done:
@@ -389,13 +393,17 @@ func (e *Engine) listenToRedis() {
 
 		e.subscribeAndListen()
 
-		// If we reach here, the subscription broke. Wait and retry.
-		log.Println("[engine] Redis Pub/Sub disconnected. Reconnecting in 2s...")
+		// If we reach here, the subscription broke. Exponential backoff.
+		log.Printf("[engine] Redis Pub/Sub disconnected. Reconnecting in %v...", backoff)
 
 		select {
 		case <-e.done:
 			return
-		case <-time.After(2 * time.Second):
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
 		}
 	}
 }
@@ -652,9 +660,10 @@ func (e *Engine) sendMessagePush(roomID, senderID, senderName, preview string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
 
-	// Query all room members except the sender
+	// Query room members except the sender (capped at 200 to prevent
+	// unbounded result sets in large groups)
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
-		`SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2`,
+		`SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2 AND status = 'active' LIMIT 200`,
 		roomID, senderID,
 	)
 	if err != nil {

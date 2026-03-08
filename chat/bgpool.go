@@ -42,9 +42,22 @@ var droppedBackgroundTasks atomic.Int64
 // confirmation sends. Logged periodically by the metrics goroutine.
 var droppedMessages atomic.Int64
 
-// RTC is the LiveKit client, set once at startup by main.go.
-// Used by ScanOrphanGroupCalls to clean up lingering LiveKit rooms.
-var RTC rtc.RTCService
+// rtcPtr stores the LiveKit client, set once at startup by main.go.
+// Uses atomic.Pointer for safe concurrent access from background goroutines.
+var rtcPtr atomic.Pointer[rtc.RTCService]
+
+// GetRTC returns the shared RTC client safely.
+func GetRTC() rtc.RTCService {
+	if p := rtcPtr.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetRTC stores the shared RTC client. Called once at startup.
+func SetRTC(svc rtc.RTCService) {
+	rtcPtr.Store(&svc)
+}
 
 // runBackground submits a function to the bounded worker pool.
 // If the pool is full, the task is dropped and counted.
@@ -135,8 +148,9 @@ func ScanOrphanGroupCalls() {
 				// 	key, state.CallID, time.Since(state.StartedAt).Round(time.Second), len(state.Participants))
 
 				// Destroy the LiveKit room to release server-side resources
-				if RTC != nil && RTC.IsConfigured() && state.LKRoomName != "" {
-					if err := RTC.DeleteRoom(ctx, state.LKRoomName); err != nil {
+				rtcSvc := GetRTC()
+				if rtcSvc != nil && rtcSvc.IsConfigured() && state.LKRoomName != "" {
+					if err := rtcSvc.DeleteRoom(ctx, state.LKRoomName); err != nil {
 						log.Printf("[bgpool] RTC.DeleteRoom failed room=%s callId=%s: %v", state.LKRoomName, state.CallID, err)
 					}
 				}

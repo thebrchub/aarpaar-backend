@@ -12,10 +12,12 @@ const requests = new Counter("total_requests");
 // ---------- Options ----------
 export const options = {
   stages: [
-    { duration: "30s", target: 20 },  // ramp up
-    { duration: "1m", target: 50 },   // sustained load
-    { duration: "30s", target: 100 }, // peak
-    { duration: "30s", target: 0 },   // ramp down
+    { duration: "30s", target: 100 },   // ramp up
+    { duration: "1m", target: 500 },    // build load
+    { duration: "1m", target: 2000 },   // sustained high load
+    { duration: "30s", target: 5000 },  // peak (10K+ RPS with think time)
+    { duration: "1m", target: 5000 },   // sustain peak
+    { duration: "30s", target: 0 },     // ramp down
   ],
   thresholds: {
     http_req_duration: ["p(95)<500", "p(99)<1000"],

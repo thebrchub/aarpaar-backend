@@ -9,9 +9,10 @@ const msgLatency = new Trend("ws_msg_latency");
 
 export const options = {
   stages: [
-    { duration: "20s", target: 10 },
-    { duration: "40s", target: 50 },
-    { duration: "20s", target: 0 },
+    { duration: "30s", target: 500 },
+    { duration: "1m", target: 2000 },
+    { duration: "1m", target: 5000 },
+    { duration: "30s", target: 0 },
   ],
   thresholds: {
     ws_errors: ["rate<0.05"],

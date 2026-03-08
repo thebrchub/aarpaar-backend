@@ -234,14 +234,6 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if there's already an active call for this group
-	rdb := redisClient()
-	existing, _ := rdb.Exists(ctx, config.GROUP_CALL_COLON+groupID).Result()
-	if existing > 0 {
-		JSONError(w, "A call is already active in this group", http.StatusConflict)
-		return
-	}
-
 	// Parse request body
 	var req models.StartGroupCallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -285,11 +277,13 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	token, err := RTC.GenerateToken(lkRoomName, userID, userName, true, true)
 	if err != nil {
 		log.Printf("[calls] RTC.GenerateToken failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to generate call token", http.StatusInternalServerError)
+		JSONError(w, "Failed to create call room", http.StatusInternalServerError)
 		return
 	}
 
-	// Store active call state in Redis (typed struct — no map[string]interface{})
+	// Atomically claim this group's call slot using SetNX.
+	// This prevents the TOCTOU race where two concurrent requests both pass
+	// an Exists check before either writes the state.
 	state := models.GroupCallState{
 		CallID:       callID,
 		InitiatedBy:  userID,
@@ -302,18 +296,38 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	callState, err := json.Marshal(state)
 	if err != nil {
 		log.Printf("[calls] Marshal call state failed group=%s: %v", groupID, err)
+		JSONError(w, "Internal error", http.StatusInternalServerError)
+		return
 	}
-	if err := rdb.Set(ctx, config.GROUP_CALL_COLON+groupID, callState, 24*time.Hour).Err(); err != nil {
-		log.Printf("[calls] Redis Set call state failed group=%s: %v", groupID, err)
+	rdb := redisClient()
+	acquired, err := rdb.SetNX(ctx, config.GROUP_CALL_COLON+groupID, callState, 24*time.Hour).Result()
+	if err != nil {
+		log.Printf("[calls] Redis SetNX failed group=%s: %v", groupID, err)
+		JSONError(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	if !acquired {
+		// Another request won the race — clean up LiveKit room we just created
+		if delErr := RTC.DeleteRoom(ctx, lkRoomName); delErr != nil {
+			log.Printf("[calls] RTC.DeleteRoom cleanup failed group=%s room=%s: %v", groupID, lkRoomName, delErr)
+		}
+		JSONError(w, "A call is already active in this group", http.StatusConflict)
+		return
 	}
 
-	// Log the call to Postgres
-	if _, err := postgress.GetRawDB().ExecContext(ctx,
+	// Log the call to Postgres — clean up Redis + LiveKit on failure
+	if _, dbErr := postgress.GetRawDB().ExecContext(ctx,
 		`INSERT INTO call_logs (call_id, room_id, initiated_by, call_type, tier, max_participants, participants)
 		 VALUES ($1, $2, $3, $4, 'sfu', $5, ARRAY[$3])`,
 		callID, groupID, userID, req.CallType, maxMembers,
-	); err != nil {
-		log.Printf("[calls] Insert call_logs failed call=%s: %v", callID, err)
+	); dbErr != nil {
+		log.Printf("[calls] Insert call_logs failed call=%s: %v — cleaning up", callID, dbErr)
+		rdb.Del(ctx, config.GROUP_CALL_COLON+groupID)
+		if delErr := RTC.DeleteRoom(ctx, lkRoomName); delErr != nil {
+			log.Printf("[calls] RTC.DeleteRoom cleanup failed group=%s room=%s: %v", groupID, lkRoomName, delErr)
+		}
+		JSONError(w, "Failed to start group call", http.StatusInternalServerError)
+		return
 	}
 
 	// Broadcast group_call_started to all group members

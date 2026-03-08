@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -198,7 +199,17 @@ func ShouldPushMessage(ctx context.Context, roomID, userID string) bool {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+// deviceTokenCacheTTL is how long device tokens are cached in Redis.
+const deviceTokenCacheTTL = 5 * time.Minute
+
 func getDeviceTokens(ctx context.Context, userID string) []string {
+	// Try Redis cache first
+	cacheKey := "push:tokens:" + userID
+	cached, err := redis.GetRawClient().Get(ctx, cacheKey).Result()
+	if err == nil && cached != "" {
+		return strings.Split(cached, ",")
+	}
+
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT token FROM device_tokens WHERE user_id = $1`, userID,
 	)
@@ -216,6 +227,11 @@ func getDeviceTokens(ctx context.Context, userID string) []string {
 			continue
 		}
 		tokens = append(tokens, t)
+	}
+
+	// Cache in Redis
+	if len(tokens) > 0 {
+		redis.GetRawClient().Set(ctx, cacheKey, strings.Join(tokens, ","), deviceTokenCacheTTL)
 	}
 	return tokens
 }

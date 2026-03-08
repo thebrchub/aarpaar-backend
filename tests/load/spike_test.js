@@ -8,11 +8,13 @@ const errorRate = new Rate("errors");
 
 export const options = {
   stages: [
-    { duration: "10s", target: 10 },   // warm up
-    { duration: "5s", target: 200 },   // spike
-    { duration: "30s", target: 200 },  // sustain spike
-    { duration: "10s", target: 10 },   // recover
-    { duration: "20s", target: 0 },    // ramp down
+    { duration: "10s", target: 50 },     // warm up
+    { duration: "5s", target: 5000 },    // spike to 5K
+    { duration: "30s", target: 5000 },   // sustain spike
+    { duration: "5s", target: 10000 },   // spike to 10K
+    { duration: "30s", target: 10000 },  // sustain peak
+    { duration: "10s", target: 50 },     // recover
+    { duration: "20s", target: 0 },      // ramp down
   ],
   thresholds: {
     http_req_duration: ["p(99)<2000"],

@@ -11,6 +11,7 @@ import (
 
 	"github.com/shivanand-burli/go-starter-kit/jwt"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
 	"google.golang.org/api/idtoken"
@@ -245,6 +246,11 @@ func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Failed to save device token", http.StatusInternalServerError)
 		return
 	}
+
+	// Invalidate the device token cache so the next push picks up the new token
+	cacheCtx, cacheCancel := context.WithTimeout(r.Context(), config.RedisOpTimeout)
+	redis.GetRawClient().Del(cacheCtx, "push:tokens:"+userID)
+	cacheCancel()
 
 	// 4. Confirm success
 	JSONMessage(w, "success", "Device registered for push notifications")

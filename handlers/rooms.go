@@ -59,12 +59,55 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 		limit = parsed
 	}
 
-	// 4. Build the JSON response entirely in Postgres using LATERAL JOINs.
-	//    Uses rooms.last_message_at for fast sorting (updated via trigger).
-	//    Members sub-select returns each room participant's id, username, name.
-	//    For DM rooms, includes last_seen_at (respects show_last_seen privacy).
+	// 4. Build the JSON response in Postgres.
+	//    Uses a CTE to pre-compute the user's room list, then JOINs for
+	//    last_message, unread_count, member_count and members in fewer passes
+	//    than the old 4x LATERAL approach.
 	query := `
-		SELECT COALESCE(json_agg(t), '[]')::text
+		WITH user_rooms AS (
+			SELECT rm.room_id, rm.last_read_at
+			FROM room_members rm
+			JOIN rooms r ON rm.room_id = r.id
+			WHERE rm.user_id = $1 AND rm.status = 'active'
+			  AND (r.last_message_at < $2 OR r.last_message_at IS NULL)
+			ORDER BY r.last_message_at DESC NULLS LAST
+			LIMIT $3
+		),
+		last_msgs AS (
+			SELECT DISTINCT ON (m.room_id) m.room_id, m.content
+			FROM messages m
+			JOIN user_rooms ur ON m.room_id = ur.room_id
+			ORDER BY m.room_id, m.created_at DESC
+		),
+		unread AS (
+			SELECT m.room_id, COUNT(*)::int AS unread_count
+			FROM messages m
+			JOIN user_rooms ur ON m.room_id = ur.room_id
+			WHERE m.created_at > ur.last_read_at AND m.sender_id != $1
+			GROUP BY m.room_id
+		),
+		member_counts AS (
+			SELECT rm2.room_id, COUNT(*)::int AS member_count
+			FROM room_members rm2
+			JOIN user_rooms ur ON rm2.room_id = ur.room_id
+			WHERE rm2.status = 'active'
+			GROUP BY rm2.room_id
+		),
+		members_json AS (
+			SELECT rm2.room_id, json_agg(json_build_object(
+				'id', u.id,
+				'username', u.username,
+				'name', u.name,
+				'avatar_url', COALESCE(u.avatar_url, ''),
+				'last_seen_at', CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END
+			)) AS members
+			FROM room_members rm2
+			JOIN users u ON u.id = rm2.user_id
+			JOIN user_rooms ur ON rm2.room_id = ur.room_id
+			WHERE rm2.status = 'active'
+			GROUP BY rm2.room_id
+		)
+		SELECT COALESCE(json_agg(t ORDER BY t.last_message_at DESC NULLS LAST), '[]')::text
 		FROM (
 			SELECT 
 				r.id AS room_id, 
@@ -76,43 +119,13 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 				r.last_message_at,
 				COALESCE(uc.unread_count, 0) AS unread_count,
 				COALESCE(mc.member_count, 0) AS member_count,
-				COALESCE(mem.members, '[]'::json) AS members
-			FROM room_members rm
-			JOIN rooms r ON rm.room_id = r.id
-			LEFT JOIN LATERAL (
-				SELECT content 
-				FROM messages m 
-				WHERE m.room_id = r.id 
-				ORDER BY m.created_at DESC 
-				LIMIT 1
-			) lm ON true
-			LEFT JOIN LATERAL (
-				SELECT COUNT(id)::int AS unread_count 
-				FROM messages m 
-				WHERE m.room_id = r.id AND m.created_at > rm.last_read_at
-				  AND m.sender_id != $1
-			) uc ON true
-			LEFT JOIN LATERAL (
-				SELECT COUNT(*)::int AS member_count
-				FROM room_members rm3
-				WHERE rm3.room_id = r.id AND rm3.status = 'active'
-			) mc ON true
-			LEFT JOIN LATERAL (
-				SELECT json_agg(json_build_object(
-					'id', u.id,
-					'username', u.username,
-					'name', u.name,
-					'avatar_url', COALESCE(u.avatar_url, ''),
-					'last_seen_at', CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END
-				)) AS members
-				FROM room_members rm2
-				JOIN users u ON u.id = rm2.user_id
-				WHERE rm2.room_id = r.id AND rm2.status = 'active'
-			) mem ON true
-			WHERE rm.user_id = $1 AND rm.status = 'active'
-			  AND (r.last_message_at < $2 OR r.last_message_at IS NULL)
-			ORDER BY r.last_message_at DESC NULLS LAST
-			LIMIT $3
+				COALESCE(mj.members, '[]'::json) AS members
+			FROM user_rooms ur
+			JOIN rooms r ON ur.room_id = r.id
+			LEFT JOIN last_msgs lm ON lm.room_id = r.id
+			LEFT JOIN unread uc ON uc.room_id = r.id
+			LEFT JOIN member_counts mc ON mc.room_id = r.id
+			LEFT JOIN members_json mj ON mj.room_id = r.id
 		) t;
 	`
 
