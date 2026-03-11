@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -87,6 +88,12 @@ func SendPushToUser(ctx context.Context, userID string, p PushPayload) {
 		return
 	}
 
+	// Stamp every outgoing push so clients can detect stale notifications
+	if p.Data == nil {
+		p.Data = make(map[string]string)
+	}
+	p.Data["sentAt"] = fmt.Sprintf("%d", time.Now().UnixMilli())
+
 	tokens := getDeviceTokens(ctx, userID)
 	if len(tokens) == 0 {
 		// log.Printf("[push] No device tokens found for user=%s — cannot send push", userID)
@@ -142,6 +149,11 @@ func SendPushToUsers(ctx context.Context, userIDs []string, p PushPayload) {
 	if pushSvc == nil || len(userIDs) == 0 {
 		return
 	}
+
+	if p.Data == nil {
+		p.Data = make(map[string]string)
+	}
+	p.Data["sentAt"] = fmt.Sprintf("%d", time.Now().UnixMilli())
 
 	tokens := getDeviceTokensMulti(ctx, userIDs)
 	if len(tokens) == 0 {

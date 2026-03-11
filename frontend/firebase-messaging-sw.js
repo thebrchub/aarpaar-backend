@@ -41,12 +41,24 @@ if (swConfig.apiKey && swConfig.projectId) {
     let requireInteraction = false;
 
     switch (data.type) {
-      case 'incoming_call':
-        title = (data.callerName || 'Someone') + ' is calling';
-        body = (data.hasVideo === 'video' ? 'Video' : 'Audio') + ' call';
-        tag = 'call-' + data.callId;
-        requireInteraction = true;
+      case 'incoming_call': {
+        // If the notification arrives more than 40s after it was sent,
+        // the call has already timed out server-side (35s ring timeout).
+        // Show "Missed call" instead of the misleading "is calling".
+        const sentAt = parseInt(data.sentAt, 10);
+        const isStale = sentAt > 0 && (Date.now() - sentAt) > 40000;
+        if (isStale) {
+          title = 'Missed call';
+          body = 'from ' + (data.callerName || 'Unknown');
+          tag = 'missed-' + data.callId;
+        } else {
+          title = (data.callerName || 'Someone') + ' is calling';
+          body = (data.hasVideo === 'video' ? 'Video' : 'Audio') + ' call';
+          tag = 'call-' + data.callId;
+          requireInteraction = true;
+        }
         break;
+      }
       case 'missed_call':
         title = 'Missed call';
         body = 'from ' + (data.callerName || 'Unknown');
