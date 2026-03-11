@@ -147,7 +147,7 @@ func Init() {
 	TURNPassword2 = helper.GetEnv("TURN_PASSWORD_2", "")
 
 	// Bot matchmaking fallback (optional — disabled unless BOT_ENABLED=true)
-	BotEnabled = helper.GetEnv("BOT_ENABLED", "true") == "true"
+	BotEnabled = helper.GetEnv("BOT_ENABLED", "false") == "true"
 
 	// Corpus: prefer BOT_CORPUS_DATA (inline string) over BOT_CORPUS_PATH (file path).
 	// This lets you embed the entire TSV in an env var (e.g. Docker secrets, K8s ConfigMap)
