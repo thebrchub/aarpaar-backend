@@ -147,7 +147,7 @@ func markCallAnswered(userID string) {
 	defer cancel()
 	key := config.CALL_ACTIVE_COLON + userID
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if err := markCallAnsweredScript.Run(ctx, redis.GetRawClient(), []string{key}, now).Err(); err != nil {
+	if err := markCallAnsweredScript.Run(ctx, redis.GetRawClient(), []string{key}, now).Err(); err != nil && err != goredis.Nil {
 		log.Printf("[calls] markCallAnswered Lua failed user=%s: %v", userID, err)
 	}
 }
@@ -197,7 +197,7 @@ func (e *Engine) startRingTimeout(callID, callerID, calleeID string, hasVideo bo
 			redis.Publish(pubCtx, config.CHAT_GLOBAL_CHANNEL, missedMsg)
 			pubCancel()
 
-			logCall(callID, "", callerID, hasVideo, "missed", 0)
+			logCall(callID, "", callerID, calleeID, hasVideo, "missed", 0)
 			runBackground(func() { sendMissedCallPush(calleeID, callerID, callID) })
 		}
 	})
@@ -261,33 +261,44 @@ func isUserBlocked(callerID, targetID string) bool {
 
 // logCall inserts a call record into the call_logs table.
 // status: "completed", "missed", "rejected", "cancelled"
-func logCall(callID, roomID, initiatedBy string, hasVideo bool, status string, durationSecs int) {
+func logCall(callID, roomID, initiatedBy, peerID string, hasVideo bool, status string, durationSecs int) {
 	callType := "audio"
 	if hasVideo {
 		callType = "video"
 	}
 
-	// Find room_id from the shared room between the two users if not provided
 	var roomIDPtr *string
 	if roomID != "" {
 		roomIDPtr = &roomID
 	}
 
+	var peerIDPtr *string
+	if peerID != "" {
+		peerIDPtr = &peerID
+	}
+
+	// Set endedAt for all terminal statuses (completed, cancelled, missed, rejected)
 	var endedAt *time.Time
 	var durationPtr *int
-	if status == "completed" && durationSecs > 0 {
+	switch status {
+	case "completed", "cancelled", "missed", "rejected":
 		now := time.Now().UTC()
 		endedAt = &now
-		durationPtr = &durationSecs
+		if durationSecs > 0 {
+			durationPtr = &durationSecs
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
 	_, err := postgress.GetRawDB().ExecContext(ctx,
-		`INSERT INTO call_logs (call_id, room_id, initiated_by, call_type, tier, max_participants, ended_at, duration_seconds)
-		 VALUES ($1, $2, $3::uuid, $4, 'p2p', 2, $5, $6)
-		 ON CONFLICT (call_id) DO UPDATE SET ended_at = COALESCE($5, call_logs.ended_at), duration_seconds = COALESCE($6, call_logs.duration_seconds)`,
-		callID, roomIDPtr, initiatedBy, callType, endedAt, durationPtr,
+		`INSERT INTO call_logs (call_id, room_id, initiated_by, peer_id, call_type, tier, max_participants, ended_at, duration_seconds)
+		 VALUES ($1, $2, $3::uuid, $4, $5, 'p2p', 2, $6, $7)
+		 ON CONFLICT (call_id) DO UPDATE SET
+		   peer_id = COALESCE(call_logs.peer_id, EXCLUDED.peer_id),
+		   ended_at = COALESCE(EXCLUDED.ended_at, call_logs.ended_at),
+		   duration_seconds = COALESCE(EXCLUDED.duration_seconds, call_logs.duration_seconds)`,
+		callID, roomIDPtr, initiatedBy, peerIDPtr, callType, endedAt, durationPtr,
 	)
 	if err != nil {
 		log.Printf("[calls] Failed to log call=%s: %v", callID, err)
@@ -469,7 +480,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			default:
 				droppedMessages.Add(1)
 			}
-			runBackground(func() { logCall(callID, "", c.UserID, hasVideo, "missed", 0) })
+			runBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, "missed", 0) })
 			return true
 		}
 
@@ -483,7 +494,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		}
 
 		// --- Log call initiation ---
-		runBackground(func() { logCall(callID, "", c.UserID, hasVideo, "ringing", 0) })
+		runBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, "ringing", 0) })
 
 	case config.MsgTypeCallAccept:
 		// Cancel the ring timeout
@@ -520,7 +531,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		clearActiveCall(targetUser)
 
 		// Log rejected call
-		runBackground(func() { logCall(callID, "", targetUser, hasVideo, "rejected", 0) })
+		runBackground(func() { logCall(callID, "", targetUser, c.UserID, hasVideo, "rejected", 0) })
 
 	case config.MsgTypeCallEnd:
 		// Cancel any pending ring timeout
@@ -545,7 +556,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		if callerCall != nil && !callerCall.Answered {
 			status = "cancelled"
 		}
-		runBackground(func() { logCall(callID, "", c.UserID, hasVideo, status, duration) })
+		runBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, status, duration) })
 
 	case config.MsgTypeCallLeave:
 		// For future group calls — treat like call_end for 1:1
@@ -611,7 +622,7 @@ func (e *Engine) handleCallDisconnect(userID string) {
 	if !call.Answered {
 		status = "cancelled"
 	}
-	logCall(call.CallID, "", call.PeerID, call.HasVideo, status, duration)
+	logCall(call.CallID, "", userID, call.PeerID, call.HasVideo, status, duration)
 }
 
 // ---------------------------------------------------------------------------

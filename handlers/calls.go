@@ -116,21 +116,12 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			COALESCE(peer.avatar_url, '') AS peer_avatar
 		FROM call_logs cl
 		LEFT JOIN users u ON u.id = cl.initiated_by
-		LEFT JOIN LATERAL (
-			SELECT u2.name, u2.avatar_url
-			FROM room_members rm2
-			JOIN users u2 ON u2.id = rm2.user_id
-			WHERE rm2.room_id = cl.room_id
-			  AND rm2.user_id != $1
-			LIMIT 1
-		) peer ON true
+		LEFT JOIN users peer ON peer.id = CASE
+			WHEN cl.initiated_by = $1 THEN cl.peer_id
+			ELSE cl.initiated_by
+		END
 		WHERE cl.initiated_by = $1
-		   OR EXISTS (
-				SELECT 1 FROM room_members rm
-				WHERE rm.room_id = cl.room_id
-				AND rm.user_id = $1
-				AND rm.status = 'active'
-		   )
+		   OR cl.peer_id = $1
 		ORDER BY cl.started_at DESC
 		LIMIT $2 OFFSET $3`,
 		userID, limit, offset,
