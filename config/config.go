@@ -61,7 +61,8 @@ var (
 	FirebaseCredentials string // Raw JSON or base64-encoded Firebase service account key
 
 	// Internal API key for service-to-service auth (e.g. JWT validation endpoint)
-	InternalAPIKey string
+	InternalAPIKey    []byte
+	InternalAPIKeySet bool
 )
 
 // ---------------------------------------------------------------------------
@@ -184,5 +185,6 @@ func Init() {
 	FirebaseCredentials = helper.GetEnv("FIREBASE_CREDENTIALS", "")
 
 	// Internal API key for service-to-service auth
-	InternalAPIKey = helper.GetEnv("INTERNAL_API_KEY", "")
+	InternalAPIKey = []byte(helper.GetEnv("INTERNAL_API_KEY", ""))
+	InternalAPIKeySet = len(InternalAPIKey) > 0
 }
