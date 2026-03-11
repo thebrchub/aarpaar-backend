@@ -101,7 +101,8 @@ func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 // a JWT and get the associated user ID. Protected by X-API-Key, not JWT auth.
 func ValidateTokenHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Token string `json:"token"`
+		Token  string `json:"token"`
+		UserID string `json:"user_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
 		JSONError(w, "token is required", http.StatusBadRequest)
@@ -110,17 +111,23 @@ func ValidateTokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	claims, err := jwt.VerifyToken("Bearer " + req.Token)
 	if err != nil {
-		JSONError(w, "Invalid or expired token", http.StatusUnauthorized)
+		JSONError(w, "Invalid token", http.StatusUnauthorized)
 		return
 	}
 
-	userID, ok := claims["sub"].(string)
-	if !ok || userID == "" {
-		JSONError(w, "Invalid token claims", http.StatusUnauthorized)
+	tokenUserID, ok := claims["sub"].(string)
+	if !ok || tokenUserID == "" {
+		JSONError(w, "Invalid token", http.StatusUnauthorized)
 		return
 	}
 
-	JSONSuccess(w, map[string]string{"user_id": userID})
+	// If a user_id was provided, verify it matches the token's subject
+	if req.UserID != "" && req.UserID != tokenUserID {
+		JSONError(w, "Permission denied", http.StatusForbidden)
+		return
+	}
+
+	JSONSuccess(w, map[string]string{"user_id": tokenUserID})
 }
 
 // ---------------------------------------------------------------------------
