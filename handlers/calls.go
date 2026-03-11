@@ -30,18 +30,10 @@ var RTC rtc.RTCService
 // For group calls (3+ participants), LiveKit Cloud handles ICE internally,
 // so this endpoint is only needed for 1:1 P2P calls.
 // ---------------------------------------------------------------------------
-
-// ICEServer matches the WebRTC RTCIceServer interface.
-type ICEServer struct {
-	URLs       any    `json:"urls"` // string or []string
-	Username   string `json:"username,omitempty"`
-	Credential string `json:"credential,omitempty"`
-}
-
 // CallConfig is the response shape for GET /calls/config.
 type CallConfig struct {
-	ICEServers []ICEServer `json:"iceServers"`
-	LiveKit    *LKConfig   `json:"livekit,omitempty"`
+	ICEServers []config.ICEServer `json:"iceServers"`
+	LiveKit    *LKConfig          `json:"livekit,omitempty"`
 }
 
 // LKConfig exposes LiveKit Cloud URL (token generation is server-side only).
@@ -51,35 +43,12 @@ type LKConfig struct {
 
 // GetCallConfigHandler returns ICE server configuration for WebRTC P2P calls.
 func GetCallConfigHandler(w http.ResponseWriter, r *http.Request) {
-	servers := []ICEServer{
-		{URLs: "stun:stun.l.google.com:19302"},
-		{URLs: "stun:stun.cloudflare.com:3478"},
-	}
-
-	// Add TURN server if configured
-	if config.TURNURL != "" {
-		servers = append(servers, ICEServer{
-			URLs:       config.TURNURL,
-			Username:   config.TURNUsername,
-			Credential: config.TURNPassword,
-		})
-	}
-
-	// Add secondary TURN (TCP/TLS fallback) if configured
-	if config.TURNURL2 != "" {
-		servers = append(servers, ICEServer{
-			URLs:       config.TURNURL2,
-			Username:   config.TURNUsername2,
-			Credential: config.TURNPassword2,
-		})
-	}
-
 	resp := CallConfig{
-		ICEServers: servers,
+		ICEServers: config.ICEServers,
 	}
 
-	// Expose LiveKit URL if configured (so clients know group calls are available)
-	if RTC != nil && RTC.IsConfigured() {
+	// Expose LiveKit URL only when group calls are enabled AND configured
+	if config.GroupCallsEnabled && RTC != nil && RTC.IsConfigured() {
 		resp.LiveKit = &LKConfig{URL: RTC.GetURL()}
 	}
 
@@ -184,6 +153,11 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("groupId")
 	if groupID == "" {
 		JSONError(w, "Missing group ID", http.StatusBadRequest)
+		return
+	}
+
+	if !config.GroupCallsEnabled {
+		JSONError(w, "Group calls are disabled", http.StatusForbidden)
 		return
 	}
 
@@ -328,6 +302,11 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !config.GroupCallsEnabled {
+		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		return
+	}
+
 	if RTC == nil || !RTC.IsConfigured() {
 		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
 		return
@@ -430,6 +409,11 @@ func LeaveGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !config.GroupCallsEnabled {
+		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		return
+	}
+
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
@@ -524,6 +508,11 @@ func GetGroupCallStatusHandler(w http.ResponseWriter, r *http.Request) {
 	callID := r.PathValue("callId")
 	if groupID == "" || callID == "" {
 		JSONError(w, "Missing group or call ID", http.StatusBadRequest)
+		return
+	}
+
+	if !config.GroupCallsEnabled {
+		JSONError(w, "Group calls are disabled", http.StatusForbidden)
 		return
 	}
 
@@ -706,6 +695,11 @@ func MuteParticipantHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !config.GroupCallsEnabled {
+		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		return
+	}
+
 	if RTC == nil || !RTC.IsConfigured() {
 		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
 		return
@@ -823,6 +817,11 @@ func KickParticipantHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !config.GroupCallsEnabled {
+		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		return
+	}
+
 	if RTC == nil || !RTC.IsConfigured() {
 		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
 		return
@@ -930,6 +929,11 @@ func PromoteCallAdminHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !config.GroupCallsEnabled {
+		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		return
+	}
+
 	if RTC == nil || !RTC.IsConfigured() {
 		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
 		return
@@ -1003,6 +1007,11 @@ func ForceEndCallHandler(w http.ResponseWriter, r *http.Request) {
 	callID := r.PathValue("callId")
 	if groupID == "" || callID == "" {
 		JSONError(w, "Missing group or call ID", http.StatusBadRequest)
+		return
+	}
+
+	if !config.GroupCallsEnabled {
+		JSONError(w, "Group calls are disabled", http.StatusForbidden)
 		return
 	}
 

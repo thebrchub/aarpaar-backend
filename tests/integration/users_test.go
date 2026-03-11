@@ -163,4 +163,78 @@ func TestUpdateMe(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	})
+
+	t.Run("verify update persists", func(t *testing.T) {
+		// First update
+		body := `{"name":"Verified Name"}`
+		patchReq, _ := http.NewRequest("PATCH", srv.URL+"/api/v1/users/me", strings.NewReader(body))
+		patchReq.Header.Set("Authorization", token)
+		patchReq.Header.Set("Content-Type", "application/json")
+
+		patchResp, err := http.DefaultClient.Do(patchReq)
+		require.NoError(t, err)
+		io.ReadAll(patchResp.Body)
+		patchResp.Body.Close()
+		require.Equal(t, http.StatusOK, patchResp.StatusCode)
+
+		// Then verify via GET /me
+		getReq, _ := http.NewRequest("GET", srv.URL+"/api/v1/users/me", nil)
+		getReq.Header.Set("Authorization", token)
+
+		getResp, err := http.DefaultClient.Do(getReq)
+		require.NoError(t, err)
+		defer getResp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, getResp.StatusCode)
+		respBody, _ := io.ReadAll(getResp.Body)
+		var data map[string]interface{}
+		require.NoError(t, json.Unmarshal(respBody, &data))
+		assert.Equal(t, "Verified Name", data["name"])
+	})
+}
+
+func TestPutMe(t *testing.T) {
+	srv, _, cleanup := testutil.StartTestServer(t)
+	defer cleanup()
+
+	_, token := testutil.SeedUser(t, "putable", "putable@test.com")
+
+	t.Run("full profile update", func(t *testing.T) {
+		// username must match the existing one (immutable once set)
+		body := `{"name":"Full Name","username":"putable","gender":"Male"}`
+		req, _ := http.NewRequest("PUT", srv.URL+"/api/v1/users/me", strings.NewReader(body))
+		req.Header.Set("Authorization", token)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("cannot change username", func(t *testing.T) {
+		body := `{"name":"Full Name","username":"differentname","gender":"Male"}`
+		req, _ := http.NewRequest("PUT", srv.URL+"/api/v1/users/me", strings.NewReader(body))
+		req.Header.Set("Authorization", token)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusConflict, resp.StatusCode, "changing username should return 409")
+	})
+
+	t.Run("no auth", func(t *testing.T) {
+		body := `{"name":"Hacker"}`
+		req, _ := http.NewRequest("PUT", srv.URL+"/api/v1/users/me", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	})
 }

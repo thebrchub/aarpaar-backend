@@ -1,9 +1,11 @@
 package integration
 
 import (
+	"io"
 	"net/http"
 	"testing"
 
+	"github.com/goccy/go-json"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -58,6 +60,35 @@ func TestCallConfig(t *testing.T) {
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		body, _ := io.ReadAll(resp.Body)
+		var data map[string]interface{}
+		require.NoError(t, json.Unmarshal(body, &data))
+
+		// ICE servers should always be present
+		iceServers, ok := data["iceServers"]
+		assert.True(t, ok, "iceServers should be present")
+		assert.NotNil(t, iceServers)
+	})
+
+	t.Run("livekit not exposed when group calls disabled", func(t *testing.T) {
+		// GROUP_CALLS_ENABLED defaults to "false" in test env
+		req, _ := http.NewRequest("GET", srv.URL+"/api/v1/calls/config", nil)
+		req.Header.Set("Authorization", token)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		body, _ := io.ReadAll(resp.Body)
+		var data map[string]interface{}
+		require.NoError(t, json.Unmarshal(body, &data))
+
+		// LiveKit should NOT be present when group calls are disabled
+		_, hasLiveKit := data["livekit"]
+		assert.False(t, hasLiveKit, "livekit config should NOT be exposed when group calls are disabled")
 	})
 
 	t.Run("no auth", func(t *testing.T) {

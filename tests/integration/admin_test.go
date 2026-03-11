@@ -168,3 +168,51 @@ func TestAdminReportUser(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Integration Tests — Admin App Settings
+// ---------------------------------------------------------------------------
+
+func TestAdminSettings(t *testing.T) {
+	srv, _, cleanup := testutil.StartTestServer(t)
+	defer cleanup()
+
+	_, adminToken := testutil.SeedUser(t, "settingsadmin", "admin@test.com")
+	_, userToken := testutil.SeedUser(t, "settingsuser", "settingsuser@test.com")
+
+	t.Run("get non-existent setting", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", srv.URL+"/api/v1/admin/settings/nonexistent", nil)
+		req.Header.Set("Authorization", adminToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		// 404 or 200 with null — either is acceptable
+		assert.True(t, resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound)
+	})
+
+	t.Run("update setting as admin", func(t *testing.T) {
+		body := `{"value":"test_value"}`
+		req, _ := http.NewRequest("PATCH", srv.URL+"/api/v1/admin/settings/test_key", strings.NewReader(body))
+		req.Header.Set("Authorization", adminToken)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("non-admin cannot access settings", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", srv.URL+"/api/v1/admin/settings/test_key", nil)
+		req.Header.Set("Authorization", userToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	})
+}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,25 +35,26 @@ var (
 // SetTestEnv sets environment variables for tests.
 func SetTestEnv() {
 	envVars := map[string]string{
-		"GOOGLE_CLIENT_ID":   "test-client-id",
-		"SERVER_PORT":        "2029",
-		"POSTGRES_CONN_STR":  getEnvOrDefault("TEST_POSTGRES_CONN_STR", "postgresql://postgres:root@localhost:5432/aarpaar_test?sslmode=disable"),
-		"PG_TIMEOUT":         "5",
-		"REDIS_HOST":         getEnvOrDefault("TEST_REDIS_HOST", "localhost"),
-		"REDIS_PORT":         getEnvOrDefault("TEST_REDIS_PORT", "6378"),
-		"REDIS_CACHE_NAME":   "aarpaar_test",
-		"CORS_ORIGIN":        "*",
-		"BOT_ENABLED":        "false",
-		"BENKI_ADMIN_EMAIL":  "admin@test.com",
-		"JWT_ISSUER":         "test-issuer",
-		"ACCESS_TOKEN_TTL":   "15m",
-		"REFRESH_TOKEN_TTL":  "168h",
-		"JWT_PRIVATE_KEY":    TestJWTPrivateKey,
-		"JWT_PUBLIC_KEY":     TestJWTPublicKey,
-		"REFRESH_SECRET":     "test-secret-key-minimum-32-bytes!!",
-		"LIVEKIT_URL":        "",
-		"LIVEKIT_API_KEY":    "",
-		"LIVEKIT_API_SECRET": "",
+		"GOOGLE_CLIENT_ID":    "test-client-id",
+		"SERVER_PORT":         "2029",
+		"POSTGRES_CONN_STR":   getEnvOrDefault("TEST_POSTGRES_CONN_STR", "postgresql://postgres:root@localhost:5432/aarpaar_test?sslmode=disable"),
+		"PG_TIMEOUT":          "5",
+		"REDIS_HOST":          getEnvOrDefault("TEST_REDIS_HOST", "localhost"),
+		"REDIS_PORT":          getEnvOrDefault("TEST_REDIS_PORT", "6378"),
+		"REDIS_CACHE_NAME":    "aarpaar_test",
+		"CORS_ORIGIN":         "*",
+		"BOT_ENABLED":         "false",
+		"BENKI_ADMIN_EMAIL":   "admin@test.com",
+		"JWT_ISSUER":          "test-issuer",
+		"ACCESS_TOKEN_TTL":    "15m",
+		"REFRESH_TOKEN_TTL":   "168h",
+		"JWT_PRIVATE_KEY":     TestJWTPrivateKey,
+		"JWT_PUBLIC_KEY":      TestJWTPublicKey,
+		"REFRESH_SECRET":      "test-secret-key-minimum-32-bytes!!",
+		"LIVEKIT_URL":         "",
+		"LIVEKIT_API_KEY":     "",
+		"LIVEKIT_API_SECRET":  "",
+		"GROUP_CALLS_ENABLED": "false",
 	}
 	for k, v := range envVars {
 		os.Setenv(k, v)
@@ -103,18 +105,20 @@ func SetupTestInfra(t *testing.T) {
 
 // BuildTestMux builds the same HTTP mux as main.go (without starting a server).
 func BuildTestMux(engine *chat.Engine) http.Handler {
-	limiter := middleware.NewIPRateLimiter(10, 20)
+	globalLimiter := middleware.NewIPRateLimiter(config.RateLimitRate, config.RateLimitBurst)
+	authLimiter := middleware.NewIPRateLimiter(2, 5)
+	healthLimiter := middleware.NewIPRateLimiter(2, 3)
 	mux := http.NewServeMux()
 
-	// Health check
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	// Health check (own rate limit)
+	mux.HandleFunc("GET /health", healthLimiter.LimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
-	})
+	}))
 
-	// Auth (public)
-	mux.HandleFunc("POST /api/v1/auth/google", handlers.GoogleLoginHandler)
-	mux.HandleFunc("POST /api/v1/auth/refresh", handlers.RefreshTokenHandler)
+	// Auth (public — tighter rate limit)
+	mux.HandleFunc("POST /api/v1/auth/google", authLimiter.LimitMiddleware(handlers.GoogleLoginHandler))
+	mux.HandleFunc("POST /api/v1/auth/refresh", authLimiter.LimitMiddleware(handlers.RefreshTokenHandler))
 
 	// Auth (protected)
 	mux.HandleFunc("POST /api/v1/auth/device", mw.Auth(handlers.RegisterDeviceHandler))
@@ -185,14 +189,14 @@ func BuildTestMux(engine *chat.Engine) http.Handler {
 	mux.HandleFunc("GET /api/v1/donate/history", mw.Auth(handlers.GetDonationHistoryHandler))
 	mux.HandleFunc("GET /api/v1/badges/tiers", mw.Auth(handlers.GetBadgeTiersHandler))
 
-	// Razorpay Webhook
+	// Razorpay Webhook (bypasses rate limit)
 	mux.HandleFunc("POST /api/v1/webhook/razorpay", handlers.RazorpayWebhookHandler)
 
 	// Leaderboard
 	mux.HandleFunc("GET /api/v1/leaderboard", mw.Auth(handlers.GetLeaderboardHandler))
 
-	// Online count
-	mux.HandleFunc("GET /api/v1/online", handlers.GetOnlineCountHandler)
+	// Online count (own rate limit)
+	mux.HandleFunc("GET /api/v1/online", healthLimiter.LimitMiddleware(handlers.GetOnlineCountHandler))
 
 	// Admin
 	mux.HandleFunc("GET /api/v1/admin/stats", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminStatsHandler)))
@@ -213,8 +217,28 @@ func BuildTestMux(engine *chat.Engine) http.Handler {
 		chat.ServeWs(engine, w, r, userID)
 	}))
 
-	handler := mw.CORS(mw.BodyLimit(limiter.LimitHandler(mux)))
+	handler := mw.CORS(mw.BodyLimit(rateLimitRouter(globalLimiter, mux)))
 	return handler
+}
+
+// rateLimitRouter applies the global rate limiter except for routes with their
+// own limiter or webhook routes that bypass limiting entirely.
+func rateLimitRouter(globalLimiter *middleware.IPRateLimiter, mux *http.ServeMux) http.Handler {
+	bypassPrefixes := []string{
+		"/health",
+		"/api/v1/auth/",
+		"/api/v1/online",
+		"/api/v1/webhook/",
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, p := range bypassPrefixes {
+			if strings.HasPrefix(r.URL.Path, p) {
+				mux.ServeHTTP(w, r)
+				return
+			}
+		}
+		globalLimiter.LimitHandler(mux).ServeHTTP(w, r)
+	})
 }
 
 // StartTestServer spins up a full httptest.Server with the real handler stack.

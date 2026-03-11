@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/shivanand-burli/go-starter-kit/helper"
@@ -70,7 +71,17 @@ var (
 	// Rate Limiting
 	RateLimitRate  int // Requests per second per IP (default 5)
 	RateLimitBurst int // Burst size (default 10)
+
+	// ICE Servers (built once at init from STUN_URLS + TURN config)
+	ICEServers []ICEServer
 )
+
+// ICEServer matches the WebRTC RTCIceServer interface.
+type ICEServer struct {
+	URLs       any    `json:"urls"` // string or []string
+	Username   string `json:"username,omitempty"`
+	Credential string `json:"credential,omitempty"`
+}
 
 // ---------------------------------------------------------------------------
 // Context Keys (typed to avoid collisions with other packages)
@@ -201,4 +212,27 @@ func Init() {
 	// Rate Limiting (same defaults for HTTP and WebSocket)
 	RateLimitRate = helper.GetEnvInt("RATE_LIMIT_RATE", 5)
 	RateLimitBurst = helper.GetEnvInt("RATE_LIMIT_BURST", 10)
+
+	// ICE Servers — built once from STUN_URLS (comma-separated) + TURN config
+	stunURLs := helper.GetEnv("STUN_URLS", "stun:stun.l.google.com:19302,stun:stun.cloudflare.com:3478")
+	for u := range strings.SplitSeq(stunURLs, ",") {
+		u = strings.TrimSpace(u)
+		if u != "" {
+			ICEServers = append(ICEServers, ICEServer{URLs: u})
+		}
+	}
+	if TURNURL != "" {
+		ICEServers = append(ICEServers, ICEServer{
+			URLs:       TURNURL,
+			Username:   TURNUsername,
+			Credential: TURNPassword,
+		})
+	}
+	if TURNURL2 != "" {
+		ICEServers = append(ICEServers, ICEServer{
+			URLs:       TURNURL2,
+			Username:   TURNUsername2,
+			Credential: TURNPassword2,
+		})
+	}
 }
