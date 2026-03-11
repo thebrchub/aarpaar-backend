@@ -24,14 +24,6 @@ import (
 // EnterMatchQueueHandler tries to find an instant stranger match.
 // If no match is found, the user is placed in a Redis queue to wait.
 //
-// @Summary		Enter matchmaking queue
-// @Description	Attempts instant stranger match. If no match, queues the user and schedules a bot fallback.
-// @Tags		Matchmaking
-// @Produce		json
-// @Success		200	{object}	MatchResponse		"Matched instantly or queued"
-// @Failure		401	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/match/enter [post]
 func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -199,14 +191,6 @@ func notifyMatchWithLocation(ctx context.Context, targetUser, roomID, partnerLoc
 
 // LeaveMatchQueueHandler removes the user from the matchmaking queue.
 //
-// @Summary		Leave matchmaking queue
-// @Description	Removes the user from the matchmaking queue and cancels any pending bot match.
-// @Tags		Matchmaking
-// @Produce		json
-// @Success		200	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/match/leave [post]
 func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -245,18 +229,6 @@ type MatchActionRequest struct {
 
 // MatchActionHandler processes skip/block/friend actions during a stranger chat.
 //
-// @Summary		Perform match action
-// @Description	Processes skip, block, or friend actions during a stranger chat session.
-// @Tags		Matchmaking
-// @Accept		json
-// @Produce		json
-// @Param		body	body	MatchActionRequest	true	"Action details"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/match/action [post]
 func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -547,19 +519,6 @@ type ReportRequest struct {
 
 // ReportUserHandler saves a user report to Postgres for moderation review.
 //
-// @Summary		Report a user
-// @Description	Saves a user report for moderation review. Auto-blocks the reported user.
-// @Tags		Matchmaking
-// @Accept		json
-// @Produce		json
-// @Param		body	body	ReportRequest	true	"Report details"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/match/report [post]
 func ReportUserHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

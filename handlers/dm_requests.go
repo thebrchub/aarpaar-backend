@@ -12,15 +12,6 @@ import (
 
 // GetDMRequestsHandler returns pending DM requests (Instagram-style "Message Requests" inbox).
 //
-// @Summary		Get DM requests
-// @Description	Returns rooms where the caller has a pending DM invitation from a private account.
-// @Tags		Rooms
-// @Produce		json
-// @Success		200	{array}	DMRequestItem
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/rooms/requests [get]
 func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -71,18 +62,6 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 
 // AcceptDMRequestHandler accepts a pending DM request.
 //
-// @Summary		Accept DM request
-// @Description	Flips room membership from pending to active. Notifies the sender.
-// @Tags		Rooms
-// @Produce		json
-// @Param		roomId	path	string	true	"Room UUID"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/rooms/{roomId}/accept [post]
 func AcceptDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -138,18 +117,6 @@ func AcceptDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 // RejectDMRequestHandler rejects a pending DM request and deletes the room.
 //
-// @Summary		Reject DM request
-// @Description	Deletes the room and all its members/messages.
-// @Tags		Rooms
-// @Produce		json
-// @Param		roomId	path	string	true	"Room UUID"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/rooms/{roomId}/reject [post]
 func RejectDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

@@ -59,6 +59,9 @@ var (
 
 	// Firebase Cloud Messaging (optional — push notifications disabled if not set)
 	FirebaseCredentials string // Raw JSON or base64-encoded Firebase service account key
+
+	// Internal API key for service-to-service auth (e.g. JWT validation endpoint)
+	InternalAPIKey string
 )
 
 // ---------------------------------------------------------------------------
@@ -179,4 +182,7 @@ func Init() {
 
 	// Firebase Cloud Messaging (optional)
 	FirebaseCredentials = helper.GetEnv("FIREBASE_CREDENTIALS", "")
+
+	// Internal API key for service-to-service auth
+	InternalAPIKey = helper.GetEnv("INTERNAL_API_KEY", "")
 }

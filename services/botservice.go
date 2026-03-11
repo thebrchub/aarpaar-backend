@@ -90,6 +90,21 @@ type BotSession struct {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime Toggle
+// ---------------------------------------------------------------------------
+
+// SetBotEnabled enables or disables bot matching at runtime.
+// Does not reinitialize — just toggles the flag that ScheduleBotMatch checks.
+func SetBotEnabled(enabled bool) {
+	botConfigured = enabled
+}
+
+// IsBotEnabled returns whether bot matching is currently active.
+func IsBotEnabled() bool {
+	return botConfigured
+}
+
+// ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
 

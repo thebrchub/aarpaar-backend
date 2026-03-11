@@ -20,18 +20,6 @@ import (
 
 // CreateGroupHandler creates a new group.
 //
-// @Summary		Create group
-// @Description	Creates a new group with optional initial members. Creator becomes admin.
-// @Tags		Groups
-// @Accept		json
-// @Produce		json
-// @Param		body	body	models.CreateGroupRequest	true	"Group details"
-// @Success		200	{object}	GroupCreateResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups [post]
 func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -228,19 +216,6 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetGroupHandler returns group info and member list.
 //
-// @Summary		Get group details
-// @Description	Returns group info including all members with online status.
-// @Tags		Groups
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Success		200	{object}	models.GroupResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId} [get]
 func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -330,19 +305,6 @@ func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateGroupHandler updates a group's name, avatar, or visibility (admin only).
 //
-// @Summary		Update group
-// @Description	Updates group name, avatar, or visibility. Requires admin role.
-// @Tags		Groups
-// @Accept		json
-// @Produce		json
-// @Param		groupId	path	string						true	"Group room UUID"
-// @Param		body	body	models.UpdateGroupRequest	true	"Fields to update"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId} [patch]
 func UpdateGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -420,21 +382,6 @@ func UpdateGroupHandler(w http.ResponseWriter, r *http.Request) {
 
 // AddGroupMembersHandler adds members to a group (admin only).
 //
-// @Summary		Add group members
-// @Description	Adds one or more users to the group. Validates blocks and membership limits.
-// @Tags		Groups
-// @Accept		json
-// @Produce		json
-// @Param		groupId	path	string						true	"Group room UUID"
-// @Param		body	body	models.AddMembersRequest	true	"Member IDs to add"
-// @Success		200	{object}	MembersAddedResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/members [post]
 func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -615,19 +562,6 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 
 // RemoveGroupMemberHandler removes a member from the group, or leaves (self).
 //
-// @Summary		Remove member or leave group
-// @Description	Admins can remove others; any member can leave by removing self.
-// @Tags		Groups
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Param		userId	path	string	true	"User UUID to remove (use own ID to leave)"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/members/{userId} [delete]
 func RemoveGroupMemberHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -701,19 +635,6 @@ func RemoveGroupMemberHandler(w http.ResponseWriter, r *http.Request) {
 
 // PromoteAdminHandler promotes a member to group admin.
 //
-// @Summary		Promote to admin
-// @Description	Promotes an active group member to admin role. Requires admin.
-// @Tags		Groups
-// @Accept		json
-// @Produce		json
-// @Param		groupId	path	string							true	"Group room UUID"
-// @Param		body	body	models.PromoteAdminRequest	true	"User to promote"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/admins [post]
 func PromoteAdminHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -774,19 +695,6 @@ func PromoteAdminHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteGroupHandler deletes a group (original creator only).
 //
-// @Summary		Delete group
-// @Description	Permanently deletes the group, its members, and messages. Only the creator can delete.
-// @Tags		Groups
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId} [delete]
 func DeleteGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -877,16 +785,6 @@ func DeleteGroupHandler(w http.ResponseWriter, r *http.Request) {
 
 // ListGroupsHandler lists or searches public groups.
 //
-// @Summary		List public groups
-// @Description	Returns public groups sorted by member count. Optionally filter by name.
-// @Tags		Groups
-// @Produce		json
-// @Param		search	query	string	false	"Search query for group name"
-// @Success		200	{array}	models.GroupListItem
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups [get]
 func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -942,20 +840,6 @@ func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 
 // JoinGroupHandler self-joins a public group.
 //
-// @Summary		Join public group
-// @Description	Join a public group. Private groups require an invite link.
-// @Tags		Groups
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		409	{object}	StatusMessage	"Already a member"
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/join [post]
 func JoinGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1043,19 +927,6 @@ func JoinGroupHandler(w http.ResponseWriter, r *http.Request) {
 
 // JoinGroupByInviteHandler joins a group via invite link.
 //
-// @Summary		Join group by invite code
-// @Description	Joins a group using its invite code. Works for both public and private groups.
-// @Tags		Groups
-// @Produce		json
-// @Param		inviteCode	path	string	true	"Invite code"
-// @Success		200	{object}	JoinByInviteResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		409	{object}	StatusMessage	"Already a member"
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/invite/{inviteCode} [post]
 func JoinGroupByInviteHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1131,18 +1002,6 @@ func JoinGroupByInviteHandler(w http.ResponseWriter, r *http.Request) {
 
 // GenerateInviteHandler generates or regenerates an invite code (admin only).
 //
-// @Summary		Generate invite code
-// @Description	Generates a new invite code for the group. Previous code is replaced. Requires admin.
-// @Tags		Groups
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Success		200	{object}	InviteCodeResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/invite [post]
 func GenerateInviteHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1199,20 +1058,6 @@ func getGroupCapacity(ctx context.Context) int {
 
 // SetVanitySlugHandler sets a vanity slug for a group (admin + VIP only).
 //
-// @Summary		Set group vanity slug
-// @Description	Sets a vanity URL slug for the group. Only group admins who are VIP donors can set this.
-// @Tags		Groups
-// @Accept		json
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Param		body	body	object	true	"Vanity slug: {\"slug\": \"my-group\"}"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		409	{object}	StatusMessage	"Slug already taken"
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/vanity [patch]
 func SetVanitySlugHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1289,18 +1134,6 @@ func SetVanitySlugHandler(w http.ResponseWriter, r *http.Request) {
 
 // JoinGroupByVanityHandler joins a group via its vanity slug.
 //
-// @Summary		Join group by vanity slug
-// @Description	Joins a group using its vanity URL slug.
-// @Tags		Groups
-// @Produce		json
-// @Param		slug	path	string	true	"Vanity slug"
-// @Success		200	{object}	JoinByInviteResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		409	{object}	StatusMessage	"Already a member"
-// @Security	BearerAuth
-// @Router		/vanity/{slug} [post]
 func JoinGroupByVanityHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1385,15 +1218,6 @@ func JoinGroupByVanityHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetGroupInvitesHandler returns pending group invites for the authenticated user.
 //
-// @Summary		Get group invites
-// @Description	Returns groups the user has been invited to but hasn't accepted yet.
-// @Tags		Groups
-// @Produce		json
-// @Success		200	{array}	GroupInviteItem
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/invites [get]
 func GetGroupInvitesHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1437,18 +1261,6 @@ func GetGroupInvitesHandler(w http.ResponseWriter, r *http.Request) {
 
 // AcceptGroupInviteHandler accepts a pending group invite.
 //
-// @Summary		Accept group invite
-// @Description	Accepts a group invite, making the user an active member.
-// @Tags		Groups
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/invites/accept [post]
 func AcceptGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1515,18 +1327,6 @@ func AcceptGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeclineGroupInviteHandler declines a pending group invite.
 //
-// @Summary		Decline group invite
-// @Description	Declines and removes a pending group invite.
-// @Tags		Groups
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/invites/decline [post]
 func DeclineGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

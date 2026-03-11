@@ -24,16 +24,6 @@ var PaymentSvc sdkpay.PaymentService
 
 // GetDonationHistoryHandler returns the authenticated user's donation history.
 //
-// @Summary		Get donation history
-// @Description	Returns paginated donation history for the current user.
-// @Tags		Donations
-// @Produce		json
-// @Param		limit	query	int	false	"Page size (default 10, max 100)"
-// @Param		offset	query	int	false	"Offset (default 0)"
-// @Success		200	{array}		map[string]interface{}
-// @Failure		401	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/donate/history [get]
 func GetDonationHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -71,12 +61,6 @@ func GetDonationHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetBadgeTiersHandler returns all badge tiers sorted by display_order.
 //
-// @Summary		List badge tiers
-// @Description	Returns all configurable badge tiers. Public endpoint.
-// @Tags		Badges
-// @Produce		json
-// @Success		200	{array}	map[string]interface{}
-// @Router		/badges/tiers [get]
 func GetBadgeTiersHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()

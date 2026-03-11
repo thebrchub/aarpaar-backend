@@ -17,30 +17,15 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/push"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/shivanand-burli/go-starter-kit/rtc"
-	httpSwagger "github.com/swaggo/http-swagger"
 
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
-	_ "github.com/thebrchub/aarpaar/docs" // Swagger generated docs
 	"github.com/thebrchub/aarpaar/handlers"
 	mw "github.com/thebrchub/aarpaar/middleware"
 	"github.com/thebrchub/aarpaar/services"
 
 	sdkpay "github.com/shivanand-burli/go-starter-kit/payment"
 )
-
-//	@title						Aarpaar API
-//	@version					1.0
-//	@description				Real-time chat, matchmaking, and group calling API. Uses REST for actions and WebSocket (/ws) for real-time events.
-//	@host						localhost:2028
-//	@BasePath					/api/v1
-//	@schemes					http https
-//	@securityDefinitions.apikey	BearerAuth
-//	@in							header
-//	@name						Authorization
-//	@description				Enter your JWT access token with the `Bearer ` prefix, e.g. "Bearer eyJhbGci..."
-
-//go:generate swag init
 
 func main() {
 	// -----------------------------------------------------------------------
@@ -162,12 +147,12 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// Swagger UI — serves OpenAPI spec and interactive docs
-	mux.Handle("GET /swagger/", httpSwagger.WrapHandler)
-
 	// --- Auth (public) ---
 	mux.HandleFunc("POST /api/v1/auth/google", handlers.GoogleLoginHandler)
 	mux.HandleFunc("POST /api/v1/auth/refresh", handlers.RefreshTokenHandler)
+
+	// --- Auth (internal, API key protected) ---
+	mux.HandleFunc("POST /api/v1/auth/validate", mw.APIKeyOnly(handlers.ValidateTokenHandler))
 
 	// --- Config (public) ---
 	mux.HandleFunc("GET /api/v1/config/firebase", handlers.GetFirebaseConfigHandler)
@@ -192,12 +177,16 @@ func main() {
 
 	// --- Friends (protected) ---
 	mux.HandleFunc("GET /api/v1/friends", mw.Auth(handlers.GetFriendsHandler))
+	mux.HandleFunc("GET /api/v1/friends/search", mw.Auth(handlers.SearchFriendsHandler))
 	mux.HandleFunc("GET /api/v1/friends/requests", mw.Auth(handlers.GetFriendRequestsHandler))
 	mux.HandleFunc("POST /api/v1/friends/request", mw.Auth(handlers.SendFriendRequestHandler))
 	mux.HandleFunc("POST /api/v1/friends/accept", mw.Auth(handlers.AcceptFriendRequestHandler))
 	mux.HandleFunc("POST /api/v1/friends/reject", mw.Auth(handlers.RejectFriendRequestHandler))
 	mux.HandleFunc("DELETE /api/v1/friends/request/{username}", mw.Auth(handlers.WithdrawFriendRequestHandler))
 	mux.HandleFunc("DELETE /api/v1/friends/{username}", mw.Auth(handlers.RemoveFriendHandler))
+	mux.HandleFunc("POST /api/v1/friends/block/{username}", mw.Auth(handlers.BlockUserHandler))
+	mux.HandleFunc("DELETE /api/v1/friends/block/{username}", mw.Auth(handlers.UnblockUserHandler))
+	mux.HandleFunc("GET /api/v1/friends/blocked", mw.Auth(handlers.GetBlockedUsersHandler))
 
 	// --- Matchmaking (protected) ---
 	mux.HandleFunc("POST /api/v1/match/enter", mw.Auth(handlers.EnterMatchQueueHandler))
@@ -266,6 +255,8 @@ func main() {
 	mux.HandleFunc("DELETE /api/v1/admin/badges/{badgeId}", mw.Auth(mw.BenkiAdminOnly(handlers.DeleteBadgeTierHandler)))
 	mux.HandleFunc("GET /api/v1/admin/settings/{key}", mw.Auth(mw.BenkiAdminOnly(handlers.GetAppSettingHandler)))
 	mux.HandleFunc("PATCH /api/v1/admin/settings/{key}", mw.Auth(mw.BenkiAdminOnly(handlers.UpdateAppSettingHandler)))
+	mux.HandleFunc("GET /api/v1/admin/bot", mw.Auth(mw.BenkiAdminOnly(handlers.GetBotStatusHandler)))
+	mux.HandleFunc("POST /api/v1/admin/bot", mw.Auth(mw.BenkiAdminOnly(handlers.ToggleBotHandler)))
 
 	// --- WebSocket (protected) ---
 	mux.HandleFunc("GET /ws", mw.Auth(func(w http.ResponseWriter, r *http.Request) {

@@ -33,19 +33,6 @@ type LoginResponse struct {
 
 // GoogleLoginHandler verifies a Google ID token, creates or updates the
 // user in Postgres, and returns JWT access + refresh tokens.
-//
-// @Summary		Google OAuth login
-// @Description	Verifies a Google ID token, upserts the user, and returns JWT tokens.
-// @Tags		Auth
-// @Accept		json
-// @Produce		json
-// @Param		body	body	LoginRequest	true	"Google ID token"
-// @Success		200	{object}	LoginResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Router		/auth/google [post]
 func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -110,6 +97,32 @@ func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ValidateTokenHandler is an internal endpoint for microservices to validate
+// a JWT and get the associated user ID. Protected by X-API-Key, not JWT auth.
+func ValidateTokenHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
+		JSONError(w, "token is required", http.StatusBadRequest)
+		return
+	}
+
+	claims, err := jwt.VerifyToken("Bearer " + req.Token)
+	if err != nil {
+		JSONError(w, "Invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+
+	userID, ok := claims["sub"].(string)
+	if !ok || userID == "" {
+		JSONError(w, "Invalid token claims", http.StatusUnauthorized)
+		return
+	}
+
+	JSONSuccess(w, map[string]string{"user_id": userID})
+}
+
 // ---------------------------------------------------------------------------
 // upsertUser inserts a new user or updates an existing one (matched by google_id).
 // Returns the user's UUID from Postgres.
@@ -155,17 +168,6 @@ type RefreshResponse struct {
 }
 
 // RefreshTokenHandler exchanges a valid refresh token for a new access token.
-//
-// @Summary		Refresh access token
-// @Description	Exchanges a valid refresh token for a new access token.
-// @Tags		Auth
-// @Accept		json
-// @Produce		json
-// @Param		body	body	RefreshRequest	true	"Refresh token"
-// @Success		200	{object}	RefreshResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Router		/auth/refresh [post]
 func RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	var req RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -198,19 +200,6 @@ type DeviceRegisterRequest struct {
 // RegisterDeviceHandler saves an FCM/APNs token for push notifications.
 // If the same token already exists (e.g. phone handed to a new person),
 // it re-assigns the token to the current user.
-//
-// @Summary		Register device for push notifications
-// @Description	Saves an FCM/APNs token. Re-assigns to current user if token already exists.
-// @Tags		Auth
-// @Accept		json
-// @Produce		json
-// @Param		body	body	DeviceRegisterRequest	true	"Device token info"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/auth/device [post]
 func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Get the authenticated user ID from context (set by auth middleware)
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -259,13 +248,6 @@ func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
 // GetFirebaseConfigHandler returns the public Firebase web SDK configuration.
 // This is non-sensitive data that frontends need to initialize Firebase Messaging
 // and obtain an FCM token for push notifications.
-//
-// @Summary		Get Firebase web config
-// @Description	Returns the public Firebase configuration needed by web/mobile clients.
-// @Tags		Config
-// @Produce		json
-// @Success		200	{object}	map[string]string
-// @Router		/config/firebase [get]
 func GetFirebaseConfigHandler(w http.ResponseWriter, r *http.Request) {
 	cfg, err := services.GetPublicConfig()
 	if err != nil {

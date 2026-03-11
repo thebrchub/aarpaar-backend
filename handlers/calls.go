@@ -50,14 +50,6 @@ type LKConfig struct {
 }
 
 // GetCallConfigHandler returns ICE server configuration for WebRTC P2P calls.
-//
-// @Summary		Get call configuration
-// @Description	Returns ICE (STUN/TURN) server config for WebRTC. Includes LiveKit URL if group calls are configured.
-// @Tags		Calls
-// @Produce		json
-// @Success		200	{object}	CallConfig
-// @Security	BearerAuth
-// @Router		/calls/config [get]
 func GetCallConfigHandler(w http.ResponseWriter, r *http.Request) {
 	servers := []ICEServer{
 		{URLs: "stun:stun.l.google.com:19302"},
@@ -102,18 +94,6 @@ func GetCallConfigHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // GetCallHistoryHandler returns the user's call history.
-//
-// @Summary		Get call history
-// @Description	Returns paginated call history for the authenticated user.
-// @Tags		Calls
-// @Produce		json
-// @Param		limit	query	int	false	"Max results (default 20, max 50)"
-// @Param		offset	query	int	false	"Offset for pagination (default 0)"
-// @Success		200	{array}	CallHistoryEntry
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/calls/history [get]
 func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value(config.UserIDKey).(string)
 
@@ -131,9 +111,19 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			cl.duration_seconds,
 			cl.initiated_by,
 			COALESCE(u.name, '') AS caller_name,
-			COALESCE(u.avatar_url, '') AS caller_avatar
+			COALESCE(u.avatar_url, '') AS caller_avatar,
+			COALESCE(peer.name, '') AS peer_name,
+			COALESCE(peer.avatar_url, '') AS peer_avatar
 		FROM call_logs cl
 		LEFT JOIN users u ON u.id = cl.initiated_by
+		LEFT JOIN LATERAL (
+			SELECT u2.name, u2.avatar_url
+			FROM room_members rm2
+			JOIN users u2 ON u2.id = rm2.user_id
+			WHERE rm2.room_id = cl.room_id
+			  AND rm2.user_id != $1
+			LIMIT 1
+		) peer ON true
 		WHERE cl.initiated_by = $1
 		   OR EXISTS (
 				SELECT 1 FROM room_members rm
@@ -162,6 +152,8 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		InitiatedBy  string  `json:"initiatedBy"`
 		CallerName   string  `json:"callerName"`
 		CallerAvatar string  `json:"callerAvatar"`
+		PeerName     string  `json:"peerName"`
+		PeerAvatar   string  `json:"peerAvatar"`
 	}
 
 	var calls []callEntry
@@ -171,6 +163,7 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			&c.CallID, &c.CallType, &c.Tier,
 			&c.StartedAt, &c.EndedAt, &c.Duration,
 			&c.InitiatedBy, &c.CallerName, &c.CallerAvatar,
+			&c.PeerName, &c.PeerAvatar,
 		); err != nil {
 			log.Printf("[calls] Scan call history row failed: %v", err)
 			continue
@@ -190,23 +183,6 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // StartGroupCallHandler creates a new group call.
-//
-// @Summary		Start group call
-// @Description	Starts a new group call via LiveKit SFU. Returns a token and LiveKit URL.
-// @Tags		Group Calls
-// @Accept		json
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Param		body	body	models.StartGroupCallRequest	true	"Call type (audio/video)"
-// @Success		200	{object}	models.StartGroupCallResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		409	{object}	StatusMessage	"Call already active"
-// @Failure		500	{object}	StatusMessage
-// @Failure		503	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/calls [post]
 func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -347,22 +323,6 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // JoinGroupCallHandler joins an ongoing group call.
-//
-// @Summary		Join group call
-// @Description	Joins an active group call and returns a LiveKit token.
-// @Tags		Group Calls
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Param		callId	path	string	true	"Call UUID"
-// @Success		200	{object}	models.LiveKitTokenResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Failure		503	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/calls/{callId}/join [post]
 func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -465,19 +425,6 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // LeaveGroupCallHandler leaves a group call.
-//
-// @Summary		Leave group call
-// @Description	Leaves the active group call. If last participant, the call is ended.
-// @Tags		Group Calls
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Param		callId	path	string	true	"Call UUID"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/calls/{callId}/leave [post]
 func LeaveGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -575,20 +522,6 @@ func LeaveGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetGroupCallStatusHandler returns the status of an active group call.
-//
-// @Summary		Get group call status
-// @Description	Returns participants, admins, and call duration for an active group call.
-// @Tags		Group Calls
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Param		callId	path	string	true	"Call UUID"
-// @Success		200	{object}	models.GroupCallStatusResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/calls/{callId} [get]
 func GetGroupCallStatusHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -754,23 +687,6 @@ func removeString(slice []string, s string) []string {
 }
 
 // MuteParticipantHandler mutes or unmutes a participant's track.
-//
-// @Summary		Mute/unmute participant
-// @Description	Mutes or unmutes a participant's audio, video, or screen track. Requires call admin.
-// @Tags		Group Calls
-// @Accept		json
-// @Produce		json
-// @Param		groupId	path	string						true	"Group room UUID"
-// @Param		callId	path	string						true	"Call UUID"
-// @Param		body	body	models.MuteParticipantRequest	true	"Mute details"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		503	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/calls/{callId}/mute [post]
 func MuteParticipantHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -892,23 +808,6 @@ func MuteParticipantHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // KickParticipantHandler kicks a participant from the call.
-//
-// @Summary		Kick participant
-// @Description	Removes a participant from the active group call. Requires call admin.
-// @Tags		Group Calls
-// @Accept		json
-// @Produce		json
-// @Param		groupId	path	string						true	"Group room UUID"
-// @Param		callId	path	string						true	"Call UUID"
-// @Param		body	body	models.KickParticipantRequest	true	"User to kick"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		503	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/calls/{callId}/kick [post]
 func KickParticipantHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1016,24 +915,6 @@ func KickParticipantHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // PromoteCallAdminHandler promotes a call participant to call admin.
-//
-// @Summary		Promote call admin
-// @Description	Promotes a participant to call-level admin. Requires existing call admin.
-// @Tags		Group Calls
-// @Accept		json
-// @Produce		json
-// @Param		groupId	path	string					true	"Group room UUID"
-// @Param		callId	path	string					true	"Call UUID"
-// @Param		body	body	models.CallAdminRequest	true	"User to promote"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		409	{object}	StatusMessage	"Already admin"
-// @Failure		503	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/calls/{callId}/admins [post]
 func PromoteCallAdminHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1120,21 +1001,6 @@ func PromoteCallAdminHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ForceEndCallHandler force-ends a group call.
-//
-// @Summary		Force end call
-// @Description	Force-ends an active group call. Kicks all participants. Requires call admin.
-// @Tags		Group Calls
-// @Produce		json
-// @Param		groupId	path	string	true	"Group room UUID"
-// @Param		callId	path	string	true	"Call UUID"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		503	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/groups/{groupId}/calls/{callId}/end [post]
 func ForceEndCallHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

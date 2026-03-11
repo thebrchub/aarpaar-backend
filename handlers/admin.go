@@ -13,6 +13,7 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/thebrchub/aarpaar/services"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,42 +21,33 @@ import (
 // ---------------------------------------------------------------------------
 
 // GetAdminStatsHandler returns platform-wide statistics.
-//
-// @Summary		Get platform stats
-// @Description	Returns total users, connections, rooms, groups, reports, donations. BENKI_ADMIN only.
-// @Tags		Admin
-// @Produce		json
-// @Success		200	{object}	map[string]interface{}
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/stats [get]
 func GetAdminStatsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
-	type stat struct {
-		key   string
-		query string
-	}
-
-	queries := []stat{
-		{"total_users", `SELECT COUNT(*) FROM users`},
-		{"banned_users", `SELECT COUNT(*) FROM users WHERE is_banned = true`},
-		{"total_rooms", `SELECT COUNT(*) FROM rooms`},
-		{"total_groups", `SELECT COUNT(*) FROM rooms WHERE type = 'GROUP'`},
-		{"total_reports", `SELECT COUNT(*) FROM user_reports`},
-		{"total_donations", `SELECT COALESCE(SUM(amount), 0) FROM donations`},
-		{"total_donors", `SELECT COUNT(DISTINCT user_id) FROM donations`},
-	}
+	var totalUsers, bannedUsers, totalRooms, totalGroups, totalReports, totalDonations, totalDonors float64
+	err := postgress.GetRawDB().QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM users),
+			(SELECT COUNT(*) FROM users WHERE is_banned = true),
+			(SELECT COUNT(*) FROM rooms),
+			(SELECT COUNT(*) FROM rooms WHERE type = 'GROUP'),
+			(SELECT COUNT(*) FROM user_reports),
+			(SELECT COALESCE(SUM(amount), 0) FROM donations),
+			(SELECT COUNT(DISTINCT user_id) FROM donations)
+	`).Scan(&totalUsers, &bannedUsers, &totalRooms, &totalGroups, &totalReports, &totalDonations, &totalDonors)
 
 	stats := map[string]interface{}{}
-	for _, s := range queries {
-		var val float64
-		if err := postgress.GetRawDB().QueryRowContext(ctx, s.query).Scan(&val); err != nil {
-			log.Printf("[admin] stats query failed for %s: %v", s.key, err)
-			val = 0
-		}
-		stats[s.key] = val
+	if err != nil {
+		log.Printf("[admin] stats query failed: %v", err)
+	} else {
+		stats["total_users"] = totalUsers
+		stats["banned_users"] = bannedUsers
+		stats["total_rooms"] = totalRooms
+		stats["total_groups"] = totalGroups
+		stats["total_reports"] = totalReports
+		stats["total_donations"] = totalDonations
+		stats["total_donors"] = totalDonors
 	}
 
 	// Live stats from engine
@@ -72,20 +64,6 @@ func GetAdminStatsHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // GetAdminUsersHandler returns a paginated list of users.
-//
-// @Summary		List users (admin)
-// @Description	Paginated user list with filters. BENKI_ADMIN only.
-// @Tags		Admin
-// @Produce		json
-// @Param		limit	query	int		false	"Page size (default 10, max 100)"
-// @Param		offset	query	int		false	"Offset (default 0)"
-// @Param		banned	query	bool	false	"Filter banned users only"
-// @Param		search	query	string	false	"Search by name/username"
-// @Param		sort	query	string	false	"Sort by: created_at, reports_count (default created_at)"
-// @Success		200	{object}	map[string]interface{}
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/users [get]
 func GetAdminUsersHandler(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePagination(r)
 
@@ -170,17 +148,6 @@ func GetAdminUsersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // BanUserHandler bans a user and force-disconnects them.
-//
-// @Summary		Ban user
-// @Description	Sets is_banned=true, disconnects WebSocket, removes from queue, ends calls. BENKI_ADMIN only.
-// @Tags		Admin
-// @Produce		json
-// @Param		userId	path	string	true	"User ID to ban"
-// @Success		200	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/users/{userId}/ban [post]
 func BanUserHandler(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("userId")
 	if targetID == "" {
@@ -220,17 +187,6 @@ func BanUserHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // UnbanUserHandler unbans a user.
-//
-// @Summary		Unban user
-// @Description	Sets is_banned=false. BENKI_ADMIN only.
-// @Tags		Admin
-// @Produce		json
-// @Param		userId	path	string	true	"User ID to unban"
-// @Success		200	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/users/{userId}/unban [post]
 func UnbanUserHandler(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("userId")
 	if targetID == "" {
@@ -264,18 +220,6 @@ func UnbanUserHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // GetAdminReportsHandler returns a paginated list of user reports.
-//
-// @Summary		List reports (admin)
-// @Description	Paginated reports with user details. BENKI_ADMIN only.
-// @Tags		Admin
-// @Produce		json
-// @Param		limit		query	int		false	"Page size (default 10, max 100)"
-// @Param		offset		query	int		false	"Offset (default 0)"
-// @Param		reported_id	query	string	false	"Filter by reported user ID"
-// @Success		200	{array}		map[string]interface{}
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/reports [get]
 func GetAdminReportsHandler(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePagination(r)
 
@@ -318,16 +262,6 @@ func GetAdminReportsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetAdminUserReportsHandler returns all reports against a specific user.
-//
-// @Summary		Get user reports (admin)
-// @Description	Returns all reports against a specific user. BENKI_ADMIN only.
-// @Tags		Admin
-// @Produce		json
-// @Param		userId	path	string	true	"User ID"
-// @Success		200	{array}		map[string]interface{}
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/reports/{userId} [get]
 func GetAdminUserReportsHandler(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("userId")
 	if targetID == "" {
@@ -364,16 +298,6 @@ func GetAdminUserReportsHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // CreateBadgeTierHandler creates a new badge tier.
-//
-// @Summary		Create badge tier
-// @Tags		Admin
-// @Accept		json
-// @Produce		json
-// @Success		201	{object}	map[string]interface{}
-// @Failure		400	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/badge-tiers [post]
 func CreateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name         string  `json:"name"`
@@ -408,17 +332,6 @@ func CreateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpdateBadgeTierHandler updates a badge tier.
-//
-// @Summary		Update badge tier
-// @Tags		Admin
-// @Accept		json
-// @Produce		json
-// @Param		tierId	path	string	true	"Tier ID"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/badge-tiers/{tierId} [patch]
 func UpdateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 	tierID := r.PathValue("tierId")
 	if tierID == "" {
@@ -490,15 +403,6 @@ func UpdateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteBadgeTierHandler deletes a badge tier.
-//
-// @Summary		Delete badge tier
-// @Tags		Admin
-// @Produce		json
-// @Param		tierId	path	string	true	"Tier ID"
-// @Success		200	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/badge-tiers/{tierId} [delete]
 func DeleteBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 	tierID := r.PathValue("tierId")
 	if tierID == "" {
@@ -525,15 +429,6 @@ func DeleteBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // GetAppSettingHandler returns a specific app setting.
-//
-// @Summary		Get app setting
-// @Tags		Admin
-// @Produce		json
-// @Param		key	path	string	true	"Setting key"
-// @Success		200	{object}	map[string]interface{}
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/settings/{key} [get]
 func GetAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
@@ -560,16 +455,6 @@ func GetAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpdateAppSettingHandler updates a specific app setting.
-//
-// @Summary		Update app setting
-// @Tags		Admin
-// @Accept		json
-// @Produce		json
-// @Param		key	path	string	true	"Setting key"
-// @Success		200	{object}	StatusMessage
-// @Failure		403	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/admin/settings/{key} [patch]
 func UpdateAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
@@ -612,17 +497,34 @@ func UpdateAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// BENKI_ADMIN: Bot Toggle
+// ---------------------------------------------------------------------------
+
+// GetBotStatusHandler returns the current bot enabled/disabled state.
+func GetBotStatusHandler(w http.ResponseWriter, r *http.Request) {
+	JSONSuccess(w, map[string]bool{"enabled": services.IsBotEnabled()})
+}
+
+// ToggleBotHandler enables or disables bot matchmaking at runtime.
+func ToggleBotHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		JSONError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	services.SetBotEnabled(req.Enabled)
+	log.Printf("[admin] Bot matching set to %v by BENKI_ADMIN", req.Enabled)
+	JSONSuccess(w, map[string]bool{"enabled": services.IsBotEnabled()})
+}
+
+// ---------------------------------------------------------------------------
 // Online Count (Public API)
 // ---------------------------------------------------------------------------
 
 // GetOnlineCountHandler returns the current number of online users.
-//
-// @Summary		Get online user count
-// @Description	Returns how many unique users are currently connected via WebSocket.
-// @Tags		Stats
-// @Produce		json
-// @Success		200	{object}	map[string]interface{}
-// @Router		/stats/online [get]
 func GetOnlineCountHandler(w http.ResponseWriter, r *http.Request) {
 	stats := map[string]interface{}{
 		"online_users": 0,

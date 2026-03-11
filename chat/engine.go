@@ -455,6 +455,10 @@ func (e *Engine) subscribeAndListen() {
 				config.MsgTypeCallEnd, config.MsgTypeCallMissed, config.MsgTypeCallBusy,
 				config.MsgTypeCallLeave, config.MsgTypeCallDismiss:
 				if targetUser != "" {
+					// Block enforcement for 1:1 calls
+					if senderID != "" && isBlockedPair(senderID, targetUser) {
+						continue
+					}
 					e.deliverToUser(targetUser, payload)
 				}
 
@@ -513,6 +517,13 @@ func (e *Engine) subscribeAndListen() {
 			case config.MsgTypeSendMessage:
 				// Room-level messages: deliver to everyone in the room on this server
 				if roomID != "" {
+					// Block enforcement for DM rooms: reject messages between blocked users
+					if senderID != "" && !strings.HasPrefix(roomID, config.STRANGER_PREFIX) {
+						if isBlockedInRoom(senderID, roomID) {
+							// Silently drop — sender gets no delivery, no error event
+							continue
+						}
+					}
 					e.deliverToRoom(roomID, payload)
 					// Generate delivery receipts: notify the sender that the message
 					// was delivered to online recipient(s) in this room.
@@ -642,6 +653,54 @@ func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 			log.Printf("[engine] delivery receipt buffer failed room=%s: %v", roomID, err)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Block Enforcement
+// ---------------------------------------------------------------------------
+
+// isBlockedInRoom checks if the sender is blocked by (or has blocked) any
+// other member in a DM room. For DM rooms only (2 members).
+func isBlockedInRoom(senderID, roomID string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var blocked bool
+	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM blocked_users bu
+			JOIN room_members rm ON rm.room_id = $2
+				AND rm.user_id != $1
+				AND rm.status = 'active'
+			WHERE (bu.blocker_id = $1 AND bu.blocked_id = rm.user_id)
+			   OR (bu.blocker_id = rm.user_id AND bu.blocked_id = $1)
+		)`, senderID, roomID,
+	).Scan(&blocked)
+	if err != nil {
+		log.Printf("[engine] block check failed sender=%s room=%s: %v", senderID, roomID, err)
+		return false // fail open to avoid breaking messages on DB errors
+	}
+	return blocked
+}
+
+// isBlockedPair checks if either user has blocked the other.
+func isBlockedPair(userA, userB string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var blocked bool
+	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM blocked_users
+			WHERE (blocker_id = $1 AND blocked_id = $2)
+			   OR (blocker_id = $2 AND blocked_id = $1)
+		)`, userA, userB,
+	).Scan(&blocked)
+	if err != nil {
+		log.Printf("[engine] block pair check failed a=%s b=%s: %v", userA, userB, err)
+		return false
+	}
+	return blocked
 }
 
 // ---------------------------------------------------------------------------

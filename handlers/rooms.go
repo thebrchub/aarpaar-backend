@@ -23,18 +23,6 @@ func pgCtx(r *http.Request) (context.Context, context.CancelFunc) {
 }
 
 // GetRoomsHandler returns paginated chat rooms for the authenticated user.
-//
-// @Summary		List chat rooms
-// @Description	Returns paginated chat rooms with last message preview, unread count, and members. Uses cursor-based pagination.
-// @Tags		Rooms
-// @Produce		json
-// @Param		cursor	query	string	false	"RFC 3339 timestamp to paginate from (default: now)"
-// @Param		limit	query	int		false	"Number of rooms to return (default 50, max 50)"
-// @Success		200	{array}	RoomListItem
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/rooms [get]
 func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Get the authenticated user ID from context
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -59,11 +47,10 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 		limit = parsed
 	}
 
-	// 4. Build the JSON response in Postgres.
-	//    Uses a CTE to pre-compute the user's room list, then JOINs for
-	//    last_message, unread_count, member_count and members in fewer passes
-	//    than the old 4x LATERAL approach.
-	query := `
+	// 4. Build the response in two parts:
+	//    a) rooms with member_ids (not full member objects)
+	//    b) deduplicated users map for all members across rooms
+	roomsQuery := `
 		WITH user_rooms AS (
 			SELECT rm.room_id, rm.last_read_at
 			FROM room_members rm
@@ -93,86 +80,92 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 			WHERE rm2.status = 'active'
 			GROUP BY rm2.room_id
 		),
-		members_json AS (
-			SELECT rm2.room_id, json_agg(json_build_object(
-				'id', u.id,
-				'username', u.username,
-				'name', u.name,
-				'avatar_url', COALESCE(u.avatar_url, ''),
-				'last_seen_at', CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END
-			)) AS members
+		member_ids AS (
+			SELECT rm2.room_id, json_agg(rm2.user_id) AS ids
+			FROM room_members rm2
+			JOIN user_rooms ur ON rm2.room_id = ur.room_id
+			WHERE rm2.status = 'active'
+			GROUP BY rm2.room_id
+		),
+		all_member_users AS (
+			SELECT DISTINCT u.id, u.username, u.name,
+				COALESCE(u.avatar_url, '') AS avatar_url,
+				CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END AS last_seen_at,
+				u.is_private
 			FROM room_members rm2
 			JOIN users u ON u.id = rm2.user_id
 			JOIN user_rooms ur ON rm2.room_id = ur.room_id
 			WHERE rm2.status = 'active'
-			GROUP BY rm2.room_id
 		)
-		SELECT COALESCE(json_agg(t ORDER BY t.last_message_at DESC NULLS LAST), '[]')::text
-		FROM (
-			SELECT 
-				r.id AS room_id, 
-				r.name, 
-				r.type,
-				r.avatar_url AS group_avatar,
-				COALESCE(r.created_by::text, '') AS created_by,
-				lm.content AS last_message_preview,
-				r.last_message_at,
-				COALESCE(uc.unread_count, 0) AS unread_count,
-				COALESCE(mc.member_count, 0) AS member_count,
-				COALESCE(mj.members, '[]'::json) AS members
-			FROM user_rooms ur
-			JOIN rooms r ON ur.room_id = r.id
-			LEFT JOIN last_msgs lm ON lm.room_id = r.id
-			LEFT JOIN unread uc ON uc.room_id = r.id
-			LEFT JOIN member_counts mc ON mc.room_id = r.id
-			LEFT JOIN members_json mj ON mj.room_id = r.id
-		) t;
+		SELECT
+			COALESCE((SELECT json_agg(t ORDER BY t.last_message_at DESC NULLS LAST)
+			FROM (
+				SELECT 
+					r.id AS room_id, 
+					r.name, 
+					r.type,
+					r.avatar_url AS group_avatar,
+					COALESCE(r.created_by::text, '') AS created_by,
+					lm.content AS last_message_preview,
+					r.last_message_at,
+					COALESCE(uc.unread_count, 0) AS unread_count,
+					COALESCE(mc.member_count, 0) AS member_count,
+					COALESCE(mi.ids, '[]'::json) AS member_ids
+				FROM user_rooms ur
+				JOIN rooms r ON ur.room_id = r.id
+				LEFT JOIN last_msgs lm ON lm.room_id = r.id
+				LEFT JOIN unread uc ON uc.room_id = r.id
+				LEFT JOIN member_counts mc ON mc.room_id = r.id
+				LEFT JOIN member_ids mi ON mi.room_id = r.id
+			) t), '[]'::json),
+			COALESCE((SELECT json_object_agg(amu.id, json_build_object(
+				'username', amu.username,
+				'name', amu.name,
+				'avatar_url', amu.avatar_url,
+				'last_seen_at', amu.last_seen_at,
+				'is_private', amu.is_private
+			)) FROM all_member_users amu), '{}'::json);
 	`
 
-	// 5. Execute and pipe the raw JSON bytes to the response
+	// 5. Execute — two columns: rooms JSON array + users JSON object
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	var rawJSONBytes []byte
-	err := postgress.GetRawDB().QueryRowContext(ctx, query, userID, cursor, limit).Scan(&rawJSONBytes)
+	var roomsJSON, usersJSON []byte
+	err := postgress.GetRawDB().QueryRowContext(ctx, roomsQuery, userID, cursor, limit).Scan(&roomsJSON, &usersJSON)
 	if err != nil {
 		log.Printf("[rooms] GetRooms query failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to fetch rooms", http.StatusInternalServerError)
 		return
 	}
 
-	// 6. Enrich DM room members with real-time is_online status from the engine
-	rawJSONBytes = enrichRoomsWithOnlineStatus(rawJSONBytes, userID)
+	// 6. Enrich users map with real-time is_online status
+	usersJSON = enrichUsersMapWithOnlineStatus(usersJSON, userID)
 
-	// 7. Send directly to the client — zero struct allocations
+	// 7. Build final response: {"rooms": [...], "users": {...}}
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-	w.Write(rawJSONBytes)
+	w.Write([]byte(`{"rooms":`))
+	w.Write(roomsJSON)
+	w.Write([]byte(`,"users":`))
+	w.Write(usersJSON)
+	w.Write([]byte(`}`))
 }
 
 // CreateDMHandler creates a new DM room between two users.
 // If a DM room already exists between them, returns the existing room.
 //
-// @Summary		Create or get DM room
-// @Description	Creates a DM room with the target user. Returns existing room if one already exists. Private accounts get a pending DM request.
-// @Tags		Rooms
-// @Accept		json
-// @Produce		json
-// @Param		body	body	CreateDMRequest	true	"Target username"
-// @Success		200	{object}	CreateDMFullResponse
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/rooms [post]
 
 type CreateDMRequest struct {
 	Username string `json:"username"`
 }
 
 type CreateDMResponse struct {
-	RoomID   string `json:"room_id"`
-	Existing bool   `json:"existing"`
+	RoomID         string `json:"room_id"`
+	Existing       bool   `json:"existing"`
+	Pending        bool   `json:"pending,omitempty"`
+	TargetName     string `json:"target_name"`
+	TargetUsername string `json:"target_username"`
+	TargetAvatar   string `json:"target_avatar_url"`
 }
 
 func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
@@ -196,9 +189,10 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 	// Resolve username to UUID + check privacy (initial check, re-verified under FOR UPDATE below)
 	var targetUserID string
 	var targetIsPrivate bool
+	var targetName, targetAvatar string
 	err := postgress.GetRawDB().QueryRow(
-		`SELECT id, is_private FROM users WHERE username = $1 AND is_banned = false`, req.Username,
-	).Scan(&targetUserID, &targetIsPrivate)
+		`SELECT id, is_private, COALESCE(name,''), COALESCE(avatar_url,'') FROM users WHERE username = $1 AND is_banned = false`, req.Username,
+	).Scan(&targetUserID, &targetIsPrivate, &targetName, &targetAvatar)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			JSONError(w, "User not found", http.StatusNotFound)
@@ -243,7 +237,13 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 	var existingRoomID string
 	err = postgress.GetRawDB().QueryRow(existingQuery, userID, targetUserID).Scan(&existingRoomID)
 	if err == nil && existingRoomID != "" {
-		JSONSuccess(w, CreateDMResponse{RoomID: existingRoomID, Existing: true})
+		JSONSuccess(w, CreateDMResponse{
+			RoomID:         existingRoomID,
+			Existing:       true,
+			TargetName:     targetName,
+			TargetUsername: req.Username,
+			TargetAvatar:   targetAvatar,
+		})
 		return
 	}
 	if err != nil && err != sql.ErrNoRows {
@@ -377,11 +377,76 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
-	JSONSuccess(w, map[string]interface{}{
-		"room_id":  roomID,
-		"existing": false,
-		"pending":  isPending,
+	JSONSuccess(w, CreateDMResponse{
+		RoomID:         roomID,
+		Existing:       false,
+		Pending:        isPending,
+		TargetName:     targetName,
+		TargetUsername: req.Username,
+		TargetAvatar:   targetAvatar,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// enrichUsersMapWithOnlineStatus enriches the deduplicated users JSON map
+// (from GetRoomsHandler) with is_online. The map is keyed by user ID.
+// Only friends and non-private users get is_online = true visibility.
+// ---------------------------------------------------------------------------
+
+func enrichUsersMapWithOnlineStatus(raw []byte, currentUserID string) []byte {
+	e := chat.GetEngine()
+	if e == nil {
+		return raw
+	}
+
+	type userEntry struct {
+		Username  string  `json:"username"`
+		Name      string  `json:"name"`
+		AvatarURL string  `json:"avatar_url"`
+		LastSeen  *string `json:"last_seen_at,omitempty"`
+		IsPrivate bool    `json:"is_private"`
+		IsOnline  bool    `json:"is_online"`
+	}
+
+	var users map[string]userEntry
+	if err := json.Unmarshal(raw, &users); err != nil {
+		return raw
+	}
+	if len(users) == 0 {
+		return raw
+	}
+
+	// Build friend set for privacy filtering
+	friendSet := make(map[string]bool)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	friendRows, err := postgress.GetRawDB().QueryContext(ctx,
+		`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
+		 UNION ALL
+		 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`, currentUserID,
+	)
+	if err == nil {
+		for friendRows.Next() {
+			var fid string
+			if friendRows.Scan(&fid) == nil {
+				friendSet[fid] = true
+			}
+		}
+		friendRows.Close()
+	}
+
+	for uid, u := range users {
+		if uid == currentUserID || friendSet[uid] || !u.IsPrivate {
+			u.IsOnline = e.IsUserOnline(uid)
+			users[uid] = u
+		}
+	}
+
+	enriched, err := json.Marshal(users)
+	if err != nil {
+		return raw
+	}
+	return enriched
 }
 
 // ---------------------------------------------------------------------------

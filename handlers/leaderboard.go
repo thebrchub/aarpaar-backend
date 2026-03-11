@@ -14,23 +14,13 @@ import (
 // ---------------------------------------------------------------------------
 
 // GetLeaderboardHandler returns top donors.
-//
-// @Summary		Get donation leaderboard
-// @Description	Returns top donors. Scope can be "alltime" or "monthly" (uses leaderboard_config from app_settings for reset day).
-// @Tags		Leaderboard
-// @Produce		json
-// @Param		scope	query	string	false	"alltime or monthly (default alltime)"
-// @Param		limit	query	int		false	"Number of entries (default 10, max 100)"
-// @Success		200	{array}		map[string]interface{}
-// @Failure		500	{object}	StatusMessage
-// @Router		/leaderboard [get]
 func GetLeaderboardHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 	if scope != "monthly" {
 		scope = "alltime"
 	}
 
-	limit, _ := parsePagination(r) // we only need limit, offset unused
+	limit, offset := parsePagination(r)
 
 	ctx, cancel := pgCtx(r)
 	defer cancel()
@@ -63,11 +53,11 @@ func GetLeaderboardHandler(w http.ResponseWriter, r *http.Request) {
 		WHERE 1=1 %s
 		GROUP BY d.user_id, u.name, u.avatar_url
 		ORDER BY total_donated DESC
-		LIMIT $1
+		LIMIT $1 OFFSET $2
 	) t`, dateFilter)
 
 	var raw []byte
-	if err := postgress.GetRawDB().QueryRowContext(ctx, query, limit).Scan(&raw); err != nil {
+	if err := postgress.GetRawDB().QueryRowContext(ctx, query, limit, offset).Scan(&raw); err != nil {
 		log.Printf("[leaderboard] query failed scope=%s: %v", scope, err)
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
