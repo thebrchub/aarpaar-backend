@@ -813,7 +813,7 @@
   <h1>Aarpaar Test Console</h1>
   <div class="sep"></div>
   <label>API Base URL</label>
-  <input type="text" id="baseUrl" value="https://aarpaar-api.brchub.me" />
+  <input type="text" id="baseUrl" value="https://api.zquab.com" />
   <div class="health-badge" onclick="checkHealth()" title="Click to check">
     <span class="health-dot" id="healthDot"></span>
     <span id="healthText">Check Health</span>
@@ -1102,7 +1102,7 @@
       <div class="card">
         <h3><span class="badge badge-get">GET</span> My Rooms (Paginated)</h3>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-          <code>/api/v1/rooms?cursor=&amp;limit=50</code> — Cursor-based paginated room list. Each room includes a <code>members</code> array of {id, username, name}.
+          <code>/api/v1/rooms?cursor=&amp;limit=50</code> — Cursor-based paginated room list. Returns <code>{rooms: [...], users: {...}}</code> with deduplicated user map.
         </p>
         <div class="inline-form">
           <div class="form-row">
@@ -1206,9 +1206,19 @@
       <div class="card">
         <h3><span class="badge badge-get">GET</span> My Friends</h3>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
-          <code>/api/v1/friends</code> — List all your friends.
+          <code>/api/v1/friends?limit=&amp;offset=</code> — Paginated friend list.
         </p>
-        <button class="btn btn-primary" onclick="getFriends()">Fetch Friends</button>
+        <div class="inline-form">
+          <div class="form-row" style="max-width:100px">
+            <label>Limit</label>
+            <input type="number" id="friendsLimit" value="20" min="1" max="100" />
+          </div>
+          <div class="form-row" style="max-width:100px">
+            <label>Offset</label>
+            <input type="number" id="friendsOffset" value="0" min="0" />
+          </div>
+          <button class="btn btn-primary" onclick="getFriends()">Fetch Friends</button>
+        </div>
         <div id="friendsList" class="scroll-box" style="margin-top:14px"></div>
         <div id="friendsResponse" class="response-panel hidden"></div>
       </div>
@@ -1272,6 +1282,63 @@
         </div>
         <div id="friendActionResponse" class="response-panel hidden"></div>
       </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Search Friends -->
+      <div class="card">
+        <h3><span class="badge badge-get">GET</span> Search Friends</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/friends/search?q=</code> — Search within your friend list.
+        </p>
+        <div class="inline-form">
+          <div class="form-row">
+            <label>Search Query</label>
+            <input type="text" id="friendSearchQuery" placeholder="Name or username..." />
+          </div>
+          <button class="btn btn-primary" onclick="searchFriends()">Search</button>
+        </div>
+        <div id="friendSearchList" class="scroll-box" style="margin-top:14px"></div>
+        <div id="friendSearchResponse" class="response-panel hidden"></div>
+      </div>
+
+      <!-- Block / Unblock -->
+      <div class="card">
+        <h3><span class="badge badge-post">POST</span> Block / Unblock User</h3>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+          <code>/api/v1/friends/block/{username}</code> — Block removes friendship &amp; pending requests. Unblock only removes your own block.
+        </p>
+        <div class="form-row">
+          <label>Username</label>
+          <input type="text" id="blockUsername" placeholder="Username to block/unblock..." />
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-danger" onclick="blockUser()">Block</button>
+          <button class="btn btn-success" onclick="unblockUser()">Unblock</button>
+        </div>
+        <div id="blockActionResponse" class="response-panel hidden"></div>
+      </div>
+    </div>
+
+    <!-- Blocked Users List -->
+    <div class="card">
+      <h3><span class="badge badge-get">GET</span> Blocked Users</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+        <code>/api/v1/friends/blocked</code> — Users you have blocked.
+      </p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:100px">
+          <label>Limit</label>
+          <input type="number" id="blockedLimit" value="20" min="1" max="100" />
+        </div>
+        <div class="form-row" style="max-width:100px">
+          <label>Offset</label>
+          <input type="number" id="blockedOffset" value="0" min="0" />
+        </div>
+        <button class="btn btn-primary" onclick="getBlockedUsers()">Fetch</button>
+      </div>
+      <div id="blockedUsersList" class="scroll-box" style="margin-top:14px"></div>
+      <div id="blockedUsersResponse" class="response-panel hidden"></div>
     </div>
   </div>
 
@@ -2091,6 +2158,10 @@
           <label>Limit</label>
           <input type="number" id="lbLimit" value="10" min="1" max="100" />
         </div>
+        <div class="form-row" style="max-width:100px">
+          <label>Offset</label>
+          <input type="number" id="lbOffset" value="0" min="0" />
+        </div>
         <button class="btn btn-primary" onclick="getLeaderboard()">Fetch Leaderboard</button>
       </div>
       <div id="leaderboardResult" class="scroll-box" style="margin-top:14px"></div>
@@ -2263,6 +2334,21 @@
         </div>
         <div id="adminBadgeEditResponse" class="response-panel hidden"></div>
       </div>
+    </div>
+
+    <hr class="divider" />
+    <h3 style="margin-bottom:12px;font-size:.9rem">Bot Management</h3>
+    <div class="card">
+      <h3><span class="badge badge-get">GET / POST</span> Bot Toggle</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+        <code>/api/v1/admin/bot</code> — Get or toggle bot matchmaking at runtime.
+      </p>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="adminGetBotStatus()">Get Status</button>
+        <button class="btn btn-success" onclick="adminToggleBot(true)">Enable Bot</button>
+        <button class="btn btn-danger" onclick="adminToggleBot(false)">Disable Bot</button>
+      </div>
+      <div id="adminBotResponse" class="response-panel hidden"></div>
     </div>
 
     <hr class="divider" />
@@ -2976,9 +3062,16 @@ async function getRooms() {
 
   const r = await apiCall('GET', path, null, 'roomsResponse');
   const el = document.getElementById('roomList');
-  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
-    el.innerHTML = r.data.map(rm => {
-      const members = (rm.members || []).map(m => escapeHtml(m.name || m.username || m.id)).join(', ');
+  // New response shape: { rooms: [...], users: {...} }
+  const rooms = r.data?.rooms || (Array.isArray(r.data) ? r.data : []);
+  const usersMap = r.data?.users || {};
+  if (rooms.length > 0) {
+    el.innerHTML = rooms.map(rm => {
+      const memberIds = rm.member_ids || [];
+      const members = memberIds.map(mid => {
+        const u = usersMap[mid];
+        return u ? escapeHtml(u.name || u.username || mid) : escapeHtml(mid.substring(0, 8));
+      }).join(', ');
       return `
       <div class="room-item" onclick="document.getElementById('msgRoomId').value='${escapeHtml(rm.room_id)}';document.getElementById('wsRoomId').value='${escapeHtml(rm.room_id)}';document.getElementById('wsMsgRoomId').value='${escapeHtml(rm.room_id)}';wsMarkRead('${escapeHtml(rm.room_id)}');toast('Room ID set in message & WS fields','info');">
         <div class="room-info">
@@ -2993,7 +3086,7 @@ async function getRooms() {
       </div>`;
     }).join('');
     // Set cursor for next page
-    const lastRoom = r.data[r.data.length - 1];
+    const lastRoom = rooms[rooms.length - 1];
     if (lastRoom && lastRoom.last_message_at) document.getElementById('roomsCursor').value = lastRoom.last_message_at;
   } else {
     el.innerHTML = '<div class="empty-state">No rooms found</div>';
@@ -3716,7 +3809,9 @@ window.addEventListener('load', function() {
 //  FRIENDS
 // ======================================================================
 async function getFriends() {
-  const r = await apiCall('GET', '/api/v1/friends', null, 'friendsResponse');
+  const limit = document.getElementById('friendsLimit')?.value || 20;
+  const offset = document.getElementById('friendsOffset')?.value || 0;
+  const r = await apiCall('GET', '/api/v1/friends?limit=' + limit + '&offset=' + offset, null, 'friendsResponse');
   const el = document.getElementById('friendsList');
   if (r.data && Array.isArray(r.data) && r.data.length > 0) {
     el.innerHTML = r.data.map(f => {
@@ -3802,6 +3897,68 @@ async function removeFriend() {
   if (r.status >= 200 && r.status < 300) { toast('Friend removed', 'info'); getFriends(); }
 }
 
+async function searchFriends() {
+  const q = document.getElementById('friendSearchQuery').value.trim();
+  if (!q) return toast('Enter a search term', 'error');
+  const r = await apiCall('GET', '/api/v1/friends/search?q=' + encodeURIComponent(q), null, 'friendSearchResponse');
+  const el = document.getElementById('friendSearchList');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = r.data.map(f => {
+      const isOnline = f.is_online === true;
+      return `<div class="req-item">
+        <div class="req-info">
+          <img src="${escapeHtml(f.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(f.name || 'U'))}" alt="" />
+          <div>
+            <div class="req-name"><span class="presence-dot ${isOnline ? 'online' : 'offline'}" style="margin-right:5px"></span>${escapeHtml(f.name || 'Unknown')} <span style="color:var(--text-muted)">@${escapeHtml(f.username || '')}</span></div>
+          </div>
+        </div>
+        <div class="req-actions">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('dmUsername').value='${escapeHtml(f.username || '')}'; document.querySelector('[data-tab=rooms]').click();">DM</button>
+        </div>
+      </div>`;
+    }).join('');
+  } else {
+    el.innerHTML = '<div class="empty-state">No matching friends</div>';
+  }
+}
+
+async function blockUser() {
+  const username = document.getElementById('blockUsername').value.trim();
+  if (!username) return toast('Enter a username', 'error');
+  const r = await apiCall('POST', '/api/v1/friends/block/' + encodeURIComponent(username), null, 'blockActionResponse');
+  if (r.status >= 200 && r.status < 300) { toast('User blocked', 'success'); getFriends(); }
+}
+
+async function unblockUser() {
+  const username = document.getElementById('blockUsername').value.trim();
+  if (!username) return toast('Enter a username', 'error');
+  const r = await apiCall('DELETE', '/api/v1/friends/block/' + encodeURIComponent(username), null, 'blockActionResponse');
+  if (r.status >= 200 && r.status < 300) { toast('User unblocked', 'success'); getBlockedUsers(); }
+}
+
+async function getBlockedUsers() {
+  const limit = document.getElementById('blockedLimit')?.value || 20;
+  const offset = document.getElementById('blockedOffset')?.value || 0;
+  const r = await apiCall('GET', '/api/v1/friends/blocked?limit=' + limit + '&offset=' + offset, null, 'blockedUsersResponse');
+  const el = document.getElementById('blockedUsersList');
+  if (r.data && Array.isArray(r.data) && r.data.length > 0) {
+    el.innerHTML = r.data.map(u => `<div class="req-item">
+      <div class="req-info">
+        <img src="${escapeHtml(u.avatar_url || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(u.name || 'U'))}" alt="" />
+        <div>
+          <div class="req-name">${escapeHtml(u.name || 'Unknown')} <span style="color:var(--text-muted)">@${escapeHtml(u.username || '')}</span></div>
+          <div class="req-meta">Blocked ${u.blocked_at ? new Date(u.blocked_at).toLocaleDateString() : ''}</div>
+        </div>
+      </div>
+      <div class="req-actions">
+        <button class="btn btn-success btn-sm" onclick="document.getElementById('blockUsername').value='${escapeHtml(u.username || '')}'; unblockUser();">Unblock</button>
+      </div>
+    </div>`).join('');
+  } else {
+    el.innerHTML = '<div class="empty-state">No blocked users</div>';
+  }
+}
+
 // ======================================================================
 //  DM REQUESTS
 // ======================================================================
@@ -3853,7 +4010,8 @@ const chatState = {
   dmRequests: [],
   activeRoomId: null,
   messages: {},          // roomId → [msg objects]
-  roomMeta: {},          // roomId → {name, type, unread, members}
+  roomMeta: {},          // roomId → {name, type, unread, member_ids}
+  usersMap: {},          // userId → {id, name, username, avatar_url, is_online, ...}
   typingUsers: {},       // roomId → {userId: timeoutId}
   myTypingTimeout: null,
   amITyping: false,
@@ -3899,8 +4057,11 @@ async function chatLoadRooms() {
       if (f.id) chatState.friends[f.id] = f;
     });
 
-    // Rooms — backend returns them sorted by last_message_at DESC, with members included
-    chatState.rooms = Array.isArray(roomsRaw) ? roomsRaw : (roomsRaw.data || []);
+    // Rooms — backend returns {rooms: [...], users: {...}} with member_ids
+    const roomsData = roomsRaw?.rooms || roomsRaw?.data || (Array.isArray(roomsRaw) ? roomsRaw : []);
+    const usersMap = roomsRaw?.users || {};
+    chatState.rooms = roomsData;
+    chatState.usersMap = usersMap;
 
     // Track pagination cursor
     chatState.hasMoreRooms = chatState.rooms.length >= 50;
@@ -3913,16 +4074,17 @@ async function chatLoadRooms() {
 
     chatState.rooms.forEach(rm => {
       let resolvedName = rm.name || null;
-      // For DM rooms, resolve name directly from the members array
-      if (rm.type === 'DM' && !resolvedName && rm.members && rm.members.length > 0 && myId) {
-        const other = rm.members.find(m => m.id !== myId);
+      // For DM rooms, resolve name from member_ids + usersMap
+      if (rm.type === 'DM' && !resolvedName && rm.member_ids && rm.member_ids.length > 0 && myId) {
+        const otherId = rm.member_ids.find(id => id !== myId);
+        const other = otherId ? usersMap[otherId] : null;
         if (other) resolvedName = other.name || other.username;
       }
       chatState.roomMeta[rm.room_id] = {
         name: resolvedName || rm.room_id.substring(0, 8),
         type: rm.type,
         unread: rm.unread_count || 0,
-        members: rm.members || []
+        member_ids: rm.member_ids || []
       };
     });
 
@@ -3948,19 +4110,23 @@ async function chatLoadMoreRooms() {
   try {
     const resp = await fetch(base() + '/api/v1/rooms?cursor=' + encodeURIComponent(chatState.roomsCursor) + '&limit=50', { headers: authHeaders() });
     const roomsRaw = await resp.json();
-    const newRooms = Array.isArray(roomsRaw) ? roomsRaw : (roomsRaw.data || []);
+    const newRooms = roomsRaw?.rooms || roomsRaw?.data || (Array.isArray(roomsRaw) ? roomsRaw : []);
+    const usersMap = roomsRaw?.users || {};
+    // Merge new users into chatState
+    Object.assign(chatState.usersMap || {}, usersMap);
 
     newRooms.forEach(rm => {
       let resolvedName = rm.name || null;
-      if (rm.type === 'DM' && !resolvedName && rm.members && rm.members.length > 0 && myId) {
-        const other = rm.members.find(m => m.id !== myId);
+      if (rm.type === 'DM' && !resolvedName && rm.member_ids && rm.member_ids.length > 0 && myId) {
+        const otherId = rm.member_ids.find(id => id !== myId);
+        const other = otherId ? (chatState.usersMap || {})[otherId] : null;
         if (other) resolvedName = other.name || other.username;
       }
       chatState.roomMeta[rm.room_id] = {
         name: resolvedName || rm.room_id.substring(0, 8),
         type: rm.type,
         unread: rm.unread_count || 0,
-        members: rm.members || []
+        member_ids: rm.member_ids || []
       };
     });
 
@@ -4023,11 +4189,12 @@ function chatRenderSidebar() {
     // Presence for DM rooms
     const myId = currentUserProfile?.id;
     let presenceHtml = '';
-    if (rm.type === 'DM' && rm.members && myId) {
-      const other = rm.members.find(m => m.id !== myId);
+    if (rm.type === 'DM' && rm.member_ids && myId) {
+      const otherId = rm.member_ids.find(id => id !== myId);
+      const other = otherId ? (chatState.usersMap || {})[otherId] : null;
       if (other) {
         const isOn = other.is_online === true;
-        presenceHtml = '<span class="presence-dot ' + (isOn ? 'online' : 'offline') + '" id="chatPresence_' + other.id + '" style="position:absolute;bottom:0;right:0;border:2px solid var(--surface)"></span>';
+        presenceHtml = '<span class="presence-dot ' + (isOn ? 'online' : 'offline') + '" id="chatPresence_' + otherId + '" style="position:absolute;bottom:0;right:0;border:2px solid var(--surface)"></span>';
       }
     }
     const isGroup = rm.type === 'GROUP';
@@ -4434,11 +4601,10 @@ function chatHandleIncomingMessage(parsed) {
   if (!chatState.messages[roomId]) chatState.messages[roomId] = [];
   chatState.messages[roomId].push(msg);
 
-  // Resolve DM room name from members if not yet resolved
+  // Resolve DM room name from member_ids if not yet resolved
   if (parsed.from && chatState.roomMeta[roomId]?.type === 'DM'
       && chatState.roomMeta[roomId].name === roomId.substring(0, 8)) {
-    const members = chatState.roomMeta[roomId].members || [];
-    const sender = members.find(m => m.id === parsed.from);
+    const sender = (chatState.usersMap || {})[parsed.from];
     if (sender) {
       chatUpdateRoomName(roomId, sender.name || sender.username);
     }
@@ -4619,27 +4785,23 @@ function chatHandlePresence(parsed, isOnline) {
     const meta = chatState.roomMeta[chatState.activeRoomId];
     if (meta && meta.type === 'DM') {
       const myId = currentUserProfile?.id;
-      const other = (meta.members || []).find(m => m.id !== myId);
-      if (other && other.id === userId) {
-        // Update the member's cached online status
-        other.is_online = isOnline;
-        if (!isOnline && parsed.lastSeenAt) other.last_seen_at = parsed.lastSeenAt;
+      const otherId = (meta.member_ids || []).find(id => id !== myId);
+      if (otherId && otherId === userId) {
+        // Update the user's cached online status in usersMap
+        const other = (chatState.usersMap || {})[otherId];
+        if (other) {
+          other.is_online = isOnline;
+          if (!isOnline && parsed.lastSeenAt) other.last_seen_at = parsed.lastSeenAt;
+        }
         chatUpdateHeaderPresence(chatState.activeRoomId);
       }
     }
   }
 
-  // Also update cached room members for sidebar re-renders
-  for (const roomId in chatState.roomMeta) {
-    const meta = chatState.roomMeta[roomId];
-    if (meta && meta.members) {
-      meta.members.forEach(m => {
-        if (m.id === userId) {
-          m.is_online = isOnline;
-          if (!isOnline && parsed.lastSeenAt) m.last_seen_at = parsed.lastSeenAt;
-        }
-      });
-    }
+  // Also update cached usersMap for sidebar re-renders
+  if (chatState.usersMap && chatState.usersMap[userId]) {
+    chatState.usersMap[userId].is_online = isOnline;
+    if (!isOnline && parsed.lastSeenAt) chatState.usersMap[userId].last_seen_at = parsed.lastSeenAt;
   }
 }
 
@@ -4648,13 +4810,14 @@ function chatUpdateHeaderPresence(roomId) {
   const meta = chatState.roomMeta[roomId];
   if (!meta || meta.type !== 'DM') return;
   const myId = currentUserProfile?.id;
-  const other = (meta.members || []).find(m => m.id !== myId);
-  if (!other) return;
+  const otherId = (meta.member_ids || []).find(id => id !== myId);
+  if (!otherId) return;
+  const other = (chatState.usersMap || {})[otherId];
 
   // Check real-time presence from presenceMap first, then fall back to REST data
-  const presInfo = presenceMap[other.id];
-  const isOnline = presInfo ? presInfo.online : (other.is_online === true);
-  const lastSeenAt = presInfo?.lastSeenAt || other.last_seen_at;
+  const presInfo = presenceMap[otherId];
+  const isOnline = presInfo ? presInfo.online : (other?.is_online === true);
+  const lastSeenAt = presInfo?.lastSeenAt || other?.last_seen_at;
 
   const typingEl = document.getElementById('chatTypingIndicator');
   // Only show presence when not typing
@@ -4769,9 +4932,14 @@ async function loadCallHistory() {
       const icon = c.callType === 'video' ? '📹' : '📞';
       const dur = c.durationSeconds ? formatDuration(c.durationSeconds) : '—';
       const time = new Date(c.startedAt).toLocaleString();
-      return `<div style="padding:8px 12px;border-bottom:1px solid var(--border);font-size:.82rem">
-        <div>${arrow} ${icon} <strong>${c.callerName || c.initiatedBy?.substring(0,8)}</strong></div>
-        <div style="color:var(--text-muted);font-size:.72rem">${time} · Duration: ${dur} · ${c.tier}</div>
+      const peerDisplay = c.peerName || c.callerName || c.initiatedBy?.substring(0,8);
+      const peerAvatarUrl = c.peerAvatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(peerDisplay || 'U');
+      return `<div style="padding:8px 12px;border-bottom:1px solid var(--border);font-size:.82rem;display:flex;align-items:center;gap:8px">
+        <img src="${escapeHtml(peerAvatarUrl)}" style="width:28px;height:28px;border-radius:50%" />
+        <div>
+          <div>${arrow} ${icon} <strong>${escapeHtml(peerDisplay)}</strong></div>
+          <div style="color:var(--text-muted);font-size:.72rem">${time} · Duration: ${dur} · ${c.tier}</div>
+        </div>
       </div>`;
     }).join('');
     toast('Loaded ' + calls.length + ' call records', 'success');
@@ -4850,11 +5018,12 @@ async function callFetchIceConfig() {
 // ---- Get peer info from active room ----
 function callGetPeerFromRoom(roomId) {
   const meta = chatState.roomMeta[roomId];
-  if (!meta || !meta.members) return null;
+  if (!meta || !meta.member_ids) return null;
   const myId = currentUserProfile?.id;
-  const other = meta.members.find(m => m.id !== myId);
-  if (!other) return null;
-  return { id: other.id, name: other.name || other.username || other.id.substring(0, 8) };
+  const otherId = meta.member_ids.find(id => id !== myId);
+  if (!otherId) return null;
+  const other = (chatState.usersMap || {})[otherId];
+  return { id: otherId, name: other?.name || other?.username || otherId.substring(0, 8) };
 }
 
 // ---- Start a call (from chat header buttons) ----
@@ -5116,13 +5285,8 @@ function callHandleRing(parsed) {
   // Resolve caller name
   let callerName = parsed.from;
   // Try to find from any room meta
-  for (const rid in chatState.roomMeta) {
-    const meta = chatState.roomMeta[rid];
-    if (meta && meta.members) {
-      const member = meta.members.find(m => m.id === parsed.from);
-      if (member) { callerName = member.name || member.username || callerName; break; }
-    }
-  }
+  const callerUser = (chatState.usersMap || {})[parsed.from];
+  if (callerUser) { callerName = callerUser.name || callerUser.username || callerName; }
 
   callState.peerName = callerName;
 
@@ -5914,12 +6078,9 @@ function gcallUpdateParticipantCount() {
 function gcallShowIncomingPopup(roomId, callId, callType, initiatorId) {
   const gName = chatState.roomMeta[roomId]?.name || 'Group';
   let initiatorName = initiatorId;
-  // Try to resolve initiator name from room members
-  const meta = chatState.roomMeta[roomId];
-  if (meta && meta.members) {
-    const m = meta.members.find(x => x.id === initiatorId);
-    if (m) initiatorName = m.name || m.username || initiatorId;
-  }
+  // Try to resolve initiator name from usersMap
+  const initiatorUser = (chatState.usersMap || {})[initiatorId];
+  if (initiatorUser) initiatorName = initiatorUser.name || initiatorUser.username || initiatorId;
 
   gcallIncomingData = { roomId, callId, callType, initiatorId };
   document.getElementById('gcallIncomingName').textContent = gName;
@@ -6114,7 +6275,8 @@ async function getBadgeTiers() {
 async function getLeaderboard() {
   const scope = document.getElementById('lbScope').value || 'alltime';
   const limit = document.getElementById('lbLimit').value || 10;
-  const r = await apiCall('GET', '/api/v1/leaderboard?scope=' + scope + '&limit=' + limit, null, 'leaderboardResponse');
+  const offset = document.getElementById('lbOffset').value || 0;
+  const r = await apiCall('GET', '/api/v1/leaderboard?scope=' + scope + '&limit=' + limit + '&offset=' + offset, null, 'leaderboardResponse');
   const el = document.getElementById('leaderboardResult');
   if (r.data && Array.isArray(r.data) && r.data.length > 0) {
     el.innerHTML = '<table style="width:100%;font-size:.78rem;border-collapse:collapse"><thead><tr style="text-align:left;border-bottom:1px solid var(--border)"><th>#</th><th>User</th><th>Total Donated</th><th>Donations</th></tr></thead><tbody>'
@@ -6160,6 +6322,17 @@ async function joinByVanitySlug() {
 // ======================================================================
 async function adminGetStats() {
   await apiCall('GET', '/api/v1/admin/stats', null, 'adminStatsResponse');
+}
+
+async function adminGetBotStatus() {
+  await apiCall('GET', '/api/v1/admin/bot', null, 'adminBotResponse');
+}
+
+async function adminToggleBot(enabled) {
+  const r = await apiCall('POST', '/api/v1/admin/bot', { enabled }, 'adminBotResponse');
+  if (r.status >= 200 && r.status < 300) {
+    toast('Bot ' + (enabled ? 'enabled' : 'disabled'), 'success');
+  }
 }
 
 async function adminGetUsers() {
