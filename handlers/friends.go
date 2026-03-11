@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -17,19 +18,6 @@ import (
 // SendFriendRequestHandler sends a friend request to a user.
 // If the target already sent us a request, auto-accepts (mutual).
 //
-// @Summary		Send friend request
-// @Description	Creates a friend request. Auto-accepts if reversed request exists (mutual).
-// @Tags		Friends
-// @Accept		json
-// @Produce		json
-// @Param		body	body	FriendRequestBody	true	"Target username"
-// @Success		200	{object}	StatusMessage	"status is 'pending', 'accepted', or 'already_friends'"
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/friends/request [post]
 
 type FriendRequestBody struct {
 	Username string `json:"username"`
@@ -172,19 +160,6 @@ func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 // AcceptFriendRequestHandler accepts a pending friend request.
 //
-// @Summary		Accept friend request
-// @Description	Accepts a pending friend request and creates a friendship.
-// @Tags		Friends
-// @Accept		json
-// @Produce		json
-// @Param		body	body	FriendRequestBody	true	"Sender's username"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/friends/accept [post]
 
 func AcceptFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -200,19 +175,13 @@ func AcceptFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var senderID string
-	if err := postgress.GetRawDB().QueryRow(
-		`SELECT id FROM users WHERE username = $1`, body.Username,
-	).Scan(&senderID); err != nil || senderID == "" {
-		JSONError(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	// Find the pending request where sender=them, receiver=me
 	var reqID int64
 	err := postgress.GetRawDB().QueryRow(
-		`SELECT id FROM friend_requests WHERE sender_id = $1 AND receiver_id = $2 AND status = $3`,
-		senderID, userID, config.FriendReqPending,
-	).Scan(&reqID)
+		`SELECT fr.sender_id, fr.id FROM friend_requests fr
+		 JOIN users u ON u.id = fr.sender_id
+		 WHERE u.username = $1 AND fr.receiver_id = $2 AND fr.status = $3`,
+		body.Username, userID, config.FriendReqPending,
+	).Scan(&senderID, &reqID)
 	if err != nil {
 		JSONError(w, "No pending friend request from this user", http.StatusNotFound)
 		return
@@ -223,19 +192,6 @@ func AcceptFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 // RejectFriendRequestHandler rejects a pending friend request.
 //
-// @Summary		Reject friend request
-// @Description	Rejects a pending friend request.
-// @Tags		Friends
-// @Accept		json
-// @Produce		json
-// @Param		body	body	FriendRequestBody	true	"Sender's username"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/friends/reject [post]
 
 func RejectFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -277,19 +233,6 @@ func RejectFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // WithdrawFriendRequestHandler withdraws a pending friend request sent by the caller.
-//
-// @Summary		Withdraw friend request
-// @Description	Withdraws a pending outgoing friend request.
-// @Tags		Friends
-// @Produce		json
-// @Param		username	path	string	true	"Target user's username"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/friends/request/{username} [delete]
 func WithdrawFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -336,15 +279,6 @@ func WithdrawFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetFriendsHandler returns the authenticated user's friends list.
 //
-// @Summary		List friends
-// @Description	Returns all friends with online status and last seen info.
-// @Tags		Friends
-// @Produce		json
-// @Success		200	{array}	FriendItem
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/friends [get]
 
 func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -352,6 +286,8 @@ func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+
+	limit, offset := parsePagination(r)
 
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
@@ -366,11 +302,12 @@ func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 			WHERE (f.user_id_1 = $1 OR f.user_id_2 = $1)
 			  AND u.is_banned = false
 			ORDER BY u.name
+			LIMIT $2 OFFSET $3
 		) t
 	`
 
 	var raw []byte
-	err := postgress.GetRawDB().QueryRow(query, userID).Scan(&raw)
+	err := postgress.GetRawDB().QueryRow(query, userID, limit, offset).Scan(&raw)
 	if err != nil {
 		log.Printf("[friends] GetFriends query failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to fetch friends", http.StatusInternalServerError)
@@ -385,18 +322,57 @@ func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(raw)
 }
 
+// SearchFriendsHandler searches friends by name or username.
+func SearchFriendsHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	q := r.URL.Query().Get("query")
+	if q == "" || len(q) > 30 {
+		JSONError(w, "Query parameter is required and must be <= 30 characters", http.StatusBadRequest)
+		return
+	}
+
+	q = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
+	limit, offset := parsePagination(r)
+
+	query := `
+		SELECT COALESCE(json_agg(t), '[]')::text
+		FROM (
+			SELECT u.id, u.name, u.username, u.avatar_url, u.is_private, f.created_at AS friends_since,
+			       CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END AS last_seen_at
+			FROM friendships f
+			JOIN users u ON u.id = CASE
+				WHEN f.user_id_1 = $1 THEN f.user_id_2
+				ELSE f.user_id_1
+			END
+			WHERE (f.user_id_1 = $1 OR f.user_id_2 = $1)
+			  AND u.is_banned = false
+			  AND (u.name ILIKE '%' || $2 || '%' OR u.username ILIKE '%' || $2 || '%')
+			ORDER BY u.name
+			LIMIT $3 OFFSET $4
+		) t
+	`
+
+	var raw []byte
+	if err := postgress.GetRawDB().QueryRow(query, userID, q, limit, offset).Scan(&raw); err != nil {
+		log.Printf("[friends] SearchFriends query failed user=%s q=%s: %v", userID, q, err)
+		JSONError(w, "Failed to search friends", http.StatusInternalServerError)
+		return
+	}
+
+	raw = enrichFriendsWithOnlineStatus(raw)
+
+	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+	w.WriteHeader(http.StatusOK)
+	w.Write(raw)
+}
+
 // GetFriendRequestsHandler returns sent or received friend requests.
 //
-// @Summary		List friend requests
-// @Description	Returns pending friend requests. Use type=sent for outgoing, type=received (default) for incoming.
-// @Tags		Friends
-// @Produce		json
-// @Param		type	query	string	false	"'received' (default) or 'sent'"
-// @Success		200	{array}	FriendRequestItem
-// @Failure		401	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/friends/requests [get]
 
 func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -429,9 +405,11 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 			FROM (
 				SELECT fr.id AS request_id, fr.status, fr.created_at, fr.is_premium,
 				       u.id AS user_id, u.name, u.username, u.avatar_url,
-				       COALESCE((SELECT SUM(d.amount) FROM donations d WHERE d.user_id = fr.sender_id), 0) AS donor_total
+				       COALESCE(d_agg.total, 0) AS donor_total
 				FROM friend_requests fr
 				JOIN users u ON u.id = fr.sender_id
+				LEFT JOIN (SELECT user_id, SUM(amount) AS total FROM donations GROUP BY user_id) d_agg
+				  ON d_agg.user_id = fr.sender_id
 				WHERE fr.receiver_id = $1 AND fr.status = 'pending'
 				ORDER BY fr.is_premium DESC, donor_total DESC, fr.created_at DESC
 			) t
@@ -453,18 +431,6 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 
 // RemoveFriendHandler removes a friend.
 //
-// @Summary		Remove friend
-// @Description	Removes the friendship and cleans up friend requests.
-// @Tags		Friends
-// @Produce		json
-// @Param		username	path	string	true	"Friend's username"
-// @Success		200	{object}	StatusMessage
-// @Failure		400	{object}	StatusMessage
-// @Failure		401	{object}	StatusMessage
-// @Failure		404	{object}	StatusMessage
-// @Failure		500	{object}	StatusMessage
-// @Security	BearerAuth
-// @Router		/friends/{username} [delete]
 
 func RemoveFriendHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -630,6 +596,148 @@ func acceptFriendship(w http.ResponseWriter, accepterID, requesterID string, req
 }
 
 // ---------------------------------------------------------------------------
+// Block / Unblock / Blocked List
+// ---------------------------------------------------------------------------
+
+// BlockUserHandler blocks a user. Also removes friendship and friend requests.
+func BlockUserHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	username := r.PathValue("username")
+	if username == "" {
+		JSONError(w, "username is required", http.StatusBadRequest)
+		return
+	}
+
+	var targetID string
+	if err := postgress.GetRawDB().QueryRow(
+		`SELECT id FROM users WHERE username = $1`, username,
+	).Scan(&targetID); err != nil || targetID == "" {
+		JSONError(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	if targetID == userID {
+		JSONError(w, "Cannot block yourself", http.StatusBadRequest)
+		return
+	}
+
+	tx, err := postgress.GetRawDB().Begin()
+	if err != nil {
+		JSONError(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	// Insert block (idempotent)
+	_, err = tx.Exec(
+		`INSERT INTO blocked_users (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		userID, targetID,
+	)
+	if err != nil {
+		log.Printf("[friends] BlockUser insert failed user=%s target=%s: %v", userID, targetID, err)
+		JSONError(w, "Failed to block user", http.StatusInternalServerError)
+		return
+	}
+
+	// Remove friendship if exists
+	uid1, uid2 := sortUUIDs(userID, targetID)
+	tx.Exec(`DELETE FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2`, uid1, uid2)
+
+	// Remove pending friend requests in both directions
+	tx.Exec(`DELETE FROM friend_requests WHERE
+		(sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)`,
+		userID, targetID,
+	)
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[friends] BlockUser commit failed: %v", err)
+		JSONError(w, "Failed to block user", http.StatusInternalServerError)
+		return
+	}
+
+	JSONMessage(w, "success", "User blocked")
+}
+
+// UnblockUserHandler unblocks a user.
+func UnblockUserHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	username := r.PathValue("username")
+	if username == "" {
+		JSONError(w, "username is required", http.StatusBadRequest)
+		return
+	}
+
+	var targetID string
+	if err := postgress.GetRawDB().QueryRow(
+		`SELECT id FROM users WHERE username = $1`, username,
+	).Scan(&targetID); err != nil || targetID == "" {
+		JSONError(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Only remove blocks where *this user* is the blocker (not the other direction)
+	rows, err := postgress.Exec(
+		`DELETE FROM blocked_users WHERE blocker_id = $1 AND blocked_id = $2`,
+		userID, targetID,
+	)
+	if err != nil {
+		log.Printf("[friends] UnblockUser delete failed user=%s target=%s: %v", userID, targetID, err)
+		JSONError(w, "Failed to unblock user", http.StatusInternalServerError)
+		return
+	}
+	if rows == 0 {
+		JSONError(w, "User is not blocked", http.StatusNotFound)
+		return
+	}
+
+	JSONMessage(w, "success", "User unblocked")
+}
+
+// GetBlockedUsersHandler returns the list of users blocked by the caller.
+func GetBlockedUsersHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	limit, offset := parsePagination(r)
+
+	query := `
+		SELECT COALESCE(json_agg(t), '[]')::text
+		FROM (
+			SELECT u.id, u.name, u.username, u.avatar_url, bu.created_at AS blocked_at
+			FROM blocked_users bu
+			JOIN users u ON u.id = bu.blocked_id
+			WHERE bu.blocker_id = $1
+			ORDER BY bu.created_at DESC
+			LIMIT $2 OFFSET $3
+		) t
+	`
+
+	var raw []byte
+	if err := postgress.GetRawDB().QueryRow(query, userID, limit, offset).Scan(&raw); err != nil {
+		log.Printf("[friends] GetBlockedUsers query failed user=%s: %v", userID, err)
+		JSONError(w, "Failed to fetch blocked users", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+	w.WriteHeader(http.StatusOK)
+	w.Write(raw)
+}
+
+// ---------------------------------------------------------------------------
 // enrichFriendsWithOnlineStatus injects "is_online" into each friend by
 // deserializing into lightweight structs, setting the field, and
 // re-serializing once. This replaces the previous sjson.SetBytes approach
@@ -643,12 +751,14 @@ func enrichFriendsWithOnlineStatus(raw []byte) []byte {
 	}
 
 	type friend struct {
-		ID        string  `json:"id"`
-		Username  *string `json:"username,omitempty"`
-		Name      *string `json:"name,omitempty"`
-		AvatarURL *string `json:"avatar_url,omitempty"`
-		LastSeen  *string `json:"last_seen_at,omitempty"`
-		IsOnline  bool    `json:"is_online"`
+		ID           string  `json:"id"`
+		Username     *string `json:"username,omitempty"`
+		Name         *string `json:"name,omitempty"`
+		AvatarURL    *string `json:"avatar_url,omitempty"`
+		IsPrivate    bool    `json:"is_private"`
+		FriendsSince *string `json:"friends_since,omitempty"`
+		LastSeen     *string `json:"last_seen_at,omitempty"`
+		IsOnline     bool    `json:"is_online"`
 	}
 
 	var friends []friend
@@ -657,6 +767,7 @@ func enrichFriendsWithOnlineStatus(raw []byte) []byte {
 	}
 
 	for i := range friends {
+		// Friends always see each other's online status
 		friends[i].IsOnline = e.IsUserOnline(friends[i].ID)
 	}
 
