@@ -63,6 +63,13 @@ var (
 	// Internal API key for service-to-service auth (e.g. JWT validation endpoint)
 	InternalAPIKey    []byte
 	InternalAPIKeySet bool
+
+	// Group Calls (disabled by default — enable via GROUP_CALLS_ENABLED=true)
+	GroupCallsEnabled bool // Whether group call features are enabled
+
+	// Rate Limiting
+	RateLimitRate  int // Requests per second per IP (default 5)
+	RateLimitBurst int // Burst size (default 10)
 )
 
 // ---------------------------------------------------------------------------
@@ -187,4 +194,11 @@ func Init() {
 	// Internal API key for service-to-service auth
 	InternalAPIKey = []byte(helper.GetEnv("INTERNAL_API_KEY", ""))
 	InternalAPIKeySet = len(InternalAPIKey) > 0
+
+	// Group Calls (disabled by default — requires explicit opt-in)
+	GroupCallsEnabled = helper.GetEnv("GROUP_CALLS_ENABLED", "false") == "true"
+
+	// Rate Limiting (same defaults for HTTP and WebSocket)
+	RateLimitRate = helper.GetEnvInt("RATE_LIMIT_RATE", 5)
+	RateLimitBurst = helper.GetEnvInt("RATE_LIMIT_BURST", 10)
 }

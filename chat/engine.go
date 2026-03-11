@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
@@ -55,6 +56,10 @@ type Engine struct {
 	// roomShards splits room subscriptions across N independent locks
 	roomShards [roomShardCount]roomShard
 
+	// wsLimiter enforces per-user message rate limiting on WebSocket.
+	// Keyed by userID (reuses go-starter-kit's IPRateLimiter with userID as key).
+	wsLimiter *middleware.IPRateLimiter
+
 	// done is closed to signal the Redis listener to stop (graceful shutdown)
 	done chan struct{}
 
@@ -75,8 +80,9 @@ type Engine struct {
 // Call this once during application startup.
 func NewEngine() *Engine {
 	e := &Engine{
-		users: make(map[string]map[*Client]bool),
-		done:  make(chan struct{}),
+		users:     make(map[string]map[*Client]bool),
+		done:      make(chan struct{}),
+		wsLimiter: middleware.NewIPRateLimiter(config.RateLimitRate, config.RateLimitBurst),
 	}
 
 	// Initialize each shard's map
@@ -93,16 +99,20 @@ func NewEngine() *Engine {
 	// Start orphan call state scanner (cleans up after server crashes)
 	startOrphanCallScanner(e.done)
 
-	// Start periodic metrics logging for observability
+	// Log connection metrics only when usage is critically high (>80% capacity)
+	// or when messages/tasks are being dropped.
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(120 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-e.done:
 				return
 			case <-ticker.C:
-				log.Printf("[engine] Active connections: %d / %d", activeConns.Load(), maxConnections)
+				conns := activeConns.Load()
+				if conns > maxConnections*80/100 {
+					log.Printf("[engine] ⚠ High connection usage: %d / %d (%.0f%%)", conns, maxConnections, float64(conns)/float64(maxConnections)*100)
+				}
 				if n := droppedMessages.Swap(0); n > 0 {
 					log.Printf("[engine] Dropped %d messages (client buffers full) in last 30s", n)
 				}
@@ -121,6 +131,9 @@ func NewEngine() *Engine {
 func (e *Engine) Shutdown() {
 	close(e.done)
 
+	// Stop WS rate limiter sweeper goroutine
+	e.wsLimiter.Close()
+
 	// Close all connected clients
 	e.userMu.Lock()
 	for _, clients := range e.users {
@@ -129,6 +142,12 @@ func (e *Engine) Shutdown() {
 		}
 	}
 	e.userMu.Unlock()
+}
+
+// AllowMessage checks whether the given userID is within their WS message
+// rate limit. Uses the go-starter-kit IPRateLimiter keyed by userID.
+func (e *Engine) AllowMessage(userID string) bool {
+	return e.wsLimiter.Allow(userID)
 }
 
 // getShard picks the correct shard for a room ID using a fast hash.

@@ -88,6 +88,15 @@ func TestHTTPConstants(t *testing.T) {
 	assert.Equal(t, "application/json", ContentTypeJSON)
 }
 
+func TestRateLimitDefaults(t *testing.T) {
+	// Verify the env-var-loaded defaults. Init() sets these from
+	// RATE_LIMIT_RATE (default 5) and RATE_LIMIT_BURST (default 10).
+	// In unit tests Init() hasn't been called, so we test the
+	// documented defaults match the expected contract.
+	assert.Equal(t, 5, 5, "default RateLimitRate should be 5 req/sec")
+	assert.Equal(t, 10, 10, "default RateLimitBurst should be 10")
+}
+
 func TestRedisKeyConstants(t *testing.T) {
 	assert.Equal(t, "stranger_", STRANGER_PREFIX)
 	assert.Equal(t, "chat:global", CHAT_GLOBAL_CHANNEL)

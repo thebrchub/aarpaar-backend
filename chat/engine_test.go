@@ -3,6 +3,7 @@ package chat
 import (
 	"testing"
 
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -47,5 +48,42 @@ func TestGetShard(t *testing.T) {
 			}
 			assert.True(t, found, "shard must be one of the engine's shards")
 		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Unit Tests — AllowMessage (WS Rate Limiting)
+// ---------------------------------------------------------------------------
+
+func TestAllowMessage(t *testing.T) {
+	e := &Engine{
+		wsLimiter: middleware.NewIPRateLimiter(2, 3), // 2 req/sec, burst 3
+	}
+	defer e.wsLimiter.Close()
+
+	t.Run("allows messages within burst", func(t *testing.T) {
+		for i := 0; i < 3; i++ {
+			assert.True(t, e.AllowMessage("user-burst"), "message %d should be allowed within burst", i+1)
+		}
+	})
+
+	t.Run("rejects messages exceeding burst", func(t *testing.T) {
+		// Exhaust burst for a new user
+		for i := 0; i < 3; i++ {
+			e.AllowMessage("user-exceed")
+		}
+		// Next message should be rejected
+		assert.False(t, e.AllowMessage("user-exceed"), "message after burst should be rejected")
+	})
+
+	t.Run("independent per user", func(t *testing.T) {
+		// Exhaust burst for userA
+		for i := 0; i < 3; i++ {
+			e.AllowMessage("userA")
+		}
+		// userA should be rejected
+		assert.False(t, e.AllowMessage("userA"), "userA should be rate limited")
+		// userB should still have full burst available
+		assert.True(t, e.AllowMessage("userB"), "userB should not be affected by userA's limit")
 	})
 }
