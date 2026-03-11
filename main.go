@@ -92,6 +92,7 @@ func main() {
 	// 5.5 INITIALIZE BOT SERVICE (retrieval-based chatbot for match fallback)
 	// -----------------------------------------------------------------------
 	services.InitBot()
+	config.BotCorpusData = "" // Free ~8 MB raw corpus string — already parsed into retrieval engine
 	engine.OnUserOffline = services.CancelBotMatch
 
 	// -----------------------------------------------------------------------
@@ -325,8 +326,16 @@ func main() {
 	engine.Shutdown()
 	log.Println("[shutdown] WebSocket engine stopped")
 
+	// Close FCM push service (releases idle HTTP connections)
+	services.ClosePush()
+	log.Println("[shutdown] Push service closed")
+
+	// Stop rate limiter sweeper goroutine
+	limiter.Close()
+	log.Println("[shutdown] Rate limiter closed")
+
 	// Close Redis connection cleanly
-	if err := redis.GetRawClient().Close(); err != nil {
+	if err := redis.Close(); err != nil {
 		log.Printf("[shutdown] Redis close error: %v", err)
 	}
 	log.Println("[shutdown] Redis connection closed")

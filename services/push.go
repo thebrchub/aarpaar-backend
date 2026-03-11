@@ -24,6 +24,9 @@ import (
 // pushSvc is the FCM push service singleton. Nil if FIREBASE_CREDENTIALS is not set.
 var pushSvc push.PushService
 
+// fcmSvc holds the concrete FCM service for Close() on shutdown.
+var fcmSvc *push.FCMService
+
 // PushConfigured returns true if the push service was initialized.
 func PushConfigured() bool { return pushSvc != nil }
 
@@ -49,12 +52,20 @@ func InitPush() error {
 		return err
 	}
 	pushSvc = svc
+	fcmSvc = svc
 	return nil
 }
 
 // ---------------------------------------------------------------------------
 // PushPayload is the data-only payload sent with every push notification.
 // ---------------------------------------------------------------------------
+
+// ClosePush closes the FCM service, releasing idle HTTP connections.
+func ClosePush() {
+	if fcmSvc != nil {
+		fcmSvc.Close()
+	}
+}
 
 // PushPayload holds the key-value pairs for a push notification data message.
 type PushPayload struct {

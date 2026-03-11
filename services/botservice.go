@@ -94,9 +94,27 @@ type BotSession struct {
 // ---------------------------------------------------------------------------
 
 // SetBotEnabled enables or disables bot matching at runtime.
-// Does not reinitialize — just toggles the flag that ScheduleBotMatch checks.
+// When disabled: stops all active sessions, closes the bot client, and nils out
+// the corpus data to release ~25 MB of heap. Background goroutines are stopped.
+// When re-enabled: reinitializes the bot client from corpus config.
 func SetBotEnabled(enabled bool) {
-	botConfigured = enabled
+	if enabled && !botConfigured {
+		// Re-initialize the bot service from scratch
+		InitBot()
+		return
+	}
+	if !enabled && botConfigured {
+		// Full teardown: stop sessions, close client, release memory
+		StopAllSessions()
+		botClient = nil
+		personaNames = nil
+		botConfigured = false
+		// Re-create botDone for potential future re-enable
+		botDoneOnce = sync.Once{}
+		botDone = make(chan struct{})
+		log.Println("[bot] Bot fully shut down — memory released")
+		return
+	}
 }
 
 // IsBotEnabled returns whether bot matching is currently active.
