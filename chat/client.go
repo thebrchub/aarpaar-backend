@@ -174,6 +174,14 @@ func (c *Client) readPump() {
 		msgType := common[0].String()
 		roomID := common[1].String()
 
+		// Per-user message rate limiting — drop messages that exceed the limit.
+		// Heartbeats are exempt (they're keep-alives, not user actions).
+		// Uses the engine's shared IPRateLimiter keyed by userID.
+		if msgType != config.MsgTypeHeartbeat && !c.Engine.AllowMessage(c.UserID) {
+			sendError(c, "RATE_LIMITED", "Too many messages, slow down")
+			continue
+		}
+
 		// --- Deprecated: join_room / leave_room ---
 		// Rooms are now auto-managed server-side. If old clients still send
 		// these, we respond with an error and move on.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -132,30 +133,36 @@ func main() {
 	engine.ShouldPushMessage = services.ShouldPushMessage
 
 	// -----------------------------------------------------------------------
-	// 6. RATE LIMITER (10 requests/sec per IP, burst of 20)
+	// 6. RATE LIMITERS
+	//    - global:  general API traffic (configurable via env)
+	//    - auth:    tighter limit for auth endpoints (brute-force protection)
+	//    - health:  tight limit for health/online (LB probes)
+	//    - webhook: bypassed (trusted, signature-verified)
 	// -----------------------------------------------------------------------
-	limiter := middleware.NewIPRateLimiter(10, 20)
+	globalLimiter := middleware.NewIPRateLimiter(config.RateLimitRate, config.RateLimitBurst)
+	authLimiter := middleware.NewIPRateLimiter(2, 5)
+	healthLimiter := middleware.NewIPRateLimiter(2, 3)
 
 	// -----------------------------------------------------------------------
 	// 7. ROUTES
 	// -----------------------------------------------------------------------
 	mux := http.NewServeMux()
 
-	// Health check — no auth needed
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	// Health check — no auth needed (own rate limit)
+	mux.HandleFunc("GET /health", healthLimiter.LimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
-	})
+	}))
 
-	// --- Auth (public) ---
-	mux.HandleFunc("POST /api/v1/auth/google", handlers.GoogleLoginHandler)
-	mux.HandleFunc("POST /api/v1/auth/refresh", handlers.RefreshTokenHandler)
+	// --- Auth (public — tighter rate limit for brute-force protection) ---
+	mux.HandleFunc("POST /api/v1/auth/google", authLimiter.LimitMiddleware(handlers.GoogleLoginHandler))
+	mux.HandleFunc("POST /api/v1/auth/refresh", authLimiter.LimitMiddleware(handlers.RefreshTokenHandler))
 
-	// --- Auth (internal, API key protected) ---
-	mux.HandleFunc("POST /api/v1/auth/validate", mw.APIKeyOnly(handlers.ValidateTokenHandler))
+	// --- Auth (internal, API key protected — tighter rate limit) ---
+	mux.HandleFunc("POST /api/v1/auth/validate", authLimiter.LimitMiddleware(mw.APIKeyOnly(handlers.ValidateTokenHandler)))
 
-	// --- Config (public) ---
-	mux.HandleFunc("GET /api/v1/config/firebase", handlers.GetFirebaseConfigHandler)
+	// --- Config (protected) ---
+	mux.HandleFunc("GET /api/v1/config/firebase", mw.Auth(handlers.GetFirebaseConfigHandler))
 
 	// --- Auth (protected) ---
 	mux.HandleFunc("POST /api/v1/auth/device", mw.Auth(handlers.RegisterDeviceHandler))
@@ -234,14 +241,14 @@ func main() {
 	mux.HandleFunc("GET /api/v1/donate/history", mw.Auth(handlers.GetDonationHistoryHandler))
 	mux.HandleFunc("GET /api/v1/badges/tiers", mw.Auth(handlers.GetBadgeTiersHandler))
 
-	// --- Razorpay Webhook (public — uses webhook signature verification) ---
+	// --- Razorpay Webhook (public — signature-verified, bypasses rate limit) ---
 	mux.HandleFunc("POST /api/v1/webhook/razorpay", handlers.RazorpayWebhookHandler)
 
 	// --- Leaderboard (protected) ---
 	mux.HandleFunc("GET /api/v1/leaderboard", mw.Auth(handlers.GetLeaderboardHandler))
 
-	// --- Online Count (public) ---
-	mux.HandleFunc("GET /api/v1/online", handlers.GetOnlineCountHandler)
+	// --- Online Count (own rate limit) ---
+	mux.HandleFunc("GET /api/v1/online", healthLimiter.LimitMiddleware(handlers.GetOnlineCountHandler))
 
 	// --- Admin (protected, BENKI_ADMIN only) ---
 	mux.HandleFunc("GET /api/v1/admin/stats", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminStatsHandler)))
@@ -267,8 +274,11 @@ func main() {
 	// -----------------------------------------------------------------------
 	// 8. HTTP SERVER with middleware stack:
 	//    CORS → Body Limit → Rate Limit → Router
+	//
+	//    Routes with their own limiters (auth, health, online) are excluded
+	//    from the global limiter. Webhook bypasses rate limiting entirely.
 	// -----------------------------------------------------------------------
-	handler := mw.CORS(mw.BodyLimit(limiter.LimitHandler(mux)))
+	handler := mw.CORS(mw.BodyLimit(rateLimitRouter(globalLimiter, mux)))
 
 	server := &http.Server{
 		Addr:              "0.0.0.0:" + config.ServerPort,
@@ -329,9 +339,11 @@ func main() {
 	services.ClosePush()
 	log.Println("[shutdown] Push service closed")
 
-	// Stop rate limiter sweeper goroutine
-	limiter.Close()
-	log.Println("[shutdown] Rate limiter closed")
+	// Stop rate limiter sweeper goroutines
+	globalLimiter.Close()
+	authLimiter.Close()
+	healthLimiter.Close()
+	log.Println("[shutdown] Rate limiters closed")
 
 	// Close Redis connection cleanly
 	if err := redis.Close(); err != nil {
@@ -345,4 +357,25 @@ func main() {
 	}
 
 	log.Println("[shutdown] Server stopped cleanly")
+}
+
+// rateLimitRouter applies the global rate limiter to all routes except those
+// that already have their own limiter (auth, health, online) or should bypass
+// rate limiting entirely (webhook).
+func rateLimitRouter(globalLimiter *middleware.IPRateLimiter, mux *http.ServeMux) http.Handler {
+	bypassPrefixes := []string{
+		"/health",
+		"/api/v1/auth/",
+		"/api/v1/online",
+		"/api/v1/webhook/",
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, p := range bypassPrefixes {
+			if strings.HasPrefix(r.URL.Path, p) {
+				mux.ServeHTTP(w, r)
+				return
+			}
+		}
+		globalLimiter.LimitHandler(mux).ServeHTTP(w, r)
+	})
 }
