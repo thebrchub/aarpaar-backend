@@ -97,6 +97,12 @@ func TestRateLimitDefaults(t *testing.T) {
 	assert.Equal(t, 10, 10, "default RateLimitBurst should be 10")
 }
 
+func TestGroupCallsDisabledByDefault(t *testing.T) {
+	// GroupCallsEnabled defaults to false (loaded from GROUP_CALLS_ENABLED env var).
+	// In unit tests Init() hasn't been called, so the zero value is false.
+	assert.False(t, GroupCallsEnabled, "group calls should be disabled by default")
+}
+
 func TestRedisKeyConstants(t *testing.T) {
 	assert.Equal(t, "stranger_", STRANGER_PREFIX)
 	assert.Equal(t, "chat:global", CHAT_GLOBAL_CHANNEL)
