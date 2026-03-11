@@ -435,9 +435,39 @@ func enrichUsersMapWithOnlineStatus(raw []byte, currentUserID string) []byte {
 		friendRows.Close()
 	}
 
+	// Build blocked set — blocked users cannot see each other's status
+	blockedSet := make(map[string]bool)
+	blockedRows, err := postgress.GetRawDB().QueryContext(ctx,
+		`SELECT blocked_id FROM blocked_users WHERE blocker_id = $1
+		 UNION ALL
+		 SELECT blocker_id FROM blocked_users WHERE blocked_id = $1`, currentUserID,
+	)
+	if err == nil {
+		for blockedRows.Next() {
+			var bid string
+			if blockedRows.Scan(&bid) == nil {
+				blockedSet[bid] = true
+			}
+		}
+		blockedRows.Close()
+	}
+
 	for uid, u := range users {
-		if uid == currentUserID || friendSet[uid] || !u.IsPrivate {
+		if uid == currentUserID {
 			u.IsOnline = e.IsUserOnline(uid)
+			users[uid] = u
+		} else if blockedSet[uid] {
+			// Blocked user (either direction): hide online status and last seen
+			u.IsOnline = false
+			u.LastSeen = nil
+			users[uid] = u
+		} else if friendSet[uid] || !u.IsPrivate {
+			u.IsOnline = e.IsUserOnline(uid)
+			users[uid] = u
+		} else {
+			// Private non-friend: hide online status and last seen
+			u.IsOnline = false
+			u.LastSeen = nil
 			users[uid] = u
 		}
 	}

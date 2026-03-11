@@ -330,9 +330,9 @@ func SearchFriendsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q := r.URL.Query().Get("query")
+	q := r.URL.Query().Get("q")
 	if q == "" || len(q) > 30 {
-		JSONError(w, "Query parameter is required and must be <= 30 characters", http.StatusBadRequest)
+		JSONError(w, "Query parameter 'q' is required and must be <= 30 characters", http.StatusBadRequest)
 		return
 	}
 
@@ -599,7 +599,7 @@ func acceptFriendship(w http.ResponseWriter, accepterID, requesterID string, req
 // Block / Unblock / Blocked List
 // ---------------------------------------------------------------------------
 
-// BlockUserHandler blocks a user. Also removes friendship and friend requests.
+// BlockUserHandler blocks a user. Friendship and chats are preserved.
 func BlockUserHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -626,36 +626,13 @@ func BlockUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := postgress.GetRawDB().Begin()
-	if err != nil {
-		JSONError(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback()
-
-	// Insert block (idempotent)
-	_, err = tx.Exec(
+	// Insert block (idempotent) — does NOT remove friendship or chats
+	_, err := postgress.GetRawDB().Exec(
 		`INSERT INTO blocked_users (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		userID, targetID,
 	)
 	if err != nil {
 		log.Printf("[friends] BlockUser insert failed user=%s target=%s: %v", userID, targetID, err)
-		JSONError(w, "Failed to block user", http.StatusInternalServerError)
-		return
-	}
-
-	// Remove friendship if exists
-	uid1, uid2 := sortUUIDs(userID, targetID)
-	tx.Exec(`DELETE FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2`, uid1, uid2)
-
-	// Remove pending friend requests in both directions
-	tx.Exec(`DELETE FROM friend_requests WHERE
-		(sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)`,
-		userID, targetID,
-	)
-
-	if err := tx.Commit(); err != nil {
-		log.Printf("[friends] BlockUser commit failed: %v", err)
 		JSONError(w, "Failed to block user", http.StatusInternalServerError)
 		return
 	}

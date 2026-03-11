@@ -660,7 +660,8 @@ func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 // ---------------------------------------------------------------------------
 
 // isBlockedInRoom checks if the sender is blocked by (or has blocked) any
-// other member in a DM room. For DM rooms only (2 members).
+// other member in the room. Only enforced for DM rooms — blocked users can
+// still message each other in group chats.
 func isBlockedInRoom(senderID, roomID string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -672,6 +673,7 @@ func isBlockedInRoom(senderID, roomID string) bool {
 			JOIN room_members rm ON rm.room_id = $2
 				AND rm.user_id != $1
 				AND rm.status = 'active'
+			JOIN rooms r ON r.id = $2 AND r.type = 'DM'
 			WHERE (bu.blocker_id = $1 AND bu.blocked_id = rm.user_id)
 			   OR (bu.blocker_id = rm.user_id AND bu.blocked_id = $1)
 		)`, senderID, roomID,
@@ -859,6 +861,32 @@ func getFriendIDs(userID string) []string {
 	return ids
 }
 
+// getBlockedSet returns a set of user IDs that are blocked by or have blocked
+// the given user (bidirectional).
+func getBlockedSet(userID string) map[string]bool {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
+	defer cancel()
+	rows, err := postgress.GetRawDB().QueryContext(ctx,
+		`SELECT blocked_id FROM blocked_users WHERE blocker_id = $1
+		 UNION ALL
+		 SELECT blocker_id FROM blocked_users WHERE blocked_id = $1`,
+		userID,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	set := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			set[id] = true
+		}
+	}
+	return set
+}
+
 // broadcastPresence publishes a presence event to all online friends via Redis.
 // If the user has show_last_seen disabled or is a private account, we skip broadcasting.
 func (e *Engine) broadcastPresence(userID string, online bool) {
@@ -880,6 +908,21 @@ func (e *Engine) broadcastPresence(userID string, online bool) {
 	friendIDs := getFriendIDs(userID)
 	if len(friendIDs) == 0 {
 		return
+	}
+
+	// Exclude blocked users (either direction) from presence targets
+	blockedSet := getBlockedSet(userID)
+	if len(blockedSet) > 0 {
+		filtered := friendIDs[:0]
+		for _, fid := range friendIDs {
+			if !blockedSet[fid] {
+				filtered = append(filtered, fid)
+			}
+		}
+		friendIDs = filtered
+		if len(friendIDs) == 0 {
+			return
+		}
 	}
 
 	msgType := config.MsgTypePresenceOnline
