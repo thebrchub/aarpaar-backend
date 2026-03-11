@@ -92,7 +92,6 @@ func main() {
 	// 5.5 INITIALIZE BOT SERVICE (retrieval-based chatbot for match fallback)
 	// -----------------------------------------------------------------------
 	services.InitBot()
-	config.BotCorpusData = "" // Free ~8 MB raw corpus string — already parsed into retrieval engine
 	engine.OnUserOffline = services.CancelBotMatch
 
 	// -----------------------------------------------------------------------

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"math/rand/v2"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -109,6 +110,7 @@ func SetBotEnabled(enabled bool) {
 		botClient = nil
 		personaNames = nil
 		botConfigured = false
+		config.BotCorpusData = "" // Free corpus string to prevent memory leak
 		// Re-create botDone for potential future re-enable
 		botDoneOnce = sync.Once{}
 		botDone = make(chan struct{})
@@ -139,8 +141,24 @@ func InitBot() {
 		return
 	}
 
-	// Get corpus data (already loaded from env or file by config.Init)
+	// Get corpus data — reload from env/file if it was freed after a previous init.
 	corpusData := config.BotCorpusData
+	if strings.TrimSpace(corpusData) == "" {
+		corpusData = os.Getenv("BOT_CORPUS_DATA")
+		if corpusData == "" {
+			corpusPath := os.Getenv("BOT_CORPUS_PATH")
+			if corpusPath == "" {
+				corpusPath = "./corpus/chat.tsv"
+			}
+			raw, err := os.ReadFile(corpusPath)
+			if err != nil {
+				log.Printf("[bot] Failed to read corpus file %s: %v", corpusPath, err)
+			} else {
+				corpusData = string(raw)
+			}
+		}
+		config.BotCorpusData = corpusData
+	}
 	if strings.TrimSpace(corpusData) == "" {
 		log.Println("[bot] Corpus data is empty — bot matching disabled")
 		return
@@ -191,9 +209,16 @@ func InitBot() {
 	}
 
 	botConfigured = true
+
+	// Free raw corpus string to release ~8 MB heap — already indexed in the retrieval engine.
+	config.BotCorpusData = ""
+
 	log.Printf("[bot] Bot service initialized (retrieval engine, %d personas)", len(personaNames))
 	go botRedisListener()
 	go staleBotSessionSweeper()
+
+	// Schedule bot matches for users already waiting in the queue.
+	go scheduleForQueuedUsers()
 }
 
 // staleBotSessionSweeper periodically checks for stale bot sessions where
@@ -248,6 +273,26 @@ func extractPersonaNames(corpus string) []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// scheduleForQueuedUsers scans the match queue and schedules bot match timers
+// for any users already waiting. This ensures users who entered the queue while
+// the bot was disabled get matched after re-enable.
+func scheduleForQueuedUsers() {
+	ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
+	defer cancel()
+
+	members, err := redis.GetRawClient().SMembers(ctx, config.DefaultMatchQueue).Result()
+	if err != nil {
+		log.Printf("[bot] Failed to read match queue for re-enable scan: %v", err)
+		return
+	}
+	for _, userID := range members {
+		ScheduleBotMatch(userID)
+	}
+	if len(members) > 0 {
+		log.Printf("[bot] Scheduled bot match for %d queued user(s) after re-enable", len(members))
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -567,6 +612,13 @@ func botRedisListener() {
 		}
 
 		botSubscribeAndListen()
+
+		// Check if shutdown was requested before logging a reconnect
+		select {
+		case <-botDone:
+			return
+		default:
+		}
 
 		// Subscription broke — exponential backoff
 		log.Printf("[bot] Redis Pub/Sub disconnected. Reconnecting in %v...", backoff)

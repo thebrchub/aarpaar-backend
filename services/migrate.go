@@ -272,6 +272,11 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_rooms_visibility ON rooms (visibility) WHERE type = 'GROUP'`,
 
 	// ===================================================================
+	// P2P CALL — add peer_id for direct peer lookup in call history
+	// ===================================================================
+	`ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS peer_id UUID REFERENCES users(id) ON DELETE SET NULL`,
+
+	// ===================================================================
 	// GROUP CALL SUPPORT — call_logs augmentation
 	// ===================================================================
 
