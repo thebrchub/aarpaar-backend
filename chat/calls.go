@@ -198,7 +198,7 @@ func (e *Engine) startRingTimeout(callID, callerID, calleeID string, hasVideo bo
 			pubCancel()
 
 			logCall(callID, "", callerID, calleeID, hasVideo, "missed", 0)
-			runBackground(func() { sendMissedCallPush(calleeID, callerID, callID) })
+			RunBackground(func() { sendMissedCallPush(calleeID, callerID, callID) })
 		}
 	})
 }
@@ -480,7 +480,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			default:
 				droppedMessages.Add(1)
 			}
-			runBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, "missed", 0) })
+			RunBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, "missed", 0) })
 			return true
 		}
 
@@ -490,11 +490,11 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		// --- Send push notification only when callee is offline ---
 		// When online, call_ring is delivered via WebSocket (no push needed).
 		if !calleeOnline {
-			runBackground(func() { sendCallPushNotification(targetUser, c.UserID, callID, hasVideo) })
+			RunBackground(func() { sendCallPushNotification(targetUser, c.UserID, callID, hasVideo) })
 		}
 
 		// --- Log call initiation ---
-		runBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, "ringing", 0) })
+		RunBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, "ringing", 0) })
 
 	case config.MsgTypeCallAccept:
 		// Cancel the ring timeout
@@ -508,7 +508,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		markCallAnswered(targetUser)
 
 		// Update call log
-		runBackground(func() {
+		RunBackground(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 			defer cancel()
 			_, err := postgress.GetRawDB().ExecContext(ctx,
@@ -531,7 +531,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		clearActiveCall(targetUser)
 
 		// Log rejected call
-		runBackground(func() { logCall(callID, "", targetUser, c.UserID, hasVideo, "rejected", 0) })
+		RunBackground(func() { logCall(callID, "", targetUser, c.UserID, hasVideo, "rejected", 0) })
 
 	case config.MsgTypeCallEnd:
 		// Cancel any pending ring timeout
@@ -556,7 +556,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		if callerCall != nil && !callerCall.Answered {
 			status = "cancelled"
 		}
-		runBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, status, duration) })
+		RunBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, status, duration) })
 
 	case config.MsgTypeCallLeave:
 		// For future group calls — treat like call_end for 1:1

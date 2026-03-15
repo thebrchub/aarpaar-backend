@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -137,8 +138,8 @@ func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Send push notification to offline target
-	go func() {
-		ctx, cancel := pgCtx(r)
+	chat.RunBackground(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 		defer cancel()
 		var senderName string
 		if err := postgress.GetRawDB().QueryRowContext(ctx,
@@ -153,7 +154,7 @@ func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 				"senderName": senderName,
 			},
 		})
-	}()
+	})
 
 	JSONMessage(w, "pending", "Friend request sent")
 }

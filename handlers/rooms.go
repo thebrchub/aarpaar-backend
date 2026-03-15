@@ -356,7 +356,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		})
 
 		// Push notification for offline target
-		go func() {
+		chat.RunBackground(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 			defer cancel()
 			var senderName string
@@ -374,7 +374,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 					"senderName": senderName,
 				},
 			})
-		}()
+		})
 	}
 
 	JSONSuccess(w, CreateDMResponse{

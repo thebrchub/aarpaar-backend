@@ -18,6 +18,7 @@ import (
 	"github.com/shivanand-burli/go-starter-kit/push"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/shivanand-burli/go-starter-kit/rtc"
+	"github.com/shivanand-burli/go-starter-kit/storage"
 
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
@@ -131,6 +132,35 @@ func main() {
 		services.SendPushToUser(ctx, userID, p)
 	}
 	engine.ShouldPushMessage = services.ShouldPushMessage
+
+	// -----------------------------------------------------------------------
+	// 5.8 INITIALIZE STORAGE CLIENT (Cloudflare R2 / S3-compatible)
+	// -----------------------------------------------------------------------
+	if config.StorageBucket != "" {
+		store, err := storage.NewS3Client(storage.S3Config{
+			Endpoint:        config.StorageEndpoint,
+			AccessKeyID:     config.StorageAccessKey,
+			SecretAccessKey: config.StorageSecretKey,
+			Bucket:          config.StorageBucket,
+			Region:          config.StorageRegion,
+			PublicURL:       config.StoragePublicURL,
+		})
+		if err != nil {
+			log.Printf("[boot] Storage client init failed: %v", err)
+		} else {
+			handlers.Store = store
+			log.Println("[boot] Storage client initialized (R2/S3)")
+		}
+	} else {
+		log.Println("[boot] Storage not configured — Arena media uploads disabled")
+	}
+
+	// -----------------------------------------------------------------------
+	// 5.9 START ARENA LIMITS REFRESHER (loads from app_settings, caches in Redis)
+	// -----------------------------------------------------------------------
+	arenaCtx, arenaCancel := context.WithCancel(context.Background())
+	services.StartArenaLimitsRefresher(arenaCtx)
+	log.Println("[boot] Arena limits refresher started")
 
 	// -----------------------------------------------------------------------
 	// 6. RATE LIMITERS
@@ -265,6 +295,39 @@ func main() {
 	mux.HandleFunc("GET /api/v1/admin/bot", mw.Auth(mw.BenkiAdminOnly(handlers.GetBotStatusHandler)))
 	mux.HandleFunc("POST /api/v1/admin/bot", mw.Auth(mw.BenkiAdminOnly(handlers.ToggleBotHandler)))
 
+	// --- Arena Posts (protected) ---
+	mux.HandleFunc("POST /api/v1/arena/media/presign", mw.Auth(handlers.PresignUploadHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts", mw.Auth(handlers.CreatePostHandler))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}", mw.Auth(handlers.GetPostHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}", mw.Auth(handlers.DeletePostHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/repost", mw.Auth(handlers.RepostHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/pin", mw.Auth(handlers.PinPostHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/pin", mw.Auth(handlers.PinPostHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/report", mw.Auth(handlers.ReportPostHandler))
+
+	// --- Arena Likes (protected) ---
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/like", mw.Auth(handlers.LikePostHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/like", mw.Auth(handlers.UnlikePostHandler))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/likes", mw.Auth(handlers.GetPostLikersHandler))
+
+	// --- Arena Comments (protected) ---
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/comments", mw.Auth(handlers.CreateCommentHandler))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/comments", mw.Auth(handlers.GetCommentsHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/comments/{commentId}", mw.Auth(handlers.DeleteCommentHandler))
+	mux.HandleFunc("POST /api/v1/arena/comments/{commentId}/like", mw.Auth(handlers.LikeCommentHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/comments/{commentId}/like", mw.Auth(handlers.UnlikeCommentHandler))
+	mux.HandleFunc("POST /api/v1/arena/comments/{commentId}/report", mw.Auth(handlers.ReportCommentHandler))
+
+	// --- Arena Feeds (protected) ---
+	mux.HandleFunc("GET /api/v1/arena/feed/global", mw.Auth(handlers.GlobalFeedHandler))
+	mux.HandleFunc("GET /api/v1/arena/feed/network", mw.Auth(handlers.NetworkFeedHandler))
+	mux.HandleFunc("GET /api/v1/arena/feed/trending", mw.Auth(handlers.TrendingFeedHandler))
+	mux.HandleFunc("GET /api/v1/arena/users/{userId}/posts", mw.Auth(handlers.UserPostsHandler))
+
+	// --- Arena Admin (BENKI_ADMIN only) ---
+	mux.HandleFunc("DELETE /api/v1/admin/arena/posts/{postId}", mw.Auth(mw.BenkiAdminOnly(handlers.AdminDeletePostHandler)))
+	mux.HandleFunc("GET /api/v1/admin/arena/reports", mw.Auth(mw.BenkiAdminOnly(handlers.AdminGetPostReportsHandler)))
+
 	// --- WebSocket (protected) ---
 	mux.HandleFunc("GET /ws", mw.Auth(func(w http.ResponseWriter, r *http.Request) {
 		userID := r.Context().Value(config.UserIDKey).(string)
@@ -326,6 +389,10 @@ func main() {
 	services.StopAllSessions()
 	log.Println("[shutdown] Bot service stopped")
 
+	// Stop arena limits refresher
+	arenaCancel()
+	log.Println("[shutdown] Arena limits refresher stopped")
+
 	// Stop the flusher (runs one final flush before returning)
 	services.StopFlusher()
 	log.Println("[shutdown] Message flusher stopped")
@@ -344,6 +411,14 @@ func main() {
 	authLimiter.Close()
 	healthLimiter.Close()
 	log.Println("[shutdown] Rate limiters closed")
+
+	// Close storage client (releases HTTP connections)
+	if handlers.Store != nil {
+		if s, ok := handlers.Store.(*storage.S3Client); ok {
+			s.Close()
+		}
+		log.Println("[shutdown] Storage client closed")
+	}
 
 	// Close Redis connection cleanly
 	if err := redis.Close(); err != nil {

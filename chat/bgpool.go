@@ -28,9 +28,11 @@ import (
 // ---------------------------------------------------------------------------
 
 // maxBackgroundWorkers is the maximum number of concurrent background tasks.
-// 200 is chosen to leave headroom for connection pools (Postgres ~25, Redis ~10)
-// while still handling burst disconnect events efficiently.
-const maxBackgroundWorkers = 200
+// 500 is chosen to handle burst events (mass-disconnect, viral post likes)
+// while staying within downstream resource limits (Postgres ~100, Redis ~50).
+// At 10 lakh+ connections, a mass-disconnect could spike ~30K+ tasks —
+// this pool absorbs bursts and drops excess with a counter.
+const maxBackgroundWorkers = 500
 
 var bgSem = make(chan struct{}, maxBackgroundWorkers)
 
@@ -59,10 +61,10 @@ func SetRTC(svc rtc.RTCService) {
 	rtcPtr.Store(&svc)
 }
 
-// runBackground submits a function to the bounded worker pool.
+// RunBackground submits a function to the bounded worker pool.
 // If the pool is full, the task is dropped and counted.
 // All fire-and-forget goroutines should use this instead of bare `go func()`.
-func runBackground(fn func()) {
+func RunBackground(fn func()) {
 	select {
 	case bgSem <- struct{}{}:
 		go func() {

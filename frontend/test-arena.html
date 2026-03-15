@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aarpaar – Arena (Feeds) Test</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #242836;
+      --border: #2e3345;
+      --text: #e4e6f0;
+      --text-muted: #8b8fa3;
+      --accent: #6c5ce7;
+      --accent-hover: #7f71ed;
+      --success: #00cec9;
+      --error: #ff6b6b;
+      --warn: #fdcb6e;
+      --info: #74b9ff;
+      --radius: 10px;
+      --shadow: 0 2px 12px rgba(0,0,0,.35);
+      --mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      --sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 14px; }
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.55;
+      padding: 20px;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    h1 {
+      font-size: 1.4rem; font-weight: 700; margin-bottom: 20px;
+      background: linear-gradient(135deg, var(--accent), #fd79a8);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    h2 {
+      font-size: 1.05rem; font-weight: 600; margin-bottom: 12px;
+      color: var(--accent);
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px; margin-bottom: 20px;
+      box-shadow: var(--shadow);
+    }
+    .card h3 { font-size: 1rem; margin-bottom: 14px; }
+    .form-row { margin-bottom: 12px; }
+    .form-row label {
+      display: block; font-size: .78rem; color: var(--text-muted);
+      margin-bottom: 4px; font-weight: 500;
+    }
+    .form-row input, .form-row select, .form-row textarea {
+      width: 100%; padding: 8px 12px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text); font-size: .85rem;
+      font-family: var(--sans);
+    }
+    .form-row textarea { min-height: 60px; resize: vertical; }
+    .form-row input:focus, .form-row select:focus, .form-row textarea:focus {
+      outline: none; border-color: var(--accent);
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 18px; border: none; border-radius: 6px;
+      font-size: .82rem; font-weight: 600; cursor: pointer;
+      transition: .2s; font-family: var(--sans);
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-success { background: var(--success); color: #000; }
+    .btn-success:hover { filter: brightness(1.1); }
+    .btn-error { background: var(--error); color: #fff; }
+    .btn-error:hover { filter: brightness(1.1); }
+    .btn-warn { background: var(--warn); color: #000; }
+    .btn-warn:hover { filter: brightness(1.1); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+    @media (max-width: 900px) { .grid-3 { grid-template-columns: 1fr; } }
+    @media (max-width: 700px) { .grid-2 { grid-template-columns: 1fr; } }
+    .response-panel {
+      margin-top: 14px; padding: 12px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; font-family: var(--mono); font-size: .78rem;
+      white-space: pre-wrap; word-break: break-all; max-height: 400px;
+      overflow-y: auto;
+    }
+    .hidden { display: none; }
+    .inline-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .back-link { display: inline-block; margin-bottom: 16px; font-size: .85rem; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: .7rem; font-weight: 700; margin-right: 6px; }
+    .badge-get { background: #0984e3; color: #fff; }
+    .badge-post { background: #00b894; color: #fff; }
+    .badge-delete { background: #d63031; color: #fff; }
+    .badge-patch { background: #fdcb6e; color: #000; }
+    .post-card {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px; margin-bottom: 12px;
+    }
+    .post-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .post-avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: var(--accent); display: flex; align-items: center;
+      justify-content: center; color: #fff; font-weight: 700; font-size: .85rem;
+    }
+    .post-meta { font-size: .75rem; color: var(--text-muted); }
+    .post-caption { font-size: .9rem; margin-bottom: 10px; line-height: 1.5; }
+    .post-media-grid { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .post-media-grid img, .post-media-grid video {
+      max-width: 200px; max-height: 200px; border-radius: 6px;
+      object-fit: cover; border: 1px solid var(--border);
+    }
+    .post-stats { display: flex; gap: 16px; font-size: .78rem; color: var(--text-muted); }
+    .post-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .section-break { border-top: 1px solid var(--border); margin: 24px 0; }
+    .tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+    .tab-item {
+      background: none; border: none; color: var(--text-muted); cursor: pointer;
+      padding: 10px 18px; font-size: .85rem; font-weight: 500;
+      border-bottom: 2px solid transparent; transition: .2s; font-family: var(--sans);
+    }
+    .tab-item:hover { color: var(--text); }
+    .tab-item.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .feed-panel { display: none; }
+    .feed-panel.active { display: block; }
+  </style>
+</head>
+<body>
+
+<a href="test-frontend.html" class="back-link">&larr; Back to Test Console</a>
+<h1>The Arena &mdash; Feed Test Page</h1>
+
+<!-- Auth Config -->
+<div class="card">
+  <h3>Configuration</h3>
+  <div class="grid-2">
+    <div class="form-row">
+      <label>Base URL</label>
+      <input type="text" id="baseUrl" placeholder="http://localhost:2028" />
+    </div>
+    <div class="form-row">
+      <label>Auth Status</label>
+      <p id="authStatus" style="font-size:.85rem;color:var(--text-muted);padding:8px 0">Checking...</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- CREATE POST                                                      -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3><span class="badge badge-post">POST</span> Create Post</h3>
+  <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+    <code>/api/v1/arena/posts</code> &mdash; Upload media via presigned URL, then create a post.
+  </p>
+
+  <div class="grid-2">
+    <div>
+      <div class="form-row">
+        <label>Caption</label>
+        <textarea id="postCaption" placeholder="What's on your mind?"></textarea>
+      </div>
+      <div class="form-row">
+        <label>Visibility</label>
+        <select id="postVisibility">
+          <option value="public">Public (Global Pulse)</option>
+          <option value="friends">Friends Only (Your Network)</option>
+        </select>
+      </div>
+    </div>
+    <div>
+      <div class="form-row">
+        <label>Media (JPEG, WebP, MP4, WebM)</label>
+        <input type="file" id="postMedia" accept="image/jpeg,image/webp,video/mp4,video/webm" multiple
+               style="background:none;border:none;padding:4px 0;" onchange="previewMedia()" />
+      </div>
+      <div id="mediaPreview" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
+      <p id="uploadStatus" style="font-size:.75rem;color:var(--text-muted);margin-top:4px"></p>
+    </div>
+  </div>
+  <button class="btn btn-success" id="createPostBtn" onclick="createPost()">Create Post</button>
+  <div id="createPostResult" class="response-panel hidden"></div>
+</div>
+
+<!-- ================================================================ -->
+<!-- FEEDS                                                            -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3>Feeds</h3>
+
+  <div class="tab-bar">
+    <button class="tab-item active" onclick="switchFeed('global', this)">Global Pulse</button>
+    <button class="tab-item" onclick="switchFeed('network', this)">Your Network</button>
+    <button class="tab-item" onclick="switchFeed('trending', this)">Trending</button>
+    <button class="tab-item" onclick="switchFeed('profile', this)">User Profile</button>
+  </div>
+
+  <!-- Global Feed -->
+  <div id="feed-global" class="feed-panel active">
+    <div class="inline-form" style="margin-bottom:12px">
+      <div class="form-row" style="max-width:80px"><label>Limit</label><input type="number" id="globalLimit" value="20" min="1" max="50" /></div>
+      <div class="form-row" style="max-width:80px"><label>Offset</label><input type="number" id="globalOffset" value="0" min="0" /></div>
+      <button class="btn btn-primary" onclick="loadFeed('global')">Load Global Feed</button>
+    </div>
+    <div id="globalFeedResult"></div>
+  </div>
+
+  <!-- Network Feed -->
+  <div id="feed-network" class="feed-panel">
+    <div class="inline-form" style="margin-bottom:12px">
+      <div class="form-row" style="max-width:80px"><label>Limit</label><input type="number" id="networkLimit" value="20" min="1" max="50" /></div>
+      <div class="form-row" style="max-width:80px"><label>Offset</label><input type="number" id="networkOffset" value="0" min="0" /></div>
+      <button class="btn btn-primary" onclick="loadFeed('network')">Load Network Feed</button>
+    </div>
+    <div id="networkFeedResult"></div>
+  </div>
+
+  <!-- Trending Feed -->
+  <div id="feed-trending" class="feed-panel">
+    <div class="inline-form" style="margin-bottom:12px">
+      <div class="form-row" style="max-width:80px"><label>Limit</label><input type="number" id="trendingLimit" value="20" min="1" max="50" /></div>
+      <div class="form-row" style="max-width:80px"><label>Offset</label><input type="number" id="trendingOffset" value="0" min="0" /></div>
+      <button class="btn btn-primary" onclick="loadFeed('trending')">Load Trending</button>
+    </div>
+    <div id="trendingFeedResult"></div>
+  </div>
+
+  <!-- Profile Feed -->
+  <div id="feed-profile" class="feed-panel">
+    <div class="inline-form" style="margin-bottom:12px">
+      <div class="form-row" style="max-width:280px"><label>User ID (blank = your own)</label><input type="text" id="profileUserId" placeholder="UUID or leave blank for self" /></div>
+      <div class="form-row" style="max-width:80px"><label>Limit</label><input type="number" id="profileLimit" value="20" min="1" max="50" /></div>
+      <div class="form-row" style="max-width:80px"><label>Offset</label><input type="number" id="profileOffset" value="0" min="0" /></div>
+      <button class="btn btn-primary" onclick="loadFeed('profile')">Load Profile Posts</button>
+    </div>
+    <div id="profileFeedResult"></div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- SINGLE POST ACTIONS                                              -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3>Post Actions</h3>
+  <div class="grid-3">
+    <!-- Get Post -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-get">GET</span> <code>/api/v1/arena/posts/{postId}</code></p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="getPostId" placeholder="1" /></div>
+        <button class="btn btn-primary" onclick="getPost()">Get Post</button>
+      </div>
+      <div id="getPostResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Delete Post -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-delete">DELETE</span> <code>/api/v1/arena/posts/{postId}</code></p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="deletePostId" placeholder="1" /></div>
+        <button class="btn btn-error" onclick="deletePost()">Delete Post</button>
+      </div>
+      <div id="deletePostResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Repost -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> <code>/api/v1/arena/posts/{postId}/repost</code></p>
+      <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="repostPostId" placeholder="1" /></div>
+      <div class="form-row"><label>Caption (optional)</label><input type="text" id="repostCaption" placeholder="Repost caption..." /></div>
+      <button class="btn btn-primary" onclick="repost()">Repost</button>
+      <div id="repostResult" class="response-panel hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- LIKES                                                            -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3>Likes</h3>
+  <div class="grid-3">
+    <!-- Like Post -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> Like Post</p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="likePostId" placeholder="1" /></div>
+        <button class="btn btn-success" onclick="likePost()">Like</button>
+      </div>
+      <div id="likeResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Unlike Post -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-delete">DELETE</span> Unlike Post</p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="unlikePostId" placeholder="1" /></div>
+        <button class="btn btn-error" onclick="unlikePost()">Unlike</button>
+      </div>
+      <div id="unlikeResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Get Likers -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-get">GET</span> Get Likers</p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="likersPostId" placeholder="1" /></div>
+        <button class="btn btn-primary" onclick="getLikers()">Get Likers</button>
+      </div>
+      <div id="likersResult" class="response-panel hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- COMMENTS                                                         -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3>Comments</h3>
+  <div class="grid-2">
+    <!-- Create Comment -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> <code>/api/v1/arena/posts/{postId}/comments</code></p>
+      <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="commentPostId" placeholder="1" /></div>
+      <div class="form-row"><label>Body</label><textarea id="commentBody" placeholder="Write a comment..."></textarea></div>
+      <div class="form-row" style="max-width:120px"><label>Parent ID (reply)</label><input type="number" id="commentParentId" placeholder="optional" /></div>
+      <div class="form-row"><label>GIF URL (optional)</label><input type="text" id="commentGifUrl" placeholder="https://media.tenor.com/..." /></div>
+      <button class="btn btn-success" onclick="createComment()">Post Comment</button>
+      <div id="commentResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Get Comments -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-get">GET</span> <code>/api/v1/arena/posts/{postId}/comments</code></p>
+      <div class="inline-form" style="margin-bottom:8px">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="getCommentsPostId" placeholder="1" /></div>
+        <div class="form-row" style="max-width:80px"><label>Limit</label><input type="number" id="commentsLimit" value="10" /></div>
+        <button class="btn btn-primary" onclick="getComments()">Get Comments</button>
+      </div>
+      <div id="commentsResult" class="response-panel hidden"></div>
+    </div>
+  </div>
+
+  <div class="section-break"></div>
+  <div class="grid-3">
+    <!-- Delete Comment -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-delete">DELETE</span> Delete Comment</p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="deleteCommentPostId" placeholder="1" /></div>
+        <div class="form-row" style="max-width:120px"><label>Comment ID</label><input type="number" id="deleteCommentId" placeholder="1" /></div>
+        <button class="btn btn-error" onclick="deleteComment()">Delete</button>
+      </div>
+      <div id="deleteCommentResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Like Comment -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> Like Comment</p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Comment ID</label><input type="number" id="likeCommentId" placeholder="1" /></div>
+        <button class="btn btn-success" onclick="likeComment()">Like</button>
+        <button class="btn btn-error" onclick="unlikeComment()">Unlike</button>
+      </div>
+      <div id="likeCommentResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Report Comment -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> Report Comment</p>
+      <div class="form-row" style="max-width:120px"><label>Comment ID</label><input type="number" id="reportCommentId" placeholder="1" /></div>
+      <div class="form-row"><label>Reason</label><input type="text" id="reportCommentReason" placeholder="Spam, harassment..." /></div>
+      <button class="btn btn-warn" onclick="reportComment()">Report</button>
+      <div id="reportCommentResult" class="response-panel hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- PIN / REPORT POST                                                -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3>Pin &amp; Report</h3>
+  <div class="grid-3">
+    <!-- Pin Post -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> Pin Post</p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="pinPostId" placeholder="1" /></div>
+        <button class="btn btn-primary" onclick="pinPost(true)">Pin</button>
+        <button class="btn btn-error" onclick="pinPost(false)">Unpin</button>
+      </div>
+      <div id="pinResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Report Post -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> Report Post</p>
+      <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="reportPostId" placeholder="1" /></div>
+      <div class="form-row"><label>Reason</label><input type="text" id="reportReason" placeholder="Spam, harassment..." /></div>
+      <button class="btn btn-warn" onclick="reportPost()">Report Post</button>
+      <div id="reportResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Presign Upload (manual) -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> Presign Upload</p>
+      <div class="form-row"><label>Filename</label><input type="text" id="presignFilename" placeholder="photo.jpg" /></div>
+      <div class="form-row">
+        <label>Content Type</label>
+        <select id="presignContentType">
+          <option value="image/jpeg">image/jpeg</option>
+          <option value="image/webp">image/webp</option>
+          <option value="video/mp4">video/mp4</option>
+          <option value="video/webm">video/webm</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" onclick="presignUpload()">Get Presigned URL</button>
+      <div id="presignResult" class="response-panel hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- WEBSOCKET LIVE EVENTS                                            -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3>WebSocket &mdash; Live Arena Events</h3>
+  <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+    Connect to the WebSocket to receive real-time Arena events:
+    <code>post_created</code>, <code>post_deleted</code>, <code>post_liked</code>,
+    <code>post_commented</code>, <code>comment_replied</code>, <code>post_trending</code>
+  </p>
+  <div class="inline-form" style="margin-bottom:12px">
+    <div class="form-row" style="flex:1"><label>WS URL</label><input type="text" id="wsUrl" placeholder="ws://localhost:2028/ws" /></div>
+    <button class="btn btn-success" id="wsConnectBtn" onclick="wsConnect()">Connect</button>
+    <button class="btn btn-error" onclick="wsDisconnect()">Disconnect</button>
+    <button class="btn btn-warn" onclick="document.getElementById('wsLog').innerHTML=''">Clear</button>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+    <span id="wsStatus" style="font-size:.78rem;color:var(--text-muted)">Disconnected</span>
+    <span id="wsEventCount" style="font-size:.72rem;color:var(--text-muted)">0 events</span>
+  </div>
+  <div id="wsLog" class="response-panel" style="max-height:350px;min-height:100px;overflow-y:auto"></div>
+</div>
+
+<!-- ================================================================ -->
+<!-- ADMIN ARENA                                                      -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3>Admin Arena</h3>
+  <div class="grid-3">
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-delete">DELETE</span> Admin Delete Post</p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="adminDeletePostId" placeholder="1" /></div>
+        <button class="btn btn-error" onclick="adminDeletePost()">Admin Delete</button>
+      </div>
+      <div id="adminDeleteResult" class="response-panel hidden"></div>
+    </div>
+
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-get">GET</span> Arena Reports</p>
+      <button class="btn btn-primary" onclick="getArenaReports()">Get Post Reports</button>
+      <div id="arenaReportsResult" class="response-panel hidden"></div>
+    </div>
+
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-get">GET</span> Arena Limits</p>
+      <button class="btn btn-primary" onclick="getArenaLimits()">Get Limits</button>
+      <div id="arenaLimitsResult" class="response-panel hidden"></div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function getBaseUrl() {
+  return (document.getElementById('baseUrl').value || 'http://localhost:2028').replace(/\/+$/, '');
+}
+function getToken() {
+  return localStorage.getItem('aarpaar_access_token') || '';
+}
+function getHeaders(json) {
+  const h = {};
+  if (json) h['Content-Type'] = 'application/json';
+  const token = getToken();
+  if (token) h['Authorization'] = 'Bearer ' + token;
+  return h;
+}
+function showPanel(id, data, isError) {
+  const el = document.getElementById(id);
+  el.classList.remove('hidden');
+  el.style.borderColor = isError ? 'var(--error)' : 'var(--border)';
+  el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+}
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+// Extract userId from JWT for "my profile" use
+function getMyUserId() {
+  const token = getToken();
+  if (!token) return '';
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return '';
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return payload.sub || payload.user_id || '';
+  } catch { return ''; }
+}
+
+// ---------------------------------------------------------------------------
+// Feed Tab Switching
+// ---------------------------------------------------------------------------
+function switchFeed(name, btn) {
+  document.querySelectorAll('.tab-item').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.feed-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('feed-' + name).classList.add('active');
+}
+
+// ---------------------------------------------------------------------------
+// Load Feed
+// ---------------------------------------------------------------------------
+async function loadFeed(type) {
+  let url, resultId;
+
+  if (type === 'profile') {
+    let userId = document.getElementById('profileUserId').value.trim();
+    if (!userId) userId = getMyUserId();
+    if (!userId) { alert('Could not detect your user ID. Enter one manually.'); return; }
+    const limit = document.getElementById('profileLimit').value || 20;
+    const offset = document.getElementById('profileOffset').value || 0;
+    url = getBaseUrl() + '/api/v1/arena/users/' + encodeURIComponent(userId) + '/posts?limit=' + limit + '&offset=' + offset;
+    resultId = 'profileFeedResult';
+  } else {
+    const limit = document.getElementById(type + 'Limit').value || 20;
+    const offset = document.getElementById(type + 'Offset').value || 0;
+    url = getBaseUrl() + '/api/v1/arena/feed/' + type + '?limit=' + limit + '&offset=' + offset;
+    resultId = type + 'FeedResult';
+  }
+
+  const el = document.getElementById(resultId);
+  el.innerHTML = '<p style="color:var(--text-muted)">Loading...</p>';
+
+  try {
+    const res = await fetch(url, { headers: getHeaders() });
+    const data = await res.json();
+
+    if (!res.ok) {
+      el.innerHTML = '<pre style="color:var(--error)">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
+      return;
+    }
+
+    if (!Array.isArray(data) || data.length === 0) {
+      el.innerHTML = '<p style="color:var(--text-muted)">No posts found.</p>';
+      return;
+    }
+
+    el.innerHTML = data.map(renderPost).join('');
+  } catch (err) {
+    el.innerHTML = '<pre style="color:var(--error)">Error: ' + escapeHtml(err.message) + '</pre>';
+  }
+}
+
+function renderPost(p) {
+  const initials = (p.displayName || p.username || '?').charAt(0).toUpperCase();
+  const media = (p.media || []).map(m => {
+    if (m.mediaType === 'video') {
+      return '<video src="' + escapeHtml(m.url) + '" controls style="max-width:200px;max-height:200px;border-radius:6px"></video>';
+    }
+    return '<img src="' + escapeHtml(m.url) + '" alt="media" loading="lazy" />';
+  }).join('');
+
+  return `
+    <div class="post-card">
+      <div class="post-header">
+        <div class="post-avatar">${initials}</div>
+        <div>
+          <strong>${escapeHtml(p.displayName || p.username)}</strong>
+          <span style="color:var(--text-muted);font-size:.78rem">@${escapeHtml(p.username)}</span>
+          <div class="post-meta">${p.postType === 'repost' ? '🔄 Repost · ' : ''}${new Date(p.createdAt).toLocaleString()} · ${escapeHtml(p.visibility)}${p.isPinned ? ' · 📌 Pinned' : ''}</div>
+        </div>
+      </div>
+      ${p.caption ? '<div class="post-caption">' + escapeHtml(p.caption) + '</div>' : ''}
+      ${media ? '<div class="post-media-grid">' + media + '</div>' : ''}
+      <div class="post-stats">
+        <span>${p.hasLiked ? '❤️' : '🤍'} ${p.likeCount} likes</span>
+        <span>💬 ${p.commentCount} comments</span>
+        <span>🔄 ${p.repostCount} reposts</span>
+      </div>
+      <div class="post-actions">
+        <button class="btn btn-primary" style="padding:4px 10px;font-size:.72rem" onclick="document.getElementById('likePostId').value='${p.id}';likePost()">Like</button>
+        <button class="btn btn-error" style="padding:4px 10px;font-size:.72rem" onclick="document.getElementById('unlikePostId').value='${p.id}';unlikePost()">Unlike</button>
+        <button class="btn btn-primary" style="padding:4px 10px;font-size:.72rem" onclick="document.getElementById('getCommentsPostId').value='${p.id}';getComments();switchFeed('global',document.querySelector('.tab-item'))">Comments</button>
+        <button class="btn btn-warn" style="padding:4px 10px;font-size:.72rem" onclick="document.getElementById('repostPostId').value='${p.id}'">Repost</button>
+      </div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Create Post (with media upload)
+// ---------------------------------------------------------------------------
+const MAX_IMAGE_DIMENSION = 1920;
+const IMAGE_QUALITY = 0.82;
+const MAX_VIDEO_SIZE_MB = 50;
+
+// Compress image using Canvas API — resizes if > MAX_IMAGE_DIMENSION, re-encodes as WebP/JPEG
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { naturalWidth: w, naturalHeight: h } = img;
+      // Downscale if any dimension exceeds limit
+      if (w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION) {
+        const ratio = Math.min(MAX_IMAGE_DIMENSION / w, MAX_IMAGE_DIMENSION / h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx2d = canvas.getContext('2d');
+      ctx2d.drawImage(img, 0, 0, w, h);
+      // Prefer WebP, fallback to JPEG
+      const outType = 'image/webp';
+      canvas.toBlob(blob => {
+        if (!blob) { resolve({ blob: file, type: file.type, w, h }); return; }
+        // Only use compressed version if it's actually smaller
+        if (blob.size < file.size) {
+          resolve({ blob, type: outType, w, h });
+        } else {
+          resolve({ blob: file, type: file.type, w: img.naturalWidth, h: img.naturalHeight });
+        }
+      }, outType, IMAGE_QUALITY);
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => resolve({ blob: file, type: file.type, w: 0, h: 0 });
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+async function createPost() {
+  const btn = document.getElementById('createPostBtn');
+  const statusEl = document.getElementById('uploadStatus');
+  btn.disabled = true; btn.textContent = 'Creating...';
+
+  try {
+    const caption = document.getElementById('postCaption').value;
+    const visibility = document.getElementById('postVisibility').value;
+    const files = document.getElementById('postMedia').files;
+
+    const mediaItems = [];
+
+    // Upload each file via presigned URL
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      let uploadBlob = file;
+      let uploadType = file.type;
+      let w = 0, h = 0;
+
+      if (file.type.startsWith('image/')) {
+        statusEl.textContent = `Compressing ${i + 1}/${files.length}: ${file.name}...`;
+        const compressed = await compressImage(file);
+        uploadBlob = compressed.blob;
+        uploadType = compressed.type;
+        w = compressed.w;
+        h = compressed.h;
+        const saved = file.size - uploadBlob.size;
+        if (saved > 0) {
+          statusEl.textContent = `Compressed ${file.name}: ${formatSize(file.size)} → ${formatSize(uploadBlob.size)} (saved ${formatSize(saved)})`;
+        }
+      } else if (file.type.startsWith('video/')) {
+        if (file.size > MAX_VIDEO_SIZE_MB * 1048576) {
+          showPanel('createPostResult', `Video "${file.name}" is ${formatSize(file.size)} — max ${MAX_VIDEO_SIZE_MB} MB`, true);
+          btn.disabled = false; btn.textContent = 'Create Post';
+          return;
+        }
+      }
+
+      statusEl.textContent = `Uploading ${i + 1}/${files.length}: ${file.name} (${formatSize(uploadBlob.size)})...`;
+
+      // Determine filename extension based on actual upload type
+      let filename = file.name;
+      if (uploadType === 'image/webp' && !filename.endsWith('.webp')) {
+        filename = filename.replace(/\.[^.]+$/, '.webp');
+      }
+
+      // 1. Get presigned URL
+      const presignRes = await fetch(getBaseUrl() + '/api/v1/arena/media/presign', {
+        method: 'POST',
+        headers: getHeaders(true),
+        body: JSON.stringify({ filename: filename, contentType: uploadType }),
+      });
+      const presignData = await presignRes.json();
+      if (!presignRes.ok) {
+        showPanel('createPostResult', presignData, true);
+        btn.disabled = false; btn.textContent = 'Create Post';
+        return;
+      }
+
+      // 2. Upload file to presigned URL
+      const uploadRes = await fetch(presignData.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': uploadType },
+        body: uploadBlob,
+      });
+      if (!uploadRes.ok) {
+        showPanel('createPostResult', 'Upload failed for ' + file.name + ' (HTTP ' + uploadRes.status + ')', true);
+        btn.disabled = false; btn.textContent = 'Create Post';
+        return;
+      }
+
+      mediaItems.push({
+        objectKey: presignData.objectKey,
+        mediaType: file.type.startsWith('video/') ? 'video' : 'image',
+        width: w,
+        height: h,
+        sortOrder: i,
+      });
+    }
+
+    statusEl.textContent = files.length > 0 ? `${files.length} file(s) uploaded. Creating post...` : 'Creating post...';
+
+    // 4. Create the post
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts', {
+      method: 'POST',
+      headers: getHeaders(true),
+      body: JSON.stringify({ caption, visibility, media: mediaItems }),
+    });
+    const data = await res.json();
+    showPanel('createPostResult', data, !res.ok);
+
+    if (res.ok) {
+      statusEl.textContent = 'Post created successfully!';
+      document.getElementById('postCaption').value = '';
+      document.getElementById('postMedia').value = '';
+      document.getElementById('mediaPreview').innerHTML = '';
+    }
+  } catch (err) {
+    showPanel('createPostResult', 'Error: ' + err.message, true);
+  }
+
+  btn.disabled = false; btn.textContent = 'Create Post';
+}
+
+// ---------------------------------------------------------------------------
+// Post Actions
+// ---------------------------------------------------------------------------
+async function getPost() {
+  const id = document.getElementById('getPostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id, { headers: getHeaders() });
+    showPanel('getPostResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('getPostResult', err.message, true); }
+}
+
+async function deletePost() {
+  const id = document.getElementById('deletePostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id, { method: 'DELETE', headers: getHeaders() });
+    showPanel('deletePostResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('deletePostResult', err.message, true); }
+}
+
+async function repost() {
+  const id = document.getElementById('repostPostId').value;
+  if (!id) return;
+  const caption = document.getElementById('repostCaption').value;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/repost', {
+      method: 'POST', headers: getHeaders(true),
+      body: JSON.stringify({ caption }),
+    });
+    showPanel('repostResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('repostResult', err.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Likes
+// ---------------------------------------------------------------------------
+async function likePost() {
+  const id = document.getElementById('likePostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/like', { method: 'POST', headers: getHeaders() });
+    showPanel('likeResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('likeResult', err.message, true); }
+}
+
+async function unlikePost() {
+  const id = document.getElementById('unlikePostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/like', { method: 'DELETE', headers: getHeaders() });
+    showPanel('unlikeResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('unlikeResult', err.message, true); }
+}
+
+async function getLikers() {
+  const id = document.getElementById('likersPostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/likes', { headers: getHeaders() });
+    showPanel('likersResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('likersResult', err.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Comments
+// ---------------------------------------------------------------------------
+async function createComment() {
+  const postId = document.getElementById('commentPostId').value;
+  if (!postId) return;
+  const body = { body: document.getElementById('commentBody').value };
+  const parentId = document.getElementById('commentParentId').value;
+  if (parentId) body.parentId = parseInt(parentId);
+  const gifUrl = document.getElementById('commentGifUrl').value;
+  if (gifUrl) body.gifUrl = gifUrl;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + postId + '/comments', {
+      method: 'POST', headers: getHeaders(true), body: JSON.stringify(body),
+    });
+    showPanel('commentResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('commentResult', err.message, true); }
+}
+
+async function getComments() {
+  const postId = document.getElementById('getCommentsPostId').value;
+  if (!postId) return;
+  const limit = document.getElementById('commentsLimit').value || 10;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + postId + '/comments?limit=' + limit, { headers: getHeaders() });
+    showPanel('commentsResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('commentsResult', err.message, true); }
+}
+
+async function deleteComment() {
+  const postId = document.getElementById('deleteCommentPostId').value;
+  const commentId = document.getElementById('deleteCommentId').value;
+  if (!postId || !commentId) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + postId + '/comments/' + commentId, { method: 'DELETE', headers: getHeaders() });
+    showPanel('deleteCommentResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('deleteCommentResult', err.message, true); }
+}
+
+async function likeComment() {
+  const id = document.getElementById('likeCommentId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/comments/' + id + '/like', { method: 'POST', headers: getHeaders() });
+    showPanel('likeCommentResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('likeCommentResult', err.message, true); }
+}
+
+async function unlikeComment() {
+  const id = document.getElementById('likeCommentId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/comments/' + id + '/like', { method: 'DELETE', headers: getHeaders() });
+    showPanel('likeCommentResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('likeCommentResult', err.message, true); }
+}
+
+async function reportComment() {
+  const id = document.getElementById('reportCommentId').value;
+  const reason = document.getElementById('reportCommentReason').value;
+  if (!id || !reason) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/comments/' + id + '/report', {
+      method: 'POST', headers: getHeaders(true), body: JSON.stringify({ reason }),
+    });
+    showPanel('reportCommentResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('reportCommentResult', err.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Pin & Report Post
+// ---------------------------------------------------------------------------
+async function pinPost(pin) {
+  const id = document.getElementById('pinPostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/pin', {
+      method: pin ? 'POST' : 'DELETE', headers: getHeaders(),
+    });
+    showPanel('pinResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('pinResult', err.message, true); }
+}
+
+async function reportPost() {
+  const id = document.getElementById('reportPostId').value;
+  const reason = document.getElementById('reportReason').value;
+  if (!id || !reason) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/report', {
+      method: 'POST', headers: getHeaders(true), body: JSON.stringify({ reason }),
+    });
+    showPanel('reportResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('reportResult', err.message, true); }
+}
+
+async function presignUpload() {
+  const filename = document.getElementById('presignFilename').value;
+  const contentType = document.getElementById('presignContentType').value;
+  if (!filename) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/media/presign', {
+      method: 'POST', headers: getHeaders(true),
+      body: JSON.stringify({ filename, contentType }),
+    });
+    showPanel('presignResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('presignResult', err.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Media Preview
+// ---------------------------------------------------------------------------
+function previewMedia() {
+  const files = document.getElementById('postMedia').files;
+  const container = document.getElementById('mediaPreview');
+  container.innerHTML = '';
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const url = URL.createObjectURL(file);
+    if (file.type.startsWith('video/')) {
+      const v = document.createElement('video');
+      v.src = url; v.controls = true; v.muted = true;
+      v.style.cssText = 'max-width:120px;max-height:120px;border-radius:6px;border:1px solid var(--border);object-fit:cover';
+      container.appendChild(v);
+    } else {
+      const img = document.createElement('img');
+      img.src = url;
+      img.style.cssText = 'max-width:120px;max-height:120px;border-radius:6px;border:1px solid var(--border);object-fit:cover';
+      container.appendChild(img);
+    }
+    const label = document.createElement('span');
+    label.textContent = file.name;
+    label.style.cssText = 'font-size:.7rem;color:var(--text-muted);position:absolute;bottom:2px;left:2px';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket — Live Arena Events
+// ---------------------------------------------------------------------------
+let arenaWs = null;
+let arenaWsEventCount = 0;
+
+function getWsUrl() {
+  const b = getBaseUrl().replace(/^http/, 'ws');
+  return b + '/ws';
+}
+
+function wsConnect() {
+  if (arenaWs && arenaWs.readyState <= 1) { return; }
+  const token = getToken();
+  if (!token) { alert('Sign in first on the Test Console'); return; }
+
+  const urlInput = document.getElementById('wsUrl');
+  if (!urlInput.value) urlInput.value = getWsUrl();
+  const url = urlInput.value + (urlInput.value.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
+
+  updateWsStatus('Connecting...', 'var(--warn)');
+  try {
+    arenaWs = new WebSocket(url);
+  } catch (e) {
+    wsLogMsg('Connection error: ' + e.message, 'var(--error)');
+    updateWsStatus('Error', 'var(--error)');
+    return;
+  }
+
+  arenaWs.onopen = () => {
+    wsLogMsg('Connected!', 'var(--success)');
+    updateWsStatus('Connected', 'var(--success)');
+  };
+
+  arenaWs.onclose = (e) => {
+    wsLogMsg('Disconnected (code=' + e.code + ')', 'var(--text-muted)');
+    updateWsStatus('Disconnected', 'var(--text-muted)');
+  };
+
+  arenaWs.onerror = () => {
+    wsLogMsg('WebSocket error', 'var(--error)');
+    updateWsStatus('Error', 'var(--error)');
+  };
+
+  arenaWs.onmessage = (e) => {
+    try {
+      let parsed = JSON.parse(e.data);
+      // Unwrap private envelope
+      if (parsed.type === 'private' && parsed.data) {
+        parsed = parsed.data;
+      }
+
+      // Arena-specific events
+      if (parsed.type === 'post_created') {
+        wsLogMsg('📝 New post by ' + (parsed.username || parsed.userId || 'someone') + ' (post #' + (parsed.postId || '') + ')', 'var(--success)');
+        arenaWsEventCount++;
+      }
+      if (parsed.type === 'post_deleted') {
+        wsLogMsg('🗑️ Post #' + (parsed.postId || '') + ' was deleted', 'var(--error)');
+        arenaWsEventCount++;
+      }
+      if (parsed.type === 'post_liked') {
+        wsLogMsg('❤️ Your post #' + (parsed.postId || '') + ' was liked by ' + (parsed.likedBy || 'someone'), 'var(--accent)');
+        arenaWsEventCount++;
+      }
+      if (parsed.type === 'post_commented') {
+        wsLogMsg('💬 New comment on your post #' + (parsed.postId || '') + ' (comment #' + (parsed.commentId || '') + ')', 'var(--info)');
+        arenaWsEventCount++;
+      }
+      if (parsed.type === 'comment_replied') {
+        wsLogMsg('↩️ Reply to your comment #' + (parsed.parentId || '') + ' on post #' + (parsed.postId || '') + ' (comment #' + (parsed.commentId || '') + ')', 'var(--info)');
+        arenaWsEventCount++;
+      }
+      if (parsed.type === 'post_trending') {
+        wsLogMsg('🔥 Post #' + (parsed.postId || '') + ' is trending!', 'var(--warn)');
+        arenaWsEventCount++;
+      }
+
+      // Non-Arena events — log generically
+      const arenaTypes = ['post_created','post_deleted','post_liked','post_commented','comment_replied','post_trending'];
+      if (!arenaTypes.includes(parsed.type)) {
+        wsLogMsg('[' + (parsed.type || 'unknown') + '] ' + JSON.stringify(parsed).substring(0, 200), 'var(--text-muted)');
+      }
+
+      document.getElementById('wsEventCount').textContent = arenaWsEventCount + ' arena event' + (arenaWsEventCount === 1 ? '' : 's');
+    } catch {
+      wsLogMsg(e.data, 'var(--text-muted)');
+    }
+  };
+}
+
+function wsDisconnect() {
+  if (arenaWs) { arenaWs.close(); arenaWs = null; }
+}
+
+function updateWsStatus(text, color) {
+  const el = document.getElementById('wsStatus');
+  el.textContent = text;
+  el.style.color = color;
+}
+
+function wsLogMsg(msg, color) {
+  const log = document.getElementById('wsLog');
+  const ts = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.style.color = color || 'var(--text)';
+  line.style.marginBottom = '4px';
+  line.textContent = '[' + ts + '] ' + msg;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------
+// Admin Arena
+// ---------------------------------------------------------------------------
+async function adminDeletePost() {
+  const id = document.getElementById('adminDeletePostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/admin/arena/posts/' + id, { method: 'DELETE', headers: getHeaders() });
+    showPanel('adminDeleteResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('adminDeleteResult', err.message, true); }
+}
+
+async function getArenaReports() {
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/admin/arena/reports', { headers: getHeaders() });
+    showPanel('arenaReportsResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('arenaReportsResult', err.message, true); }
+}
+
+async function getArenaLimits() {
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/admin/settings/arena_limits', { headers: getHeaders() });
+    showPanel('arenaLimitsResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('arenaLimitsResult', err.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+(function() {
+  const saved = localStorage.getItem('aarpaar_base_url');
+  if (saved) document.getElementById('baseUrl').value = saved;
+  document.getElementById('baseUrl').addEventListener('change', function() {
+    localStorage.setItem('aarpaar_base_url', this.value);
+  });
+
+  const el = document.getElementById('authStatus');
+  if (getToken()) {
+    const uid = getMyUserId();
+    el.textContent = 'Signed in' + (uid ? ' (' + uid.substring(0, 8) + '...)' : '');
+    el.style.color = 'var(--success)';
+  } else {
+    el.innerHTML = 'Not signed in — <a href="test-frontend.html">sign in on the Test Console</a> first.';
+    el.style.color = 'var(--error)';
+  }
+})();
+</script>
+</body>
+</html>
