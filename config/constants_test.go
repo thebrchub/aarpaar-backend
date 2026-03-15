@@ -25,6 +25,9 @@ func TestWebSocketMessageTypeConstants(t *testing.T) {
 		MsgTypeCallRing, MsgTypeCallAccept, MsgTypeCallReject,
 		MsgTypeCallOffer, MsgTypeCallAnswer, MsgTypeICECandidate,
 		MsgTypeCallEnd, MsgTypeCallMissed, MsgTypeCallBusy,
+		// Arena
+		MsgTypePostCreated, MsgTypePostDeleted, MsgTypePostLiked,
+		MsgTypePostCommented, MsgTypeCommentReplied, MsgTypePostTrending,
 	}
 	for _, typ := range types {
 		assert.NotEmpty(t, typ, "message type constant must not be empty")
@@ -108,4 +111,23 @@ func TestRedisKeyConstants(t *testing.T) {
 	assert.Equal(t, "chat:global", CHAT_GLOBAL_CHANNEL)
 	assert.NotEmpty(t, CHAT_BUFFER_COLON)
 	assert.NotEmpty(t, CHAT_DIRTY_TARGETS)
+}
+
+func TestArenaConstants(t *testing.T) {
+	assert.Equal(t, "arena_limits", ArenaLimitsKey)
+	assert.Equal(t, "original", PostTypeOriginal)
+	assert.Equal(t, "repost", PostTypeRepost)
+	assert.Equal(t, "public", PostVisibilityPublic)
+	assert.Equal(t, "friends", PostVisibilityFriends)
+	assert.Equal(t, "image", MediaTypeImage)
+	assert.Equal(t, "video", MediaTypeVideo)
+	assert.Equal(t, "image/jpeg", MimeJPEG)
+	assert.Equal(t, "image/webp", MimeWebP)
+	assert.Equal(t, "video/mp4", MimeMp4)
+	assert.Equal(t, "video/webm", MimeWebM)
+	assert.Equal(t, 5*time.Minute, PresignPutExpiry)
+	assert.Equal(t, 30*time.Minute, PresignGetExpiry)
+	assert.Equal(t, 20, DefaultFeedLimit)
+	assert.Equal(t, 50, MaxFeedLimit)
+	assert.Equal(t, 3, MaxCommentDepth)
 }

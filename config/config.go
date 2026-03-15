@@ -74,6 +74,20 @@ var (
 
 	// ICE Servers (built once at init from STUN_URLS + TURN config)
 	ICEServers []ICEServer
+
+	// ---------------------------------------------------------------------------
+	// Storage (Cloudflare R2 / S3-compatible)
+	// ---------------------------------------------------------------------------
+	StorageEndpoint  string // S3/R2 endpoint URL
+	StorageAccessKey string // Access key ID
+	StorageSecretKey string // Secret access key
+	StorageBucket    string // Bucket name
+	StorageRegion    string // Region (default "auto" for R2)
+	StoragePublicURL string // Public CDN URL (empty for private buckets)
+
+	// Arena media upload defaults (env overrides; admin can change at runtime via app_settings)
+	ArenaMaxImageSizeKB int // ARENA_MAX_IMAGE_SIZE_KB (default 100)
+	ArenaMaxVideoSizeKB int // ARENA_MAX_VIDEO_SIZE_KB (default 500)
 )
 
 // ICEServer matches the WebRTC RTCIceServer interface.
@@ -235,4 +249,16 @@ func Init() {
 			Credential: TURNPassword2,
 		})
 	}
+
+	// Storage (Cloudflare R2 / S3-compatible — optional, Arena disabled if not set)
+	StorageEndpoint = helper.GetEnv("STORAGE_ENDPOINT", "")
+	StorageAccessKey = helper.GetEnv("STORAGE_ACCESS_KEY_ID", "")
+	StorageSecretKey = helper.GetEnv("STORAGE_SECRET_ACCESS_KEY", "")
+	StorageBucket = helper.GetEnv("STORAGE_BUCKET", "")
+	StorageRegion = helper.GetEnv("STORAGE_REGION", "auto")
+	StoragePublicURL = helper.GetEnv("STORAGE_PUBLIC_URL", "")
+
+	// Arena media defaults (env override; runtime override via app_settings.arena_limits)
+	ArenaMaxImageSizeKB = helper.GetEnvInt("ARENA_MAX_IMAGE_SIZE_KB", 100)
+	ArenaMaxVideoSizeKB = helper.GetEnvInt("ARENA_MAX_VIDEO_SIZE_KB", 500)
 }

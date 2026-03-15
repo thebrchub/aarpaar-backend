@@ -21,33 +21,34 @@ import (
 // ---------------------------------------------------------------------------
 
 // GetAdminStatsHandler returns platform-wide statistics.
+// Uses pg_class.reltuples for fast approximate row counts instead of full COUNT(*) scans.
 func GetAdminStatsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
-	var totalUsers, bannedUsers, totalRooms, totalGroups, totalReports, totalDonations, totalDonors float64
-	err := postgress.GetRawDB().QueryRowContext(ctx, `
+	var totalUsers, bannedUsers, totalRooms, totalGroups, totalReports float64
+	var totalDonations, totalDonors float64
+
+	// Fast approximate counts from Postgres stats (updated by autovacuum/ANALYZE)
+	_ = postgress.GetRawDB().QueryRowContext(ctx, `
 		SELECT
-			(SELECT COUNT(*) FROM users),
-			(SELECT COUNT(*) FROM users WHERE is_banned = true),
-			(SELECT COUNT(*) FROM rooms),
-			(SELECT COUNT(*) FROM rooms WHERE type = 'GROUP'),
-			(SELECT COUNT(*) FROM user_reports),
+			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'users'), 0),
+			(SELECT COALESCE(COUNT(*), 0) FROM users WHERE is_banned = true),
+			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'rooms'), 0),
+			(SELECT COALESCE(COUNT(*), 0) FROM rooms WHERE type = 'GROUP'),
+			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'user_reports'), 0),
 			(SELECT COALESCE(SUM(amount), 0) FROM donations),
 			(SELECT COUNT(DISTINCT user_id) FROM donations)
 	`).Scan(&totalUsers, &bannedUsers, &totalRooms, &totalGroups, &totalReports, &totalDonations, &totalDonors)
 
-	stats := map[string]interface{}{}
-	if err != nil {
-		log.Printf("[admin] stats query failed: %v", err)
-	} else {
-		stats["total_users"] = totalUsers
-		stats["banned_users"] = bannedUsers
-		stats["total_rooms"] = totalRooms
-		stats["total_groups"] = totalGroups
-		stats["total_reports"] = totalReports
-		stats["total_donations"] = totalDonations
-		stats["total_donors"] = totalDonors
+	stats := map[string]interface{}{
+		"total_users":     totalUsers,
+		"banned_users":    bannedUsers,
+		"total_rooms":     totalRooms,
+		"total_groups":    totalGroups,
+		"total_reports":   totalReports,
+		"total_donations": totalDonations,
+		"total_donors":    totalDonors,
 	}
 
 	// Live stats from engine

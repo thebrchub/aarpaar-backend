@@ -386,6 +386,154 @@ var migrationStatements = []string{
 	// COLUMN: donations.razorpay_order_id (link donation to Razorpay order)
 	// ===================================================================
 	`ALTER TABLE donations ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT`,
+
+	// ===================================================================
+	// THE ARENA: Extensions + Tables
+	// ===================================================================
+
+	// ltree extension for nested comment trees
+	`CREATE EXTENSION IF NOT EXISTS "ltree"`,
+
+	// TABLE: posts
+	`CREATE TABLE IF NOT EXISTS posts (
+		id               BIGSERIAL PRIMARY KEY,
+		user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		caption          TEXT NOT NULL DEFAULT '',
+		post_type        TEXT NOT NULL DEFAULT 'original',
+		original_post_id BIGINT REFERENCES posts(id) ON DELETE SET NULL,
+		visibility       TEXT NOT NULL DEFAULT 'public',
+		is_pinned        BOOLEAN NOT NULL DEFAULT false,
+		like_count       INT NOT NULL DEFAULT 0,
+		comment_count    INT NOT NULL DEFAULT 0,
+		repost_count     INT NOT NULL DEFAULT 0,
+		created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts (user_id, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts (created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_posts_visibility ON posts (visibility) WHERE visibility = 'public'`,
+
+	// TABLE: post_media (carousel items)
+	`CREATE TABLE IF NOT EXISTS post_media (
+		id           BIGSERIAL PRIMARY KEY,
+		post_id      BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		media_type   TEXT NOT NULL,
+		object_key   TEXT NOT NULL,
+		width        SMALLINT NOT NULL DEFAULT 0,
+		height       SMALLINT NOT NULL DEFAULT 0,
+		duration_ms  INT,
+		preview_hash TEXT,
+		sort_order   SMALLINT NOT NULL DEFAULT 0
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_media_post_id ON post_media (post_id, sort_order)`,
+
+	// TABLE: post_likes
+	`CREATE TABLE IF NOT EXISTS post_likes (
+		user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		post_id    BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		PRIMARY KEY (user_id, post_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes (post_id, created_at DESC)`,
+
+	// Trigger: increment/decrement posts.like_count on post_likes insert/delete
+	`CREATE OR REPLACE FUNCTION update_post_like_count() RETURNS TRIGGER AS $$
+	BEGIN
+		IF TG_OP = 'INSERT' THEN
+			UPDATE posts SET like_count = like_count + 1 WHERE id = NEW.post_id;
+		ELSIF TG_OP = 'DELETE' THEN
+			UPDATE posts SET like_count = like_count - 1 WHERE id = OLD.post_id;
+		END IF;
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS trg_post_like_count ON post_likes`,
+	`CREATE TRIGGER trg_post_like_count AFTER INSERT OR DELETE ON post_likes
+	 FOR EACH ROW EXECUTE FUNCTION update_post_like_count()`,
+
+	// TABLE: post_comments (nested via ltree)
+	`CREATE TABLE IF NOT EXISTS post_comments (
+		id           BIGSERIAL PRIMARY KEY,
+		post_id      BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		body         TEXT NOT NULL DEFAULT '',
+		path         ltree NOT NULL,
+		depth        SMALLINT NOT NULL DEFAULT 0,
+		like_count   INT NOT NULL DEFAULT 0,
+		gif_url      TEXT,
+		gif_width    SMALLINT,
+		gif_height   SMALLINT,
+		created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments (post_id, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_comments_path ON post_comments USING GIST (path)`,
+
+	// Trigger: increment/decrement posts.comment_count on post_comments insert/delete
+	`CREATE OR REPLACE FUNCTION update_post_comment_count() RETURNS TRIGGER AS $$
+	BEGIN
+		IF TG_OP = 'INSERT' THEN
+			UPDATE posts SET comment_count = comment_count + 1 WHERE id = NEW.post_id;
+		ELSIF TG_OP = 'DELETE' THEN
+			UPDATE posts SET comment_count = comment_count - 1 WHERE id = OLD.post_id;
+		END IF;
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS trg_post_comment_count ON post_comments`,
+	`CREATE TRIGGER trg_post_comment_count AFTER INSERT OR DELETE ON post_comments
+	 FOR EACH ROW EXECUTE FUNCTION update_post_comment_count()`,
+
+	// TABLE: comment_likes
+	`CREATE TABLE IF NOT EXISTS comment_likes (
+		user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		comment_id BIGINT NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		PRIMARY KEY (user_id, comment_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_comment_likes_comment_id ON comment_likes (comment_id)`,
+
+	// Trigger: increment/decrement post_comments.like_count on comment_likes insert/delete
+	`CREATE OR REPLACE FUNCTION update_comment_like_count() RETURNS TRIGGER AS $$
+	BEGIN
+		IF TG_OP = 'INSERT' THEN
+			UPDATE post_comments SET like_count = like_count + 1 WHERE id = NEW.comment_id;
+		ELSIF TG_OP = 'DELETE' THEN
+			UPDATE post_comments SET like_count = like_count - 1 WHERE id = OLD.comment_id;
+		END IF;
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS trg_comment_like_count ON comment_likes`,
+	`CREATE TRIGGER trg_comment_like_count AFTER INSERT OR DELETE ON comment_likes
+	 FOR EACH ROW EXECUTE FUNCTION update_comment_like_count()`,
+
+	// TABLE: post_reports
+	`CREATE TABLE IF NOT EXISTS post_reports (
+		id          BIGSERIAL PRIMARY KEY,
+		reporter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		post_id     BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		reason      TEXT NOT NULL,
+		created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_reports_post ON post_reports (post_id)`,
+
+	// TABLE: comment_reports
+	`CREATE TABLE IF NOT EXISTS comment_reports (
+		id          BIGSERIAL PRIMARY KEY,
+		reporter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		comment_id  BIGINT NOT NULL REFERENCES post_comments(id) ON DELETE CASCADE,
+		reason      TEXT NOT NULL,
+		created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_comment_reports_comment ON comment_reports (comment_id)`,
+
+	// Repost dedup index (covers WHERE user_id = $1 AND original_post_id = $2 AND post_type = 'repost')
+	`CREATE INDEX IF NOT EXISTS idx_posts_repost_dedup ON posts (user_id, original_post_id) WHERE post_type = 'repost'`,
+
+	// Seed: arena_limits (admin-configurable post limits + upload sizes)
+	`INSERT INTO app_settings (key, value) VALUES
+		('arena_limits', '{"max_posts_per_user": 50, "max_media_per_post": 10, "max_image_size_kb": 100, "max_video_size_kb": 500, "max_caption_length": 2200, "max_comment_length": 1000, "trending_threshold": 50}')
+	 ON CONFLICT (key) DO NOTHING`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

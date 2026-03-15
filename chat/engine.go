@@ -181,11 +181,11 @@ func (e *Engine) Register(c *Client) {
 
 	// If this is the user's first device, broadcast "online" to friends
 	if firstDevice {
-		runBackground(func() { e.broadcastPresence(c.UserID, true) })
+		RunBackground(func() { e.broadcastPresence(c.UserID, true) })
 	}
 
 	// Deliver pending incoming call if user has an unanswered call as callee
-	runBackground(func() { e.deliverPendingCall(c) })
+	RunBackground(func() { e.deliverPendingCall(c) })
 }
 
 // Unregister removes a client when they disconnect (close tab / app).
@@ -225,13 +225,13 @@ func (e *Engine) Unregister(c *Client) {
 	// auto-end any active call, and remove from matchmaking queue.
 	// Split into separate background tasks for better parallelism during mass-disconnect.
 	if lastDevice {
-		runBackground(func() {
+		RunBackground(func() {
 			e.handleCallDisconnect(c.UserID)
 		})
-		runBackground(func() {
+		RunBackground(func() {
 			e.handleUserWentOffline(c.UserID)
 		})
-		runBackground(func() {
+		RunBackground(func() {
 			// Clean up match queue so offline users don't get matched
 			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
 			redis.GetRawClient().SRem(ctx, config.DefaultMatchQueue, c.UserID)
@@ -239,7 +239,7 @@ func (e *Engine) Unregister(c *Client) {
 		})
 		// Notify bot service to cancel any pending bot match timer
 		if e.OnUserOffline != nil {
-			runBackground(func() { e.OnUserOffline(c.UserID) })
+			RunBackground(func() { e.OnUserOffline(c.UserID) })
 		}
 	}
 }
@@ -559,7 +559,7 @@ func (e *Engine) subscribeAndListen() {
 						}
 						capturedRoom := roomID
 						capturedSender := senderID
-						runBackground(func() {
+						RunBackground(func() {
 							e.sendMessagePush(capturedRoom, capturedSender, senderName, preview)
 						})
 					}

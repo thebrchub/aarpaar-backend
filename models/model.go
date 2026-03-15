@@ -99,6 +99,121 @@ type StartGroupCallRequest struct {
 }
 
 // ---------------------------------------------------------------------------
+// Arena (Feed) Types
+// ---------------------------------------------------------------------------
+
+// ArenaLimits holds admin-configurable limits for The Arena.
+// Loaded from app_settings.arena_limits; cached in Redis.
+type ArenaLimits struct {
+	MaxPostsPerUser   int `json:"max_posts_per_user"`
+	MaxMediaPerPost   int `json:"max_media_per_post"`
+	MaxImageSizeKB    int `json:"max_image_size_kb"`
+	MaxVideoSizeKB    int `json:"max_video_size_kb"`
+	MaxCaptionLength  int `json:"max_caption_length"`
+	MaxCommentLength  int `json:"max_comment_length"`
+	TrendingThreshold int `json:"trending_threshold"`
+}
+
+// CreatePostRequest is the JSON body for POST /api/v1/arena/posts.
+type CreatePostRequest struct {
+	Caption    string      `json:"caption"`
+	Visibility string      `json:"visibility,omitempty"` // "public" (default) or "friends"
+	Media      []PostMedia `json:"media"`
+}
+
+// PostMedia is a single media item within a post.
+type PostMedia struct {
+	ObjectKey   string `json:"objectKey"`
+	MediaType   string `json:"mediaType"` // "image" or "video"
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	DurationMs  int    `json:"durationMs,omitempty"`
+	PreviewHash string `json:"previewHash,omitempty"` // BlurHash string
+	SortOrder   int    `json:"sortOrder"`
+}
+
+// PostResponse is the JSON shape returned for a single post.
+type PostResponse struct {
+	ID             int64               `json:"id"`
+	UserID         string              `json:"userId"`
+	Username       string              `json:"username,omitempty"`
+	DisplayName    string              `json:"displayName,omitempty"`
+	AvatarURL      string              `json:"avatarUrl,omitempty"`
+	Caption        string              `json:"caption"`
+	PostType       string              `json:"postType"`
+	OriginalPostID *int64              `json:"originalPostId,omitempty"`
+	Visibility     string              `json:"visibility"`
+	IsPinned       bool                `json:"isPinned"`
+	LikeCount      int                 `json:"likeCount"`
+	CommentCount   int                 `json:"commentCount"`
+	RepostCount    int                 `json:"repostCount"`
+	HasLiked       bool                `json:"hasLiked"`
+	Media          []PostMediaResponse `json:"media"`
+	CreatedAt      time.Time           `json:"createdAt"`
+}
+
+// PostMediaResponse is the JSON shape for a media item with a presigned URL.
+type PostMediaResponse struct {
+	ID          int64  `json:"id"`
+	MediaType   string `json:"mediaType"`
+	URL         string `json:"url"` // presigned GET URL
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	DurationMs  int    `json:"durationMs,omitempty"`
+	PreviewHash string `json:"previewHash,omitempty"`
+	SortOrder   int    `json:"sortOrder"`
+}
+
+// PresignRequest is the JSON body for POST /api/v1/arena/media/presign.
+type PresignRequest struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType"`
+}
+
+// PresignResponse is returned by the presign endpoint.
+type PresignResponse struct {
+	UploadURL string `json:"uploadUrl"`
+	ObjectKey string `json:"objectKey"`
+}
+
+// RepostRequest is the JSON body for POST /api/v1/arena/posts/{postId}/repost.
+type RepostRequest struct {
+	Caption string `json:"caption,omitempty"`
+}
+
+// CreateCommentRequest is the JSON body for POST /api/v1/arena/posts/{postId}/comments.
+type CreateCommentRequest struct {
+	Body      string `json:"body"`
+	ParentID  *int64 `json:"parentId,omitempty"` // nil = top-level comment
+	GifURL    string `json:"gifUrl,omitempty"`
+	GifWidth  int    `json:"gifWidth,omitempty"`
+	GifHeight int    `json:"gifHeight,omitempty"`
+}
+
+// CommentResponse is the JSON shape for a single comment.
+type CommentResponse struct {
+	ID        int64     `json:"id"`
+	PostID    int64     `json:"postId"`
+	UserID    string    `json:"userId"`
+	Username  string    `json:"username,omitempty"`
+	AvatarURL string    `json:"avatarUrl,omitempty"`
+	Body      string    `json:"body"`
+	Depth     int       `json:"depth"`
+	LikeCount int       `json:"likeCount"`
+	HasLiked  bool      `json:"hasLiked"`
+	GifURL    string    `json:"gifUrl,omitempty"`
+	GifWidth  int       `json:"gifWidth,omitempty"`
+	GifHeight int       `json:"gifHeight,omitempty"`
+	ParentID  *int64    `json:"parentId,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// ReportRequest is the JSON body for reporting a post or comment.
+type ReportRequest struct {
+	Reason string `json:"reason"`
+}
+
+// ---------------------------------------------------------------------------
 // Group Call State & Admin Types
 // ---------------------------------------------------------------------------
 

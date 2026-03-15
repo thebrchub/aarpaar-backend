@@ -184,6 +184,28 @@ const (
 
 	// Server -> All members: A user accepted a group invite and joined
 	MsgTypeGroupInviteAccepted = "group_invite_accepted"
+
+	// -----------------------------------------------------------------------
+	// Arena (Feed) Events
+	// -----------------------------------------------------------------------
+
+	// Server -> Client: A new post was created by someone you follow
+	MsgTypePostCreated = "post_created"
+
+	// Server -> Client: A post was deleted
+	MsgTypePostDeleted = "post_deleted"
+
+	// Server -> Client: Someone liked your post
+	MsgTypePostLiked = "post_liked"
+
+	// Server -> Client: Someone commented on your post
+	MsgTypePostCommented = "post_commented"
+
+	// Server -> Client: Someone replied to your comment
+	MsgTypeCommentReplied = "comment_replied"
+
+	// Server -> Client: A post is trending (HIGH HEAT)
+	MsgTypePostTrending = "post_trending"
 )
 
 // ---------------------------------------------------------------------------
@@ -372,4 +394,42 @@ const (
 
 	// ReceiptFlushBatchSize is the max number of receipt updates per SQL statement
 	ReceiptFlushBatchSize = 500
+)
+
+// ---------------------------------------------------------------------------
+// Arena Constants
+// ---------------------------------------------------------------------------
+
+const (
+	// ArenaLimitsKey is the app_settings key for admin-configurable arena limits
+	ArenaLimitsKey = "arena_limits"
+
+	// Post types
+	PostTypeOriginal = "original"
+	PostTypeRepost   = "repost"
+
+	// Post visibility
+	PostVisibilityPublic  = "public"
+	PostVisibilityFriends = "friends"
+
+	// Media types
+	MediaTypeImage = "image"
+	MediaTypeVideo = "video"
+
+	// Allowed MIME types for upload
+	MimeJPEG = "image/jpeg"
+	MimeWebP = "image/webp"
+	MimeMp4  = "video/mp4"
+	MimeWebM = "video/webm"
+
+	// Presigned URL expiry times
+	PresignPutExpiry = 5 * time.Minute  // Upload URL validity
+	PresignGetExpiry = 30 * time.Minute // Download URL validity
+
+	// Feed defaults
+	DefaultFeedLimit = 20
+	MaxFeedLimit     = 50
+
+	// Comment depth
+	MaxCommentDepth = 3
 )
