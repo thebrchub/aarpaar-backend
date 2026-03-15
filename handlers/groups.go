@@ -19,7 +19,6 @@ import (
 )
 
 // CreateGroupHandler creates a new group.
-//
 func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -215,7 +214,6 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetGroupHandler returns group info and member list.
-//
 func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -304,7 +302,6 @@ func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpdateGroupHandler updates a group's name, avatar, or visibility (admin only).
-//
 func UpdateGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -381,7 +378,6 @@ func UpdateGroupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // AddGroupMembersHandler adds members to a group (admin only).
-//
 func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -418,11 +414,7 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 	// Check max_members
 	var maxMembers, currentCount int
 	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT r.max_members, COUNT(rm.user_id)
-		 FROM rooms r
-		 LEFT JOIN room_members rm ON rm.room_id = r.id AND rm.status = 'active'
-		 WHERE r.id = $1 AND r.type = 'GROUP'
-		 GROUP BY r.max_members`, groupID,
+		`SELECT max_members, member_count FROM rooms WHERE id = $1 AND type = 'GROUP'`, groupID,
 	).Scan(&maxMembers, &currentCount)
 	if err != nil {
 		log.Printf("[groups] AddGroupMembers count query failed group=%s: %v", groupID, err)
@@ -561,7 +553,6 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // RemoveGroupMemberHandler removes a member from the group, or leaves (self).
-//
 func RemoveGroupMemberHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -634,7 +625,6 @@ func RemoveGroupMemberHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // PromoteAdminHandler promotes a member to group admin.
-//
 func PromoteAdminHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -694,7 +684,6 @@ func PromoteAdminHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteGroupHandler deletes a group (original creator only).
-//
 func DeleteGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -784,7 +773,6 @@ func DeleteGroupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListGroupsHandler lists or searches public groups.
-//
 func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -799,9 +787,10 @@ func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 
 	baseQuery := `SELECT r.id, COALESCE(r.name,''), COALESCE(r.avatar_url,''),
 		        COALESCE(r.visibility,'public'), COALESCE(r.created_by::text,''),
-		        (SELECT COUNT(*) FROM room_members rm2 WHERE rm2.room_id = r.id AND rm2.status = 'active') AS member_count,
-		        EXISTS(SELECT 1 FROM room_members rm3 WHERE rm3.room_id = r.id AND rm3.user_id = $1 AND rm3.status = 'active') AS is_member
+		        r.member_count,
+		        my_rm.user_id IS NOT NULL AS is_member
 		 FROM rooms r
+		 LEFT JOIN room_members my_rm ON my_rm.room_id = r.id AND my_rm.user_id = $1 AND my_rm.status = 'active'
 		 WHERE r.type = 'GROUP' AND r.visibility = 'public'`
 
 	var args []interface{}
@@ -839,7 +828,6 @@ func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // JoinGroupHandler self-joins a public group.
-//
 func JoinGroupHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -860,8 +848,7 @@ func JoinGroupHandler(w http.ResponseWriter, r *http.Request) {
 	var visibility string
 	var maxMembers, currentCount int
 	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT COALESCE(r.visibility,'public'), r.max_members,
-		        (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.id AND rm.status = 'active')
+		`SELECT COALESCE(r.visibility,'public'), r.max_members, r.member_count
 		 FROM rooms r WHERE r.id = $1 AND r.type = 'GROUP'`, groupID,
 	).Scan(&visibility, &maxMembers, &currentCount)
 	if err != nil {
@@ -926,7 +913,6 @@ func JoinGroupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // JoinGroupByInviteHandler joins a group via invite link.
-//
 func JoinGroupByInviteHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -947,8 +933,7 @@ func JoinGroupByInviteHandler(w http.ResponseWriter, r *http.Request) {
 	var groupID string
 	var maxMembers, currentCount int
 	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT r.id, r.max_members,
-		        (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.id AND rm.status = 'active')
+		`SELECT r.id, r.max_members, r.member_count
 		 FROM rooms r WHERE r.invite_code = $1 AND r.type = 'GROUP'`, code,
 	).Scan(&groupID, &maxMembers, &currentCount)
 	if err != nil {
@@ -1001,7 +986,6 @@ func JoinGroupByInviteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // GenerateInviteHandler generates or regenerates an invite code (admin only).
-//
 func GenerateInviteHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1057,7 +1041,6 @@ func getGroupCapacity(ctx context.Context) int {
 }
 
 // SetVanitySlugHandler sets a vanity slug for a group (admin + VIP only).
-//
 func SetVanitySlugHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1133,7 +1116,6 @@ func SetVanitySlugHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // JoinGroupByVanityHandler joins a group via its vanity slug.
-//
 func JoinGroupByVanityHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1154,8 +1136,7 @@ func JoinGroupByVanityHandler(w http.ResponseWriter, r *http.Request) {
 	var groupID, visibility string
 	var maxMembers, currentCount int
 	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT r.id, COALESCE(r.visibility,'public'), r.max_members,
-		        (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.id AND rm.status = 'active')
+		`SELECT r.id, COALESCE(r.visibility,'public'), r.max_members, r.member_count
 		 FROM rooms r WHERE r.vanity_slug = $1 AND r.type = 'GROUP'`, strings.ToLower(slug),
 	).Scan(&groupID, &visibility, &maxMembers, &currentCount)
 	if err != nil {
@@ -1217,7 +1198,6 @@ func JoinGroupByVanityHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // GetGroupInvitesHandler returns pending group invites for the authenticated user.
-//
 func GetGroupInvitesHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1260,7 +1240,6 @@ func GetGroupInvitesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // AcceptGroupInviteHandler accepts a pending group invite.
-//
 func AcceptGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -1280,8 +1259,7 @@ func AcceptGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
 	// Check group is not full
 	var maxMembers, currentCount int
 	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT r.max_members,
-		        (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.id AND rm.status = 'active')
+		`SELECT r.max_members, r.member_count
 		 FROM rooms r WHERE r.id = $1 AND r.type = 'GROUP'`, groupID,
 	).Scan(&maxMembers, &currentCount)
 	if err != nil {
@@ -1326,7 +1304,6 @@ func AcceptGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeclineGroupInviteHandler declines a pending group invite.
-//
 func DeclineGroupInviteHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

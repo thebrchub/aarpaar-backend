@@ -71,7 +71,16 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
-		`SELECT
+		`WITH my_calls AS (
+			SELECT call_id, call_type, tier, started_at, ended_at,
+			       duration_seconds, initiated_by, peer_id
+			FROM call_logs WHERE initiated_by = $1
+			UNION ALL
+			SELECT call_id, call_type, tier, started_at, ended_at,
+			       duration_seconds, initiated_by, peer_id
+			FROM call_logs WHERE peer_id = $1 AND initiated_by != $1
+		)
+		SELECT
 			cl.call_id,
 			cl.call_type,
 			cl.tier,
@@ -83,14 +92,12 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			COALESCE(u.avatar_url, '') AS caller_avatar,
 			COALESCE(peer.name, '') AS peer_name,
 			COALESCE(peer.avatar_url, '') AS peer_avatar
-		FROM call_logs cl
+		FROM my_calls cl
 		LEFT JOIN users u ON u.id = cl.initiated_by
 		LEFT JOIN users peer ON peer.id = CASE
 			WHEN cl.initiated_by = $1 THEN cl.peer_id
 			ELSE cl.initiated_by
 		END
-		WHERE cl.initiated_by = $1
-		   OR cl.peer_id = $1
 		ORDER BY cl.started_at DESC
 		LIMIT $2 OFFSET $3`,
 		userID, limit, offset,

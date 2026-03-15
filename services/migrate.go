@@ -467,6 +467,36 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON post_comments (post_id, created_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_post_comments_path ON post_comments USING GIST (path)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_comments_depth ON post_comments (post_id, depth, like_count DESC, created_at)`,
+
+	// reply_count: materialized count of direct replies (maintained by trigger)
+	`ALTER TABLE post_comments ADD COLUMN IF NOT EXISTS reply_count INT NOT NULL DEFAULT 0`,
+
+	// Trigger: increment/decrement parent's reply_count when a reply is inserted/deleted
+	`CREATE OR REPLACE FUNCTION update_comment_reply_count() RETURNS TRIGGER AS $$
+	DECLARE parent_label TEXT; parent_id BIGINT;
+	BEGIN
+		IF TG_OP = 'INSERT' AND NEW.depth > 0 THEN
+			parent_label := split_part(NEW.path::text, '.', nlevel(NEW.path) - 1 + 0);
+			-- extract second-to-last segment: e.g. c5.c12 -> get 'c5'
+			SELECT id INTO parent_id FROM post_comments
+			  WHERE post_id = NEW.post_id AND path = subpath(NEW.path, 0, nlevel(NEW.path)-1);
+			IF parent_id IS NOT NULL THEN
+				UPDATE post_comments SET reply_count = reply_count + 1 WHERE id = parent_id;
+			END IF;
+		ELSIF TG_OP = 'DELETE' AND OLD.depth > 0 THEN
+			SELECT id INTO parent_id FROM post_comments
+			  WHERE post_id = OLD.post_id AND path = subpath(OLD.path, 0, nlevel(OLD.path)-1);
+			IF parent_id IS NOT NULL THEN
+				UPDATE post_comments SET reply_count = GREATEST(reply_count - 1, 0) WHERE id = parent_id;
+			END IF;
+		END IF;
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS trg_comment_reply_count ON post_comments`,
+	`CREATE TRIGGER trg_comment_reply_count AFTER INSERT OR DELETE ON post_comments
+	 FOR EACH ROW EXECUTE FUNCTION update_comment_reply_count()`,
 
 	// Trigger: increment/decrement posts.comment_count on post_comments insert/delete
 	`CREATE OR REPLACE FUNCTION update_post_comment_count() RETURNS TRIGGER AS $$
@@ -529,6 +559,97 @@ var migrationStatements = []string{
 
 	// Repost dedup index (covers WHERE user_id = $1 AND original_post_id = $2 AND post_type = 'repost')
 	`CREATE INDEX IF NOT EXISTS idx_posts_repost_dedup ON posts (user_id, original_post_id) WHERE post_type = 'repost'`,
+
+	// Missing indexes for scale
+	`CREATE INDEX IF NOT EXISTS idx_call_logs_peer_id ON call_logs (peer_id, started_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_posts_user_pinned ON posts (user_id, is_pinned DESC, created_at DESC)`,
+
+	// ---------------------------------------------------------------------------
+	// Materialized counters & cached columns for 10 lakh+ scale
+	// ---------------------------------------------------------------------------
+
+	// member_count on rooms: avoids COUNT(*) FROM room_members per row
+	`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS member_count INT NOT NULL DEFAULT 0`,
+	// Backfill existing rooms
+	`UPDATE rooms SET member_count = (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = rooms.id AND rm.status = 'active') WHERE member_count = 0 AND type = 'GROUP'`,
+	// Trigger: keep member_count in sync on room_members changes
+	`CREATE OR REPLACE FUNCTION update_room_member_count() RETURNS TRIGGER AS $$
+	BEGIN
+		IF TG_OP = 'INSERT' AND NEW.status = 'active' THEN
+			UPDATE rooms SET member_count = member_count + 1 WHERE id = NEW.room_id;
+		ELSIF TG_OP = 'DELETE' AND OLD.status = 'active' THEN
+			UPDATE rooms SET member_count = GREATEST(member_count - 1, 0) WHERE id = OLD.room_id;
+		ELSIF TG_OP = 'UPDATE' THEN
+			IF OLD.status != 'active' AND NEW.status = 'active' THEN
+				UPDATE rooms SET member_count = member_count + 1 WHERE id = NEW.room_id;
+			ELSIF OLD.status = 'active' AND NEW.status != 'active' THEN
+				UPDATE rooms SET member_count = GREATEST(member_count - 1, 0) WHERE id = OLD.room_id;
+			END IF;
+		END IF;
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS trg_room_member_count ON room_members`,
+	`CREATE TRIGGER trg_room_member_count AFTER INSERT OR DELETE OR UPDATE OF status ON room_members
+	 FOR EACH ROW EXECUTE FUNCTION update_room_member_count()`,
+
+	// total_donated on users: avoids SUM(amount) FROM donations per request
+	`ALTER TABLE users ADD COLUMN IF NOT EXISTS total_donated NUMERIC(12,2) NOT NULL DEFAULT 0`,
+	// Backfill existing users
+	`UPDATE users SET total_donated = COALESCE((SELECT SUM(amount) FROM donations d WHERE d.user_id = users.id), 0) WHERE total_donated = 0`,
+	// Trigger: keep total_donated in sync on donations insert/delete
+	`CREATE OR REPLACE FUNCTION update_user_total_donated() RETURNS TRIGGER AS $$
+	BEGIN
+		IF TG_OP = 'INSERT' THEN
+			UPDATE users SET total_donated = total_donated + NEW.amount WHERE id = NEW.user_id;
+		ELSIF TG_OP = 'DELETE' THEN
+			UPDATE users SET total_donated = GREATEST(total_donated - OLD.amount, 0) WHERE id = OLD.user_id;
+		END IF;
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS trg_user_total_donated ON donations`,
+	`CREATE TRIGGER trg_user_total_donated AFTER INSERT OR DELETE ON donations
+	 FOR EACH ROW EXECUTE FUNCTION update_user_total_donated()`,
+
+	// Expression index for trending feed sort (avoids seq scan + sort)
+	`CREATE INDEX IF NOT EXISTS idx_posts_trending ON posts ((like_count + comment_count * 2 + repost_count * 3), created_at DESC) WHERE visibility = 'public'`,
+
+	// report_count on users: avoids COUNT(*) FROM user_reports per row in admin panel
+	`ALTER TABLE users ADD COLUMN IF NOT EXISTS report_count INT NOT NULL DEFAULT 0`,
+	`UPDATE users SET report_count = (SELECT COUNT(*) FROM user_reports ur WHERE ur.reported_id = users.id) WHERE report_count = 0`,
+	`CREATE OR REPLACE FUNCTION update_user_report_count() RETURNS TRIGGER AS $$
+	BEGIN
+		IF TG_OP = 'INSERT' THEN
+			UPDATE users SET report_count = report_count + 1 WHERE id = NEW.reported_id;
+		ELSIF TG_OP = 'DELETE' THEN
+			UPDATE users SET report_count = GREATEST(report_count - 1, 0) WHERE id = OLD.reported_id;
+		END IF;
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS trg_user_report_count ON user_reports`,
+	`CREATE TRIGGER trg_user_report_count AFTER INSERT OR DELETE ON user_reports
+	 FOR EACH ROW EXECUTE FUNCTION update_user_report_count()`,
+
+	// last_message_preview on rooms: avoids LATERAL subquery scanning messages per room
+	`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS last_message_preview TEXT DEFAULT ''`,
+
+	// Trigger: update last_message_preview on new message insert (already has last_message_at trigger)
+	`CREATE OR REPLACE FUNCTION update_room_last_message_preview() RETURNS TRIGGER AS $$
+	BEGIN
+		UPDATE rooms SET last_message_preview = LEFT(NEW.content, 100) WHERE id = NEW.room_id;
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS trg_room_last_message_preview ON messages`,
+	`CREATE TRIGGER trg_room_last_message_preview AFTER INSERT ON messages
+	 FOR EACH ROW EXECUTE FUNCTION update_room_last_message_preview()`,
+
+	// GIN trigram indexes for ILIKE/LIKE searches at scale
+	`CREATE INDEX IF NOT EXISTS idx_users_name_trgm ON users USING gin (name gin_trgm_ops)`,
+	`CREATE INDEX IF NOT EXISTS idx_users_username_trgm ON users USING gin (username gin_trgm_ops)`,
+	`CREATE INDEX IF NOT EXISTS idx_rooms_name_trgm ON rooms USING gin (name gin_trgm_ops)`,
 
 	// Seed: arena_limits (admin-configurable post limits + upload sizes)
 	`INSERT INTO app_settings (key, value) VALUES

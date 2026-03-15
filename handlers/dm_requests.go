@@ -11,7 +11,6 @@ import (
 )
 
 // GetDMRequestsHandler returns pending DM requests (Instagram-style "Message Requests" inbox).
-//
 func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -32,15 +31,11 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 				u.name AS sender_name,
 				u.username AS sender_username,
 				u.avatar_url AS sender_avatar,
-				lm.content AS last_message_preview
+				COALESCE(r.last_message_preview, '') AS last_message_preview
 			FROM room_members my_rm
 			JOIN rooms r ON my_rm.room_id = r.id
 			JOIN room_members other_rm ON other_rm.room_id = r.id AND other_rm.user_id != $1
 			JOIN users u ON u.id = other_rm.user_id
-			LEFT JOIN LATERAL (
-				SELECT content FROM messages m
-				WHERE m.room_id = r.id ORDER BY m.created_at DESC LIMIT 1
-			) lm ON true
 			WHERE my_rm.user_id = $1 AND my_rm.status = 'pending'
 			ORDER BY r.last_message_at DESC NULLS LAST
 			LIMIT $2 OFFSET $3
@@ -61,7 +56,6 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // AcceptDMRequestHandler accepts a pending DM request.
-//
 func AcceptDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -116,7 +110,6 @@ func AcceptDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // RejectDMRequestHandler rejects a pending DM request and deletes the room.
-//
 func RejectDMRequestHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

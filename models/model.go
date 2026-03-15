@@ -142,6 +142,7 @@ type PostResponse struct {
 	Caption        string              `json:"caption"`
 	PostType       string              `json:"postType"`
 	OriginalPostID *int64              `json:"originalPostId,omitempty"`
+	OriginalPost   *PostResponse       `json:"originalPost,omitempty"`
 	Visibility     string              `json:"visibility"`
 	IsPinned       bool                `json:"isPinned"`
 	LikeCount      int                 `json:"likeCount"`
@@ -192,20 +193,21 @@ type CreateCommentRequest struct {
 
 // CommentResponse is the JSON shape for a single comment.
 type CommentResponse struct {
-	ID        int64     `json:"id"`
-	PostID    int64     `json:"postId"`
-	UserID    string    `json:"userId"`
-	Username  string    `json:"username,omitempty"`
-	AvatarURL string    `json:"avatarUrl,omitempty"`
-	Body      string    `json:"body"`
-	Depth     int       `json:"depth"`
-	LikeCount int       `json:"likeCount"`
-	HasLiked  bool      `json:"hasLiked"`
-	GifURL    string    `json:"gifUrl,omitempty"`
-	GifWidth  int       `json:"gifWidth,omitempty"`
-	GifHeight int       `json:"gifHeight,omitempty"`
-	ParentID  *int64    `json:"parentId,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID         int64     `json:"id"`
+	PostID     int64     `json:"postId"`
+	UserID     string    `json:"userId"`
+	Username   string    `json:"username,omitempty"`
+	AvatarURL  string    `json:"avatarUrl,omitempty"`
+	Body       string    `json:"body"`
+	Depth      int       `json:"depth"`
+	LikeCount  int       `json:"likeCount"`
+	HasLiked   bool      `json:"hasLiked"`
+	ReplyCount int       `json:"replyCount"`
+	GifURL     string    `json:"gifUrl,omitempty"`
+	GifWidth   int       `json:"gifWidth,omitempty"`
+	GifHeight  int       `json:"gifHeight,omitempty"`
+	ParentID   *int64    `json:"parentId,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 // ReportRequest is the JSON body for reporting a post or comment.

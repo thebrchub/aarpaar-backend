@@ -348,7 +348,7 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit, offset := parseFeedPagination(r)
+	cursor, limit := parseFeedCursor(r)
 
 	ctx, cancel := pgCtx(r)
 	defer cancel()
@@ -357,14 +357,15 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
-		        EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1),
+		        my_like.user_id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
-		 WHERE p.visibility = 'public'
+		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		 WHERE p.visibility = 'public' AND p.created_at < $2
 		 ORDER BY p.created_at DESC
-		 LIMIT $2 OFFSET $3`,
-		userID, limit, offset,
+		 LIMIT $3`,
+		userID, cursor, limit,
 	)
 	if err != nil {
 		log.Printf("[arena] global feed query failed: %v", err)
@@ -386,6 +387,7 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 	if err := attachMedia(ctx, posts, Store); err != nil {
 		log.Printf("[arena] attach media failed: %v", err)
 	}
+	attachOriginalPosts(ctx, posts, userID)
 
 	JSONSuccess(w, posts)
 }
@@ -402,26 +404,30 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit, offset := parseFeedPagination(r)
+	cursor, limit := parseFeedCursor(r)
 
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
-		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
+		`WITH my_friends AS (
+			SELECT user_id_2 AS friend_id FROM friendships WHERE user_id_1 = $1
+			UNION ALL
+			SELECT user_id_1 FROM friendships WHERE user_id_2 = $1
+		)
+		SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
-		        EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1),
+		        my_like.user_id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
-		 WHERE p.user_id IN (
-		     SELECT CASE WHEN user_id_1 = $1 THEN user_id_2 ELSE user_id_1 END
-		     FROM friendships WHERE (user_id_1 = $1 OR user_id_2 = $1)
-		 )
+		 JOIN my_friends mf ON mf.friend_id = p.user_id
+		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		 WHERE p.created_at < $2
 		 ORDER BY p.created_at DESC
-		 LIMIT $2 OFFSET $3`,
-		userID, limit, offset,
+		 LIMIT $3`,
+		userID, cursor, limit,
 	)
 	if err != nil {
 		log.Printf("[arena] network feed query failed: %v", err)
@@ -442,6 +448,7 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 	if err := attachMedia(ctx, posts, Store); err != nil {
 		log.Printf("[arena] attach media failed: %v", err)
 	}
+	attachOriginalPosts(ctx, posts, userID)
 
 	JSONSuccess(w, posts)
 }
@@ -479,10 +486,11 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		       p.caption, p.post_type, p.original_post_id, p.visibility,
 		       p.is_pinned, p.like_count, p.comment_count, p.repost_count,
-		       EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1),
+		       my_like.user_id IS NOT NULL,
 		       p.created_at
 		FROM posts p
 		JOIN users u ON u.id = p.user_id
+		LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
 		WHERE p.user_id = $2 %s
 		ORDER BY p.is_pinned DESC, p.created_at DESC
 		LIMIT $3 OFFSET $4`, visFilter)
@@ -507,6 +515,7 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 	if err := attachMedia(ctx, posts, Store); err != nil {
 		log.Printf("[arena] attach media failed: %v", err)
 	}
+	attachOriginalPosts(ctx, posts, viewerID)
 
 	JSONSuccess(w, posts)
 }
@@ -533,10 +542,11 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
-		        EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1),
+		        my_like.user_id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
+		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
 		 WHERE p.visibility = 'public'
 		   AND p.created_at > NOW() - INTERVAL '24 hours'
 		 ORDER BY (p.like_count + p.comment_count * 2 + p.repost_count * 3) DESC, p.created_at DESC
@@ -562,6 +572,7 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 	if err := attachMedia(ctx, posts, Store); err != nil {
 		log.Printf("[arena] attach media failed: %v", err)
 	}
+	attachOriginalPosts(ctx, posts, userID)
 
 	JSONSuccess(w, posts)
 }
@@ -786,6 +797,81 @@ func attachMedia(ctx context.Context, posts []models.PostResponse, store storage
 	return nil
 }
 
+// attachOriginalPosts embeds the original post data for any reposts in the slice.
+func attachOriginalPosts(ctx context.Context, posts []models.PostResponse, viewerID string) {
+	// Collect original post IDs that need fetching
+	origIDs := make(map[int64][]int) // originalPostID -> indices in posts slice
+	for i := range posts {
+		if posts[i].PostType == "repost" && posts[i].OriginalPostID != nil {
+			oid := *posts[i].OriginalPostID
+			origIDs[oid] = append(origIDs[oid], i)
+		}
+	}
+	if len(origIDs) == 0 {
+		return
+	}
+
+	// Build IN query for original posts
+	params := make([]any, 0, len(origIDs)+1)
+	params = append(params, viewerID)
+	placeholders := make([]string, 0, len(origIDs))
+	idx := 2
+	for oid := range origIDs {
+		params = append(params, oid)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", idx))
+		idx++
+	}
+
+	query := fmt.Sprintf(
+		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
+		        p.caption, p.post_type, p.original_post_id, p.visibility,
+		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
+		        my_like.user_id IS NOT NULL,
+		        p.created_at
+		 FROM posts p
+		 JOIN users u ON u.id = p.user_id
+		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		 WHERE p.id IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := postgress.GetRawDB().QueryContext(ctx, query, params...)
+	if err != nil {
+		log.Printf("[arena] fetch original posts failed: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	origPosts := make([]models.PostResponse, 0, len(origIDs))
+	origMap := make(map[int64]*models.PostResponse)
+	for rows.Next() {
+		op, err := scanPost(rows)
+		if err != nil {
+			continue
+		}
+		origPosts = append(origPosts, op)
+		origMap[op.ID] = &origPosts[len(origPosts)-1]
+	}
+
+	// Attach media to original posts
+	if err := attachMedia(ctx, origPosts, Store); err != nil {
+		log.Printf("[arena] attach original post media failed: %v", err)
+	}
+	// Update pointers after attachMedia (which modifies the slice elements)
+	for i := range origPosts {
+		origMap[origPosts[i].ID] = &origPosts[i]
+	}
+
+	// Link originals to reposts
+	for oid, indices := range origIDs {
+		if op, ok := origMap[oid]; ok {
+			for _, i := range indices {
+				posts[i].OriginalPost = op
+			}
+		}
+	}
+}
+
 func parseFeedPagination(r *http.Request) (limit, offset int) {
 	limit = config.DefaultFeedLimit
 	if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 {
@@ -801,16 +887,35 @@ func parseFeedPagination(r *http.Request) (limit, offset int) {
 	return
 }
 
+// parseFeedCursor extracts cursor (RFC3339Nano timestamp) and limit for cursor-based pagination.
+func parseFeedCursor(r *http.Request) (cursor time.Time, limit int) {
+	limit = config.DefaultFeedLimit
+	if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 {
+		if l > config.MaxFeedLimit {
+			l = config.MaxFeedLimit
+		}
+		limit = l
+	}
+	cursor = time.Now().UTC()
+	if c := r.URL.Query().Get("cursor"); c != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, c); err == nil {
+			cursor = parsed
+		}
+	}
+	return
+}
+
 func getPostByID(ctx context.Context, postID int64, viewerID string) (models.PostResponse, error) {
 	var p models.PostResponse
 	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
-		        EXISTS(SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = $1),
+		        my_like.user_id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
+		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
 		 WHERE p.id = $2`,
 		viewerID, postID,
 	).Scan(
@@ -831,5 +936,13 @@ func getPostByID(ctx context.Context, postID int64, viewerID string) (models.Pos
 	if p.Media == nil {
 		p.Media = make([]models.PostMediaResponse, 0)
 	}
+
+	// Embed original post for reposts
+	if p.PostType == "repost" && p.OriginalPostID != nil {
+		origPosts := []models.PostResponse{p}
+		attachOriginalPosts(ctx, origPosts, viewerID)
+		p.OriginalPost = origPosts[0].OriginalPost
+	}
+
 	return p, nil
 }

@@ -186,19 +186,52 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
-		`SELECT c.id, c.post_id, c.user_id, u.username, u.avatar_url,
-		        c.body, c.depth, c.like_count,
-		        EXISTS(SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = $1),
-		        c.gif_url, c.gif_width, c.gif_height,
-		        c.created_at, c.path::text
-		 FROM post_comments c
-		 JOIN users u ON u.id = c.user_id
-		 WHERE c.post_id = $2
-		 ORDER BY c.path
-		 LIMIT $3 OFFSET $4`,
-		userID, postID, limit, offset,
-	)
+	// If parentId is set, fetch replies to that comment; otherwise top-level only
+	parentIDParam := r.URL.Query().Get("parentId")
+
+	var rows *sql.Rows
+	if parentIDParam != "" {
+		parentID, pErr := strconv.ParseInt(parentIDParam, 10, 64)
+		if pErr != nil {
+			JSONError(w, "Invalid parentId", http.StatusBadRequest)
+			return
+		}
+		// Fetch direct replies to a specific comment
+		rows, err = postgress.GetRawDB().QueryContext(ctx,
+			`SELECT c.id, c.post_id, c.user_id, u.username, u.avatar_url,
+			        c.body, c.depth, c.like_count,
+			        my_cl.user_id IS NOT NULL,
+			        c.gif_url, c.gif_width, c.gif_height,
+			        c.created_at, c.path::text,
+			        c.reply_count
+			 FROM post_comments c
+			 JOIN users u ON u.id = c.user_id
+			 LEFT JOIN comment_likes my_cl ON my_cl.comment_id = c.id AND my_cl.user_id = $1
+			 WHERE c.post_id = $2
+			   AND c.path <@ (SELECT path FROM post_comments WHERE id = $3)::ltree
+			   AND c.depth = (SELECT depth FROM post_comments WHERE id = $3) + 1
+			 ORDER BY c.created_at
+			 LIMIT $4 OFFSET $5`,
+			userID, postID, parentID, limit, offset,
+		)
+	} else {
+		// Fetch top-level comments with reply counts
+		rows, err = postgress.GetRawDB().QueryContext(ctx,
+			`SELECT c.id, c.post_id, c.user_id, u.username, u.avatar_url,
+			        c.body, c.depth, c.like_count,
+			        my_cl.user_id IS NOT NULL,
+			        c.gif_url, c.gif_width, c.gif_height,
+			        c.created_at, c.path::text,
+			        c.reply_count
+			 FROM post_comments c
+			 JOIN users u ON u.id = c.user_id
+			 LEFT JOIN comment_likes my_cl ON my_cl.comment_id = c.id AND my_cl.user_id = $1
+			 WHERE c.post_id = $2 AND c.depth = 0
+			 ORDER BY c.like_count DESC, c.created_at
+			 LIMIT $3 OFFSET $4`,
+			userID, postID, limit, offset,
+		)
+	}
 	if err != nil {
 		log.Printf("[arena] get comments failed post=%d: %v", postID, err)
 		JSONError(w, "Failed to load comments", http.StatusInternalServerError)
@@ -216,7 +249,7 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Username, &c.AvatarURL,
 			&c.Body, &c.Depth, &c.LikeCount, &c.HasLiked,
 			&gifURL, &gifWidth, &gifHeight,
-			&c.CreatedAt, &pathStr); err != nil {
+			&c.CreatedAt, &pathStr, &c.ReplyCount); err != nil {
 			continue
 		}
 

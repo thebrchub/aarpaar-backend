@@ -293,15 +293,16 @@ func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
-			SELECT u.id, u.name, u.username, u.avatar_url, u.is_private, f.created_at AS friends_since,
+			WITH my_friends AS (
+				SELECT user_id_2 AS friend_id, created_at FROM friendships WHERE user_id_1 = $1
+				UNION ALL
+				SELECT user_id_1, created_at FROM friendships WHERE user_id_2 = $1
+			)
+			SELECT u.id, u.name, u.username, u.avatar_url, u.is_private, mf.created_at AS friends_since,
 			       CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END AS last_seen_at
-			FROM friendships f
-			JOIN users u ON u.id = CASE
-				WHEN f.user_id_1 = $1 THEN f.user_id_2
-				ELSE f.user_id_1
-			END
-			WHERE (f.user_id_1 = $1 OR f.user_id_2 = $1)
-			  AND u.is_banned = false
+			FROM my_friends mf
+			JOIN users u ON u.id = mf.friend_id
+			WHERE u.is_banned = false
 			ORDER BY u.name
 			LIMIT $2 OFFSET $3
 		) t
@@ -343,15 +344,16 @@ func SearchFriendsHandler(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
-			SELECT u.id, u.name, u.username, u.avatar_url, u.is_private, f.created_at AS friends_since,
+			WITH my_friends AS (
+				SELECT user_id_2 AS friend_id, created_at FROM friendships WHERE user_id_1 = $1
+				UNION ALL
+				SELECT user_id_1, created_at FROM friendships WHERE user_id_2 = $1
+			)
+			SELECT u.id, u.name, u.username, u.avatar_url, u.is_private, mf.created_at AS friends_since,
 			       CASE WHEN u.show_last_seen THEN u.last_seen_at ELSE NULL END AS last_seen_at
-			FROM friendships f
-			JOIN users u ON u.id = CASE
-				WHEN f.user_id_1 = $1 THEN f.user_id_2
-				ELSE f.user_id_1
-			END
-			WHERE (f.user_id_1 = $1 OR f.user_id_2 = $1)
-			  AND u.is_banned = false
+			FROM my_friends mf
+			JOIN users u ON u.id = mf.friend_id
+			WHERE u.is_banned = false
 			  AND (u.name ILIKE '%' || $2 || '%' OR u.username ILIKE '%' || $2 || '%')
 			ORDER BY u.name
 			LIMIT $3 OFFSET $4
@@ -406,11 +408,9 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 			FROM (
 				SELECT fr.id AS request_id, fr.status, fr.created_at, fr.is_premium,
 				       u.id AS user_id, u.name, u.username, u.avatar_url,
-				       COALESCE(d_agg.total, 0) AS donor_total
+				       COALESCE(u.total_donated, 0) AS donor_total
 				FROM friend_requests fr
 				JOIN users u ON u.id = fr.sender_id
-				LEFT JOIN (SELECT user_id, SUM(amount) AS total FROM donations GROUP BY user_id) d_agg
-				  ON d_agg.user_id = fr.sender_id
 				WHERE fr.receiver_id = $1 AND fr.status = 'pending'
 				ORDER BY fr.is_premium DESC, donor_total DESC, fr.created_at DESC
 			) t
@@ -467,6 +467,10 @@ func RemoveFriendHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Not friends with this user", http.StatusNotFound)
 		return
 	}
+
+	// Invalidate cached friend sets
+	rctx := context.Background()
+	redis.GetRawClient().Del(rctx, "friendset:"+userID, "friendset:"+targetID)
 
 	// Also clean up any friend_requests between the two
 	if _, err := postgress.Exec(
@@ -587,6 +591,8 @@ func acceptFriendship(w http.ResponseWriter, accepterID, requesterID string, req
 	redis.GetRawClient().Del(ctx,
 		config.FRIEND_REQUEST_COLON+accepterID,
 		config.FRIEND_REQUEST_COLON+requesterID,
+		"friendset:"+accepterID,
+		"friendset:"+requesterID,
 	)
 
 	JSONSuccess(w, map[string]string{
@@ -638,6 +644,12 @@ func BlockUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	chat.InvalidateBlockCache(userID, targetID)
+
+	// Invalidate cached blocked set
+	bctx := context.Background()
+	redis.GetRawClient().Del(bctx, "blockedset:"+userID, "blockedset:"+targetID)
+
 	JSONMessage(w, "success", "User blocked")
 }
 
@@ -677,6 +689,12 @@ func UnblockUserHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "User is not blocked", http.StatusNotFound)
 		return
 	}
+
+	chat.InvalidateBlockCache(userID, targetID)
+
+	// Invalidate cached blocked set
+	ubctx := context.Background()
+	redis.GetRawClient().Del(ubctx, "blockedset:"+userID, "blockedset:"+targetID)
 
 	JSONMessage(w, "success", "User unblocked")
 }

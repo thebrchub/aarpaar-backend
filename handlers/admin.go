@@ -33,12 +33,19 @@ func GetAdminStatsHandler(w http.ResponseWriter, r *http.Request) {
 	_ = postgress.GetRawDB().QueryRowContext(ctx, `
 		SELECT
 			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'users'), 0),
-			(SELECT COALESCE(COUNT(*), 0) FROM users WHERE is_banned = true),
+			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'users') *
+				COALESCE((SELECT avg_fraction FROM (
+					SELECT CASE WHEN n_distinct > 0 THEN 1.0/n_distinct
+					            WHEN n_distinct < 0 THEN -n_distinct
+					            ELSE 0.01 END AS avg_fraction
+					FROM pg_stats WHERE tablename = 'users' AND attname = 'is_banned'
+					  AND most_common_vals::text LIKE '%true%'
+				) sub), 0.01), 0),
 			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'rooms'), 0),
-			(SELECT COALESCE(COUNT(*), 0) FROM rooms WHERE type = 'GROUP'),
+			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'rooms') * 0.5, 0),
 			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'user_reports'), 0),
-			(SELECT COALESCE(SUM(amount), 0) FROM donations),
-			(SELECT COUNT(DISTINCT user_id) FROM donations)
+			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'donations'), 0),
+			GREATEST((SELECT COALESCE(n_distinct, 0) FROM pg_stats WHERE tablename = 'donations' AND attname = 'user_id'), 0)
 	`).Scan(&totalUsers, &bannedUsers, &totalRooms, &totalGroups, &totalReports, &totalDonations, &totalDonors)
 
 	stats := map[string]interface{}{
@@ -77,11 +84,9 @@ func GetAdminUsersHandler(w http.ResponseWriter, r *http.Request) {
 
 	query := `SELECT u.id, u.email, u.name, COALESCE(u.username,''), COALESCE(u.avatar_url,''),
 		u.gender, u.is_private, u.is_banned, u.created_at, u.last_seen_at,
-		COALESCE(rc.cnt, 0) AS reports_count,
-		COALESCE(dt.total, 0) AS total_donated
+		u.report_count,
+		u.total_donated
 	 FROM users u
-	 LEFT JOIN (SELECT reported_id, COUNT(*) AS cnt FROM user_reports GROUP BY reported_id) rc ON rc.reported_id = u.id
-	 LEFT JOIN (SELECT user_id, SUM(amount) AS total FROM donations GROUP BY user_id) dt ON dt.user_id = u.id
 	 WHERE 1=1`
 
 	args := []interface{}{}
@@ -583,10 +588,11 @@ func GetAppSetting(ctx context.Context, key string, dest interface{}) error {
 }
 
 // GetUserTotalDonation returns the total donation amount for a user.
+// Uses the materialized total_donated column (maintained by trigger).
 func GetUserTotalDonation(ctx context.Context, userID string) float64 {
 	var total float64
 	postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(amount), 0) FROM donations WHERE user_id = $1`, userID,
+		`SELECT total_donated FROM users WHERE id = $1`, userID,
 	).Scan(&total)
 	return total
 }

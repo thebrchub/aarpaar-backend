@@ -11,6 +11,7 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
@@ -60,25 +61,12 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 			ORDER BY r.last_message_at DESC NULLS LAST
 			LIMIT $3
 		),
-		last_msgs AS (
-			SELECT DISTINCT ON (m.room_id) m.room_id, m.content
-			FROM messages m
-			JOIN user_rooms ur ON m.room_id = ur.room_id
-			ORDER BY m.room_id, m.created_at DESC
-		),
 		unread AS (
 			SELECT m.room_id, COUNT(*)::int AS unread_count
 			FROM messages m
 			JOIN user_rooms ur ON m.room_id = ur.room_id
 			WHERE m.created_at > ur.last_read_at AND m.sender_id != $1
 			GROUP BY m.room_id
-		),
-		member_counts AS (
-			SELECT rm2.room_id, COUNT(*)::int AS member_count
-			FROM room_members rm2
-			JOIN user_rooms ur ON rm2.room_id = ur.room_id
-			WHERE rm2.status = 'active'
-			GROUP BY rm2.room_id
 		),
 		member_ids AS (
 			SELECT rm2.room_id, json_agg(rm2.user_id) AS ids
@@ -106,16 +94,14 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 					r.type,
 					r.avatar_url AS group_avatar,
 					COALESCE(r.created_by::text, '') AS created_by,
-					lm.content AS last_message_preview,
+					COALESCE(r.last_message_preview, '') AS last_message_preview,
 					r.last_message_at,
 					COALESCE(uc.unread_count, 0) AS unread_count,
-					COALESCE(mc.member_count, 0) AS member_count,
+					r.member_count,
 					COALESCE(mi.ids, '[]'::json) AS member_ids
 				FROM user_rooms ur
 				JOIN rooms r ON ur.room_id = r.id
-				LEFT JOIN last_msgs lm ON lm.room_id = r.id
 				LEFT JOIN unread uc ON uc.room_id = r.id
-				LEFT JOIN member_counts mc ON mc.room_id = r.id
 				LEFT JOIN member_ids mi ON mi.room_id = r.id
 			) t), '[]'::json),
 			COALESCE((SELECT json_object_agg(amu.id, json_build_object(
@@ -416,41 +402,11 @@ func enrichUsersMapWithOnlineStatus(raw []byte, currentUserID string) []byte {
 		return raw
 	}
 
-	// Build friend set for privacy filtering
-	friendSet := make(map[string]bool)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	friendRows, err := postgress.GetRawDB().QueryContext(ctx,
-		`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
-		 UNION ALL
-		 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`, currentUserID,
-	)
-	if err == nil {
-		for friendRows.Next() {
-			var fid string
-			if friendRows.Scan(&fid) == nil {
-				friendSet[fid] = true
-			}
-		}
-		friendRows.Close()
-	}
 
-	// Build blocked set — blocked users cannot see each other's status
-	blockedSet := make(map[string]bool)
-	blockedRows, err := postgress.GetRawDB().QueryContext(ctx,
-		`SELECT blocked_id FROM blocked_users WHERE blocker_id = $1
-		 UNION ALL
-		 SELECT blocker_id FROM blocked_users WHERE blocked_id = $1`, currentUserID,
-	)
-	if err == nil {
-		for blockedRows.Next() {
-			var bid string
-			if blockedRows.Scan(&bid) == nil {
-				blockedSet[bid] = true
-			}
-		}
-		blockedRows.Close()
-	}
+	friendSet := getCachedFriendSet(ctx, currentUserID)
+	blockedSet := getCachedBlockedSet(ctx, currentUserID)
 
 	for uid, u := range users {
 		if uid == currentUserID {
@@ -477,6 +433,84 @@ func enrichUsersMapWithOnlineStatus(raw []byte, currentUserID string) []byte {
 		return raw
 	}
 	return enriched
+}
+
+// getCachedFriendSet returns the friend ID set for a user, cached in Redis for 30s.
+func getCachedFriendSet(ctx context.Context, userID string) map[string]bool {
+	cacheKey := "friendset:" + userID
+	rdb := redis.GetRawClient()
+
+	if members, err := rdb.SMembers(ctx, cacheKey).Result(); err == nil && len(members) > 0 {
+		set := make(map[string]bool, len(members))
+		for _, m := range members {
+			set[m] = true
+		}
+		return set
+	}
+
+	friendSet := make(map[string]bool)
+	friendRows, err := postgress.GetRawDB().QueryContext(ctx,
+		`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
+		 UNION ALL
+		 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`, userID,
+	)
+	if err != nil {
+		return friendSet
+	}
+	ids := make([]interface{}, 0, 64)
+	for friendRows.Next() {
+		var fid string
+		if friendRows.Scan(&fid) == nil {
+			friendSet[fid] = true
+			ids = append(ids, fid)
+		}
+	}
+	friendRows.Close()
+
+	if len(ids) > 0 {
+		rdb.SAdd(ctx, cacheKey, ids...)
+		rdb.Expire(ctx, cacheKey, 30*time.Second)
+	}
+	return friendSet
+}
+
+// getCachedBlockedSet returns the blocked user ID set, cached in Redis for 30s.
+func getCachedBlockedSet(ctx context.Context, userID string) map[string]bool {
+	cacheKey := "blockedset:" + userID
+	rdb := redis.GetRawClient()
+
+	if members, err := rdb.SMembers(ctx, cacheKey).Result(); err == nil && len(members) > 0 {
+		set := make(map[string]bool, len(members))
+		for _, m := range members {
+			set[m] = true
+		}
+		return set
+	}
+
+	blockedSet := make(map[string]bool)
+	blockedRows, err := postgress.GetRawDB().QueryContext(ctx,
+		`SELECT blocked_id FROM blocked_users WHERE blocker_id = $1
+		 UNION ALL
+		 SELECT blocker_id FROM blocked_users WHERE blocked_id = $1`, userID,
+	)
+	if err != nil {
+		return blockedSet
+	}
+	ids := make([]interface{}, 0, 16)
+	for blockedRows.Next() {
+		var bid string
+		if blockedRows.Scan(&bid) == nil {
+			blockedSet[bid] = true
+			ids = append(ids, bid)
+		}
+	}
+	blockedRows.Close()
+
+	if len(ids) > 0 {
+		rdb.SAdd(ctx, cacheKey, ids...)
+		rdb.Expire(ctx, cacheKey, 30*time.Second)
+	}
+	return blockedSet
 }
 
 // ---------------------------------------------------------------------------
@@ -522,23 +556,9 @@ func enrichRoomsWithOnlineStatus(raw []byte, currentUserID string) []byte {
 
 	// Build friend set + public user set for privacy filtering of is_online.
 	// Only expose online status for friends and public accounts.
-	friendSet := make(map[string]bool)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	friendRows, err := postgress.GetRawDB().QueryContext(ctx,
-		`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
-		 UNION ALL
-		 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`, currentUserID,
-	)
-	if err == nil {
-		for friendRows.Next() {
-			var fid string
-			if friendRows.Scan(&fid) == nil {
-				friendSet[fid] = true
-			}
-		}
-		friendRows.Close()
-	}
+	friendSet := getCachedFriendSet(ctx, currentUserID)
 
 	// Collect all unique member IDs to batch-check privacy
 	memberIDSet := make(map[string]bool)
