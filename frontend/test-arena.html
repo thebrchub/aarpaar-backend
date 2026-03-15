@@ -178,6 +178,26 @@
       padding: 6px 14px; background: var(--warn); color: #000; border: none;
       border-radius: 6px; cursor: pointer; font-size: .78rem; font-weight: 600; font-family: var(--sans);
     }
+    .original-post-embed {
+      margin-top: 10px; padding: 12px; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--surface);
+    }
+    .original-post-embed .op-header {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    }
+    .original-post-embed .op-avatar {
+      width: 28px; height: 28px; border-radius: 50%; background: var(--info);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 700; font-size: .72rem;
+    }
+    .original-post-embed .op-name { font-weight: 600; font-size: .82rem; }
+    .original-post-embed .op-username { color: var(--text-muted); font-size: .75rem; }
+    .original-post-embed .op-caption { font-size: .85rem; margin-bottom: 8px; line-height: 1.45; }
+    .original-post-embed .op-media { display: flex; gap: 6px; flex-wrap: wrap; }
+    .original-post-embed .op-media img, .original-post-embed .op-media video {
+      max-width: 160px; max-height: 120px; border-radius: 6px; object-fit: cover;
+      border: 1px solid var(--border);
+    }
     .section-break { border-top: 1px solid var(--border); margin: 24px 0; }
     .tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
     .tab-item {
@@ -265,20 +285,20 @@
   <div id="feed-global" class="feed-panel active">
     <div class="inline-form" style="margin-bottom:12px">
       <div class="form-row" style="max-width:80px"><label>Limit</label><input type="number" id="globalLimit" value="20" min="1" max="50" /></div>
-      <div class="form-row" style="max-width:80px"><label>Offset</label><input type="number" id="globalOffset" value="0" min="0" /></div>
-      <button class="btn btn-primary" onclick="loadFeed('global')">Load Global Feed</button>
+      <button class="btn btn-primary" onclick="loadFeed('global', true)">Load Global Feed</button>
     </div>
     <div id="globalFeedResult"></div>
+    <button class="btn btn-primary" id="globalLoadMore" style="display:none;margin-top:12px" onclick="loadFeed('global', false)">Load More</button>
   </div>
 
   <!-- Network Feed -->
   <div id="feed-network" class="feed-panel">
     <div class="inline-form" style="margin-bottom:12px">
       <div class="form-row" style="max-width:80px"><label>Limit</label><input type="number" id="networkLimit" value="20" min="1" max="50" /></div>
-      <div class="form-row" style="max-width:80px"><label>Offset</label><input type="number" id="networkOffset" value="0" min="0" /></div>
-      <button class="btn btn-primary" onclick="loadFeed('network')">Load Network Feed</button>
+      <button class="btn btn-primary" onclick="loadFeed('network', true)">Load Network Feed</button>
     </div>
     <div id="networkFeedResult"></div>
+    <button class="btn btn-primary" id="networkLoadMore" style="display:none;margin-top:12px" onclick="loadFeed('network', false)">Load More</button>
   </div>
 
   <!-- Trending Feed -->
@@ -592,10 +612,14 @@ function switchFeed(name, btn) {
 }
 
 // ---------------------------------------------------------------------------
-// Load Feed
+// Load Feed — Global & Network use cursor-based pagination;
+//             Trending & Profile still use offset.
 // ---------------------------------------------------------------------------
-async function loadFeed(type) {
+const feedCursors = { global: '', network: '' };
+
+async function loadFeed(type, reset) {
   let url, resultId;
+  const isCursorFeed = (type === 'global' || type === 'network');
 
   if (type === 'profile') {
     let userId = document.getElementById('profileUserId').value.trim();
@@ -605,6 +629,12 @@ async function loadFeed(type) {
     const offset = document.getElementById('profileOffset').value || 0;
     url = getBaseUrl() + '/api/v1/arena/users/' + encodeURIComponent(userId) + '/posts?limit=' + limit + '&offset=' + offset;
     resultId = 'profileFeedResult';
+  } else if (isCursorFeed) {
+    if (reset) feedCursors[type] = '';
+    const limit = document.getElementById(type + 'Limit').value || 20;
+    url = getBaseUrl() + '/api/v1/arena/feed/' + type + '?limit=' + limit;
+    if (feedCursors[type]) url += '&cursor=' + encodeURIComponent(feedCursors[type]);
+    resultId = type + 'FeedResult';
   } else {
     const limit = document.getElementById(type + 'Limit').value || 20;
     const offset = document.getElementById(type + 'Offset').value || 0;
@@ -613,27 +643,66 @@ async function loadFeed(type) {
   }
 
   const el = document.getElementById(resultId);
-  el.innerHTML = '<p style="color:var(--text-muted)">Loading...</p>';
+  const loadMoreBtn = isCursorFeed ? document.getElementById(type + 'LoadMore') : null;
+
+  if (isCursorFeed && !reset) {
+    // Append mode — show loading indicator after existing posts
+    el.insertAdjacentHTML('beforeend', '<p style="color:var(--text-muted)" id="feed-loading">Loading more...</p>');
+  } else {
+    el.innerHTML = '<p style="color:var(--text-muted)">Loading...</p>';
+  }
+  if (loadMoreBtn) loadMoreBtn.style.display = 'none';
 
   try {
     const res = await fetch(url, { headers: getHeaders() });
     const data = await res.json();
 
+    // Remove loading indicator
+    const loadingEl = document.getElementById('feed-loading');
+    if (loadingEl) loadingEl.remove();
+
     if (!res.ok) {
-      el.innerHTML = '<pre style="color:var(--error)">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
+      const errHtml = '<pre style="color:var(--error)">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
+      if (isCursorFeed && !reset) { el.insertAdjacentHTML('beforeend', errHtml); }
+      else { el.innerHTML = errHtml; }
       return;
     }
 
     if (!Array.isArray(data) || data.length === 0) {
-      el.innerHTML = '<p style="color:var(--text-muted)">No posts found.</p>';
+      if (isCursorFeed && !reset) {
+        el.insertAdjacentHTML('beforeend', '<p style="color:var(--text-muted)">No more posts.</p>');
+      } else {
+        el.innerHTML = '<p style="color:var(--text-muted)">No posts found.</p>';
+      }
       return;
     }
 
-    el.innerHTML = data.map(renderPost).join('');
+    const postsHtml = data.map(renderPost).join('');
+    if (isCursorFeed && !reset) {
+      el.insertAdjacentHTML('beforeend', postsHtml);
+    } else {
+      el.innerHTML = postsHtml;
+    }
+
     // Decode BlurHash placeholders
     requestAnimationFrame(() => renderBlurPlaceholders(el));
+
+    // Update cursor for next page (last post's createdAt)
+    if (isCursorFeed) {
+      const lastPost = data[data.length - 1];
+      feedCursors[type] = lastPost.createdAt || '';
+      // Show "Load More" if we got a full page
+      const limit = parseInt(document.getElementById(type + 'Limit').value) || 20;
+      if (data.length >= limit && loadMoreBtn) {
+        loadMoreBtn.style.display = 'inline-flex';
+      }
+    }
   } catch (err) {
-    el.innerHTML = '<pre style="color:var(--error)">Error: ' + escapeHtml(err.message) + '</pre>';
+    const loadingEl = document.getElementById('feed-loading');
+    if (loadingEl) loadingEl.remove();
+    const errHtml = '<pre style="color:var(--error)">Error: ' + escapeHtml(err.message) + '</pre>';
+    if (isCursorFeed && !reset) { el.insertAdjacentHTML('beforeend', errHtml); }
+    else { el.innerHTML = errHtml; }
   }
 }
 
@@ -673,6 +742,7 @@ function renderPost(p) {
       </div>
       ${p.caption ? '<div class="post-caption">' + escapeHtml(p.caption) + '</div>' : ''}
       ${media ? '<div class="post-media-grid">' + media + '</div>' : ''}
+      ${renderOriginalPostEmbed(p)}
       <div class="post-actions">
         <button class="action-btn${likedClass}" id="like-btn-${p.id}" onclick="toggleLike(${p.id}, ${p.hasLiked ? 'true' : 'false'})">
           <span id="like-icon-${p.id}">${likedIcon}</span>
@@ -690,6 +760,27 @@ function renderPost(p) {
       </div>
       <div id="comments-section-${p.id}" style="display:none"></div>
     </div>`;
+}
+
+function renderOriginalPostEmbed(p) {
+  if (p.postType !== 'repost' || !p.originalPost) return '';
+  const op = p.originalPost;
+  const opInitials = (op.displayName || op.username || '?').charAt(0).toUpperCase();
+  const opMedia = (op.media || []).map(m => {
+    if (m.mediaType === 'video') {
+      return '<video src="' + escapeHtml(m.url) + '" controls preload="metadata" style="max-width:160px;max-height:120px"></video>';
+    }
+    return '<img src="' + escapeHtml(m.url) + '" alt="media" loading="lazy" />';
+  }).join('');
+  return '<div class="original-post-embed">'
+    + '<div class="op-header">'
+    + '<div class="op-avatar">' + opInitials + '</div>'
+    + '<div><span class="op-name">' + escapeHtml(op.displayName || op.username) + '</span> '
+    + '<span class="op-username">@' + escapeHtml(op.username) + '</span></div>'
+    + '</div>'
+    + (op.caption ? '<div class="op-caption">' + escapeHtml(op.caption) + '</div>' : '')
+    + (opMedia ? '<div class="op-media">' + opMedia + '</div>' : '')
+    + '</div>';
 }
 
 // ---------------------------------------------------------------------------
@@ -895,7 +986,8 @@ async function toggleComments(postId) {
 async function loadInlineComments(postId) {
   const section = document.getElementById('comments-section-' + postId);
   try {
-    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + postId + '/comments?limit=50', { headers: getHeaders() });
+    // Fetch top-level comments only (backend returns depth=0 with replyCount)
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + postId + '/comments?limit=20', { headers: getHeaders() });
     const data = await res.json();
     if (!res.ok) {
       section.innerHTML = '<div class="inline-comments"><p style="color:var(--error);font-size:.8rem">' + escapeHtml(data.error || 'Failed to load comments') + '</p></div>';
@@ -906,7 +998,7 @@ async function loadInlineComments(postId) {
     if (comments.length === 0) {
       html += '<p style="color:var(--text-muted);font-size:.8rem">No comments yet. Be the first!</p>';
     } else {
-      html += renderCommentTree(comments, postId);
+      html += comments.map(c => renderTopLevelComment(c, postId)).join('');
     }
     html += '<div class="inline-comment-form" id="comment-form-' + postId + '">';
     html += '<input type="text" id="comment-input-' + postId + '" placeholder="Write a comment..." onkeydown="if(event.key===\'Enter\')submitInlineComment(' + postId + ')" />';
@@ -915,7 +1007,6 @@ async function loadInlineComments(postId) {
     html += '<input type="hidden" id="comment-reply-to-' + postId + '" value="" />';
     html += '</div>';
     section.innerHTML = html;
-    // Update comment count
     const countEl = document.getElementById('comment-count-' + postId);
     if (countEl) countEl.textContent = comments.length;
   } catch (err) {
@@ -923,44 +1014,78 @@ async function loadInlineComments(postId) {
   }
 }
 
-function renderCommentTree(comments, postId) {
-  // Build parent → children map
-  const topLevel = [];
-  const childMap = {};
-  for (const c of comments) {
-    if (c.parentId) {
-      if (!childMap[c.parentId]) childMap[c.parentId] = [];
-      childMap[c.parentId].push(c);
-    } else {
-      topLevel.push(c);
-    }
+function renderTopLevelComment(c, postId) {
+  const authorName = escapeHtml(c.displayName || c.username || 'User');
+  const timeAgo = new Date(c.createdAt).toLocaleString();
+  let h = '<div class="comment-item" id="comment-' + c.id + '">';
+  h += '<span class="comment-author">' + authorName + '</span>';
+  if (c.gifUrl) {
+    h += '<div style="margin:4px 0"><img src="' + escapeHtml(c.gifUrl) + '" alt="gif" style="max-width:150px;border-radius:4px" /></div>';
   }
-
-  function renderOne(c, depth) {
-    const wrapClass = depth > 0 ? ' reply-indent' : '';
-    const authorName = escapeHtml(c.displayName || c.username || 'User');
-    const timeAgo = new Date(c.createdAt).toLocaleString();
-    let h = '<div class="comment-item' + wrapClass + '">';
-    h += '<span class="comment-author">' + authorName + '</span>';
-    if (c.gifUrl) {
-      h += '<div style="margin:4px 0"><img src="' + escapeHtml(c.gifUrl) + '" alt="gif" style="max-width:150px;border-radius:4px" /></div>';
-    }
-    h += '<div class="comment-body">' + escapeHtml(c.body || '') + '</div>';
-    h += '<div class="comment-meta">';
-    h += '<span>' + timeAgo + '</span>';
-    h += '<button onclick="replyToComment(' + postId + ',' + c.id + ',\'' + escapeHtml(c.username || 'User') + '\')">↩ Reply</button>';
-    h += '<button onclick="inlineLikeComment(' + c.id + ', this)">' + (c.hasLiked ? '❤️' : '🤍') + ' ' + (c.likeCount || 0) + '</button>';
+  h += '<div class="comment-body">' + escapeHtml(c.body || '') + '</div>';
+  h += '<div class="comment-meta">';
+  h += '<span>' + timeAgo + '</span>';
+  h += '<button onclick="replyToComment(' + postId + ',' + c.id + ',\'' + escapeHtml(c.username || 'User').replace(/'/g, "\\'") + '\')">↩ Reply</button>';
+  h += '<button onclick="inlineLikeComment(' + c.id + ', this)">' + (c.hasLiked ? '❤️' : '🤍') + ' ' + (c.likeCount || 0) + '</button>';
+  h += '</div>';
+  // Replies container
+  if (c.replyCount > 0) {
+    h += '<div id="replies-' + c.id + '">';
+    h += '<button class="action-btn" style="font-size:.72rem;margin-top:6px" onclick="loadReplies(' + postId + ',' + c.id + ',0)">View ' + c.replyCount + ' repl' + (c.replyCount === 1 ? 'y' : 'ies') + '</button>';
     h += '</div>';
-    // Render children
-    const children = childMap[c.id] || [];
-    for (const child of children) {
-      h += renderOne(child, depth + 1);
-    }
-    h += '</div>';
-    return h;
+  } else {
+    h += '<div id="replies-' + c.id + '"></div>';
   }
+  h += '</div>';
+  return h;
+}
 
-  return topLevel.map(c => renderOne(c, 0)).join('');
+async function loadReplies(postId, parentId, offset) {
+  const container = document.getElementById('replies-' + parentId);
+  if (!container) return;
+  if (offset === 0) container.innerHTML = '<p style="color:var(--text-muted);font-size:.75rem;margin-top:4px">Loading...</p>';
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + postId + '/comments?parentId=' + parentId + '&limit=20&offset=' + offset, { headers: getHeaders() });
+    const data = await res.json();
+    if (!res.ok) { container.innerHTML = '<p style="color:var(--error);font-size:.75rem">Failed to load replies</p>'; return; }
+    const replies = Array.isArray(data) ? data : [];
+    if (offset === 0) container.innerHTML = '';
+    let html = '';
+    for (const r of replies) {
+      html += renderReplyComment(r, postId);
+    }
+    // If we got a full page, show "see more"
+    if (replies.length >= 20) {
+      html += '<button class="action-btn" style="font-size:.72rem;margin-top:4px" onclick="loadReplies(' + postId + ',' + parentId + ',' + (offset + 20) + ')">See more replies</button>';
+    }
+    container.insertAdjacentHTML('beforeend', html);
+  } catch (err) {
+    container.innerHTML = '<p style="color:var(--error);font-size:.75rem">Error: ' + escapeHtml(err.message) + '</p>';
+  }
+}
+
+function renderReplyComment(c, postId) {
+  const authorName = escapeHtml(c.displayName || c.username || 'User');
+  const timeAgo = new Date(c.createdAt).toLocaleString();
+  let h = '<div class="comment-item reply-indent" id="comment-' + c.id + '">';
+  h += '<span class="comment-author">' + authorName + '</span>';
+  if (c.gifUrl) {
+    h += '<div style="margin:4px 0"><img src="' + escapeHtml(c.gifUrl) + '" alt="gif" style="max-width:120px;border-radius:4px" /></div>';
+  }
+  h += '<div class="comment-body">' + escapeHtml(c.body || '') + '</div>';
+  h += '<div class="comment-meta">';
+  h += '<span>' + timeAgo + '</span>';
+  h += '<button onclick="replyToComment(' + postId + ',' + c.id + ',\'' + escapeHtml(c.username || 'User').replace(/'/g, "\\'") + '\')">↩ Reply</button>';
+  h += '<button onclick="inlineLikeComment(' + c.id + ', this)">' + (c.hasLiked ? '❤️' : '🤍') + ' ' + (c.likeCount || 0) + '</button>';
+  h += '</div>';
+  // Nested replies
+  if (c.replyCount > 0) {
+    h += '<div id="replies-' + c.id + '">';
+    h += '<button class="action-btn" style="font-size:.72rem;margin-top:4px" onclick="loadReplies(' + postId + ',' + c.id + ',0)">View ' + c.replyCount + ' repl' + (c.replyCount === 1 ? 'y' : 'ies') + '</button>';
+    h += '</div>';
+  }
+  h += '</div>';
+  return h;
 }
 
 function replyToComment(postId, commentId, authorName) {
@@ -1458,14 +1583,29 @@ function wsConnect() {
       if (parsed.type === 'post_liked') {
         wsLogMsg('❤️ Your post #' + (parsed.postId || '') + ' was liked by ' + (parsed.likedBy || 'someone'), 'var(--accent)');
         arenaWsEventCount++;
+        // Live update: bump like count on the post card if visible
+        const likeCountEl = document.getElementById('like-count-' + parsed.postId);
+        if (likeCountEl) likeCountEl.textContent = (parseInt(likeCountEl.textContent) || 0) + 1;
       }
       if (parsed.type === 'post_commented') {
         wsLogMsg('💬 New comment on your post #' + (parsed.postId || '') + ' (comment #' + (parsed.commentId || '') + ')', 'var(--info)');
         arenaWsEventCount++;
+        // Live update: bump comment count + refresh inline comments if open
+        const commentCountEl = document.getElementById('comment-count-' + parsed.postId);
+        if (commentCountEl) commentCountEl.textContent = (parseInt(commentCountEl.textContent) || 0) + 1;
+        const commentSection = document.getElementById('comments-section-' + parsed.postId);
+        if (commentSection && commentSection.style.display !== 'none') {
+          loadInlineComments(parsed.postId);
+        }
       }
       if (parsed.type === 'comment_replied') {
         wsLogMsg('↩️ Reply to your comment #' + (parsed.parentId || '') + ' on post #' + (parsed.postId || '') + ' (comment #' + (parsed.commentId || '') + ')', 'var(--info)');
         arenaWsEventCount++;
+        // Live update: refresh inline comments if open
+        const commentSection2 = document.getElementById('comments-section-' + parsed.postId);
+        if (commentSection2 && commentSection2.style.display !== 'none') {
+          loadInlineComments(parsed.postId);
+        }
       }
       if (parsed.type === 'post_trending') {
         wsLogMsg('🔥 Post #' + (parsed.postId || '') + ' is trending!', 'var(--warn)');

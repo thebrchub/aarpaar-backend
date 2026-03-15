@@ -1,16 +1,19 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 )
 
 // ---------------------------------------------------------------------------
-// Leaderboard
+// Leaderboard (Redis-cached, 5 min TTL)
 // ---------------------------------------------------------------------------
 
 // GetLeaderboardHandler returns top donors.
@@ -22,8 +25,18 @@ func GetLeaderboardHandler(w http.ResponseWriter, r *http.Request) {
 
 	limit, offset := parsePagination(r)
 
-	ctx, cancel := pgCtx(r)
+	// Try Redis cache first
+	cacheKey := fmt.Sprintf("leaderboard:%s:%d:%d", scope, limit, offset)
+	rdb := redis.GetRawClient()
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
+
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
 
 	var dateFilter string
 	if scope == "monthly" {
@@ -62,6 +75,9 @@ func GetLeaderboardHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
+
+	// Cache result in Redis for 5 minutes
+	rdb.Set(ctx, cacheKey, raw, 5*time.Minute)
 
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)

@@ -14,7 +14,6 @@ import (
 )
 
 // GetMeHandler returns the authenticated user's own profile.
-//
 func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -27,7 +26,7 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT COALESCE(
 			(SELECT row_to_json(t)::text FROM (
 				SELECT id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, created_at,
-				       COALESCE((SELECT SUM(amount) FROM donations WHERE user_id = $1), 0) AS total_donated
+				       total_donated
 				FROM users WHERE id = $1 AND is_banned = false
 			) t),
 			''
@@ -55,7 +54,6 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // SearchUsersHandler searches for users by username or name.
-//
 func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 	_, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok {
@@ -99,7 +97,6 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // CheckUsernameHandler checks if a username is available.
-//
 func CheckUsernameHandler(w http.ResponseWriter, r *http.Request) {
 	_, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok {
@@ -132,7 +129,6 @@ func CheckUsernameHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateMeHandler partially updates the authenticated user's profile.
 // Only the fields provided in the body are updated (PATCH semantics).
-//
 func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -244,7 +240,6 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 
 // PutMeHandler replaces the authenticated user's profile fields entirely.
 // Both username and name are required in the body (PUT semantics).
-//
 func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

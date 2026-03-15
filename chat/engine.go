@@ -681,27 +681,66 @@ func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 // isBlockedInRoom checks if the sender is blocked by (or has blocked) any
 // other member in the room. Only enforced for DM rooms — blocked users can
 // still message each other in group chats.
+// Cached in Redis for 30 seconds to avoid per-message Postgres hits.
 func isBlockedInRoom(senderID, roomID string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	var blocked bool
+	// First, resolve the other user in the DM room to build a stable cache key.
+	// For non-DM rooms this query returns no rows and we skip the block check.
+	var otherID string
 	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT rm.user_id FROM room_members rm
+		 JOIN rooms r ON r.id = rm.room_id AND r.type = 'DM'
+		 WHERE rm.room_id = $1 AND rm.user_id != $2 AND rm.status = 'active'
+		 LIMIT 1`, roomID, senderID,
+	).Scan(&otherID)
+	if err != nil {
+		return false // not a DM room or no other member
+	}
+
+	// Stable cache key: alphabetically ordered user pair
+	a, b := senderID, otherID
+	if a > b {
+		a, b = b, a
+	}
+	cacheKey := "blockpair:" + a + ":" + b
+
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
+		return cached == "1"
+	}
+
+	var blocked bool
+	err = postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT EXISTS (
-			SELECT 1 FROM blocked_users bu
-			JOIN room_members rm ON rm.room_id = $2
-				AND rm.user_id != $1
-				AND rm.status = 'active'
-			JOIN rooms r ON r.id = $2 AND r.type = 'DM'
-			WHERE (bu.blocker_id = $1 AND bu.blocked_id = rm.user_id)
-			   OR (bu.blocker_id = rm.user_id AND bu.blocked_id = $1)
-		)`, senderID, roomID,
+			SELECT 1 FROM blocked_users
+			WHERE (blocker_id = $1 AND blocked_id = $2)
+			   OR (blocker_id = $2 AND blocked_id = $1)
+		)`, senderID, otherID,
 	).Scan(&blocked)
 	if err != nil {
-		log.Printf("[engine] block check failed sender=%s room=%s: %v", senderID, roomID, err)
-		return false // fail open to avoid breaking messages on DB errors
+		log.Printf("[engine] block check failed sender=%s other=%s: %v", senderID, otherID, err)
+		return false
 	}
+
+	val := "0"
+	if blocked {
+		val = "1"
+	}
+	rdb.Set(ctx, cacheKey, val, 30*time.Second)
 	return blocked
+}
+
+// InvalidateBlockCache clears the cached block status for a user pair.
+func InvalidateBlockCache(userA, userB string) {
+	a, b := userA, userB
+	if a > b {
+		a, b = b, a
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	redis.GetRawClient().Del(ctx, "blockpair:"+a+":"+b)
 }
 
 // isBlockedPair checks if either user has blocked the other.
