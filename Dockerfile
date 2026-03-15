@@ -22,14 +22,11 @@ ENV GOPRIVATE=github.com/shivanand-burli/*
 COPY ./go.mod ./go.sum ./
 RUN go mod download
 
-# 5.1 Force re-download go-starter-kit (bust Docker cache with CACHEBUST arg)
-# Set CACHEBUST to a unique value per build (e.g. Railway: $RAILWAY_DEPLOYMENT_ID)
-ARG CACHEBUST=0
-RUN rm -rf "$(go env GOMODCACHE)/github.com/shivanand-burli" && \
-    go mod download github.com/shivanand-burli/go-starter-kit
+# 5.1 Copy source and force-update go-starter-kit to latest commit
+COPY ./ .
+RUN go get -u github.com/shivanand-burli/go-starter-kit@latest && go mod tidy
 
 # 6. Build the application
-COPY ./ .
 RUN CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64 \

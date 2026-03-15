@@ -105,7 +105,7 @@
   <div class="grid-2">
     <div class="form-row">
       <label>Base URL</label>
-      <input type="text" id="baseUrl" placeholder="http://localhost:2028" />
+      <input type="text" id="baseUrl" placeholder="https://api.zquab.com" />
     </div>
     <div class="form-row">
       <label>Auth Status</label>
@@ -192,7 +192,7 @@
 // Helpers
 // ---------------------------------------------------------------------------
 function getBaseUrl() {
-  return (document.getElementById('baseUrl').value || 'http://localhost:2028').replace(/\/+$/, '');
+  return (document.getElementById('baseUrl').value || 'https://api.zquab.com').replace(/\/+$/, '');
 }
 function getToken() {
   return localStorage.getItem('aarpaar_access_token') || '';

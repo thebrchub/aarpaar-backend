@@ -417,7 +417,7 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 		 JOIN users u ON u.id = p.user_id
 		 WHERE p.user_id IN (
 		     SELECT CASE WHEN user_id_1 = $1 THEN user_id_2 ELSE user_id_1 END
-		     FROM friends WHERE (user_id_1 = $1 OR user_id_2 = $1) AND status = 'accepted'
+		     FROM friendships WHERE (user_id_1 = $1 OR user_id_2 = $1)
 		 )
 		 ORDER BY p.created_at DESC
 		 LIMIT $2 OFFSET $3`,
