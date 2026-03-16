@@ -20,9 +20,11 @@ func TestIsAllowedMediaType(t *testing.T) {
 	}{
 		{"image/jpeg", true},
 		{"image/webp", true},
+		{"image/avif", true},
+		{"image/png", true},
 		{"video/mp4", true},
 		{"video/webm", true},
-		{"image/png", false},
+		{"video/quicktime", true},
 		{"image/gif", false},
 		{"video/avi", false},
 		{"application/pdf", false},
@@ -46,7 +48,10 @@ func TestMimeToExt(t *testing.T) {
 	assert.Equal(t, ".webp", mimeToExt(config.MimeWebP))
 	assert.Equal(t, ".mp4", mimeToExt(config.MimeMp4))
 	assert.Equal(t, ".webm", mimeToExt(config.MimeWebM))
-	assert.Equal(t, "", mimeToExt("image/png"))
+	assert.Equal(t, ".avif", mimeToExt(config.MimeAVIF))
+	assert.Equal(t, ".png", mimeToExt(config.MimePNG))
+	assert.Equal(t, ".mov", mimeToExt(config.MimeMOV))
+	assert.Equal(t, "", mimeToExt("application/octet-stream"))
 }
 
 func TestExtractParentID(t *testing.T) {

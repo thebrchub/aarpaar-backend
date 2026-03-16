@@ -682,25 +682,38 @@ func (e *Engine) sendDeliveryReceipts(roomID string, senderID string) {
 // other member in the room. Only enforced for DM rooms — blocked users can
 // still message each other in group chats.
 // Cached in Redis for 30 seconds to avoid per-message Postgres hits.
+// DM room → other-user mapping is cached for 5 minutes (membership changes rarely).
 func isBlockedInRoom(senderID, roomID string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// First, resolve the other user in the DM room to build a stable cache key.
-	// For non-DM rooms this query returns no rows and we skip the block check.
-	var otherID string
-	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT rm.user_id FROM room_members rm
-		 JOIN rooms r ON r.id = rm.room_id AND r.type = 'DM'
-		 WHERE rm.room_id = $1 AND rm.user_id != $2 AND rm.status = 'active'
-		 LIMIT 1`, roomID, senderID,
-	).Scan(&otherID)
+	rdb := redis.GetRawClient()
+
+	// Resolve the other user in the DM room. Cached in Redis to avoid a
+	// Postgres hit on every single DM message.
+	dmKey := "dm:other:" + roomID + ":" + senderID
+	otherID, err := rdb.Get(ctx, dmKey).Result()
 	if err != nil {
-		return false // not a DM room or no other member
+		// Cache miss — hit Postgres once and cache for 5 minutes
+		err = postgress.GetRawDB().QueryRowContext(ctx,
+			`SELECT rm.user_id FROM room_members rm
+			 JOIN rooms r ON r.id = rm.room_id AND r.type = 'DM'
+			 WHERE rm.room_id = $1 AND rm.user_id != $2 AND rm.status = 'active'
+			 LIMIT 1`, roomID, senderID,
+		).Scan(&otherID)
+		if err != nil {
+			return false // not a DM room or no other member
+		}
+		rdb.Set(ctx, dmKey, otherID, 5*time.Minute)
 	}
 
-	// Stable cache key: alphabetically ordered user pair
-	a, b := senderID, otherID
+	return isBlockedPairCached(ctx, senderID, otherID)
+}
+
+// isBlockedPairCached checks if either user has blocked the other, with
+// Redis caching (30s TTL). Shared by isBlockedInRoom and isBlockedPair.
+func isBlockedPairCached(ctx context.Context, userA, userB string) bool {
+	a, b := userA, userB
 	if a > b {
 		a, b = b, a
 	}
@@ -712,15 +725,15 @@ func isBlockedInRoom(senderID, roomID string) bool {
 	}
 
 	var blocked bool
-	err = postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT EXISTS (
 			SELECT 1 FROM blocked_users
 			WHERE (blocker_id = $1 AND blocked_id = $2)
 			   OR (blocker_id = $2 AND blocked_id = $1)
-		)`, senderID, otherID,
+		)`, userA, userB,
 	).Scan(&blocked)
 	if err != nil {
-		log.Printf("[engine] block check failed sender=%s other=%s: %v", senderID, otherID, err)
+		log.Printf("[engine] block check failed a=%s b=%s: %v", userA, userB, err)
 		return false
 	}
 
@@ -733,6 +746,7 @@ func isBlockedInRoom(senderID, roomID string) bool {
 }
 
 // InvalidateBlockCache clears the cached block status for a user pair.
+// Also clears DM room→user mapping caches that depend on this relationship.
 func InvalidateBlockCache(userA, userB string) {
 	a, b := userA, userB
 	if a > b {
@@ -744,23 +758,11 @@ func InvalidateBlockCache(userA, userB string) {
 }
 
 // isBlockedPair checks if either user has blocked the other.
+// Uses Redis cache (30s TTL) to avoid per-call Postgres hits.
 func isBlockedPair(userA, userB string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
-	var blocked bool
-	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT EXISTS (
-			SELECT 1 FROM blocked_users
-			WHERE (blocker_id = $1 AND blocked_id = $2)
-			   OR (blocker_id = $2 AND blocked_id = $1)
-		)`, userA, userB,
-	).Scan(&blocked)
-	if err != nil {
-		log.Printf("[engine] block pair check failed a=%s b=%s: %v", userA, userB, err)
-		return false
-	}
-	return blocked
+	return isBlockedPairCached(ctx, userA, userB)
 }
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,8 @@ import (
 // Store is the shared S3/R2 storage client. Initialized in main.go.
 var Store storage.StorageService
 
-// PresignUploadHandler generates a presigned PUT URL for media upload.
+// PresignUploadHandler generates a presigned POST policy for media upload
+// with server-side size enforcement.
 // POST /api/v1/arena/media/presign
 func PresignUploadHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
@@ -66,7 +67,7 @@ func PresignUploadHandler(w http.ResponseWriter, r *http.Request) {
 		putMins = config.DefaultPresignPutMins
 	}
 
-	url, err := Store.PresignPut(r.Context(), &storage.PresignPutInput{
+	out, err := Store.PresignPost(r.Context(), &storage.PresignPostInput{
 		Key:         objectKey,
 		ContentType: ct,
 		MaxBytes:    maxBytes,
@@ -78,14 +79,15 @@ func PresignUploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	JSONSuccess(w, models.PresignResponse{
-		UploadURL: url,
+		URL:       out.URL,
+		Fields:    out.Fields,
 		ObjectKey: objectKey,
 	})
 }
 
 func isAllowedMediaType(ct string) bool {
 	switch ct {
-	case config.MimeJPEG, config.MimeWebP, config.MimeAVIF, config.MimePNG, config.MimeMp4, config.MimeWebM:
+	case config.MimeJPEG, config.MimeWebP, config.MimeAVIF, config.MimePNG, config.MimeMp4, config.MimeWebM, config.MimeMOV:
 		return true
 	}
 	return false
@@ -113,6 +115,8 @@ func mimeToExt(ct string) string {
 		return ".mp4"
 	case config.MimeWebM:
 		return ".webm"
+	case config.MimeMOV:
+		return ".mov"
 	}
 	return ""
 }

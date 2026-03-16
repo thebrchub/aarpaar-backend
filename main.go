@@ -310,6 +310,19 @@ func main() {
 	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/like", mw.Auth(handlers.UnlikePostHandler))
 	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/likes", mw.Auth(handlers.GetPostLikersHandler))
 
+	// --- Arena Bookmarks (protected) ---
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/bookmark", mw.Auth(handlers.BookmarkPostHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/bookmark", mw.Auth(handlers.UnbookmarkPostHandler))
+	mux.HandleFunc("GET /api/v1/arena/bookmarks", mw.Auth(handlers.GetBookmarksHandler))
+
+	// --- Arena Views (protected) ---
+	mux.HandleFunc("POST /api/v1/arena/posts/views", mw.Auth(handlers.RecordViewsHandler))
+
+	// --- Arena Post Activity & Tracking (protected) ---
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/activity", mw.Auth(handlers.GetPostActivityHandler))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/reposts", mw.Auth(handlers.GetRepostsHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/profile-click", mw.Auth(handlers.RecordProfileClickHandler))
+
 	// --- Arena Comments (protected) ---
 	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/comments", mw.Auth(handlers.CreateCommentHandler))
 	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/comments", mw.Auth(handlers.GetCommentsHandler))

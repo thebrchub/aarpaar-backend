@@ -79,14 +79,16 @@ func StartFlusher() {
 			select {
 			case <-flusherDone:
 				ticker.Stop()
-				// Final flush to persist any remaining buffered messages and receipts
+				// Final flush to persist any remaining buffered data
 				log.Println("[flusher] Final flush before shutdown...")
 				FlushAllDirtyRooms()
 				flushReceipts()
+				flushArenaEngagement()
 				return
 			case <-ticker.C:
 				FlushAllDirtyRooms()
 				flushReceipts()
+				flushArenaEngagement()
 			}
 		}
 	}()

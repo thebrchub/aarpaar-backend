@@ -2,13 +2,13 @@ package handlers
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/thebrchub/aarpaar/services"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,36 +29,14 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := pgCtx(r)
-	defer cancel()
-
-	// Verify post exists
-	var exists bool
-	_ = postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1)`, postID,
-	).Scan(&exists)
-	if !exists {
-		JSONError(w, "Post not found", http.StatusNotFound)
-		return
-	}
-
-	_, err = postgress.Exec(
-		`INSERT INTO post_likes (user_id, post_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-		userID, postID,
-	)
-	if err != nil {
-		log.Printf("[arena] like post failed user=%s post=%d: %v", userID, postID, err)
-		JSONError(w, "Failed to like post", http.StatusInternalServerError)
-		return
-	}
+	// Buffer in Redis — O(1) SADD, flushed to Postgres by arena flusher.
+	// No direct Postgres write, no trigger storm on viral posts.
+	services.BufferLike(r.Context(), userID, postID)
 
 	// Notify post owner (skip self-like)
 	chat.RunBackground(func() {
 		bgCtx := context.Background()
-		var ownerID string
-		_ = postgress.GetRawDB().QueryRowContext(bgCtx,
-			`SELECT user_id FROM posts WHERE id = $1`, postID,
-		).Scan(&ownerID)
+		ownerID := services.GetPostOwnerCached(bgCtx, postID)
 		if ownerID != "" && ownerID != userID {
 			notifyUser(bgCtx, ownerID, map[string]interface{}{
 				config.FieldType: config.MsgTypePostLiked,
@@ -89,15 +67,8 @@ func UnlikePostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = postgress.Exec(
-		`DELETE FROM post_likes WHERE user_id = $1 AND post_id = $2`,
-		userID, postID,
-	)
-	if err != nil {
-		log.Printf("[arena] unlike post failed user=%s post=%d: %v", userID, postID, err)
-		JSONError(w, "Failed to unlike post", http.StatusInternalServerError)
-		return
-	}
+	// Buffer in Redis — O(1) SADD, flushed to Postgres by arena flusher.
+	services.BufferUnlike(r.Context(), userID, postID)
 
 	JSONMessage(w, "success", "Post unliked")
 }

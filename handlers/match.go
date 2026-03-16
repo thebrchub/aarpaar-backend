@@ -23,7 +23,6 @@ import (
 
 // EnterMatchQueueHandler tries to find an instant stranger match.
 // If no match is found, the user is placed in a Redis queue to wait.
-//
 func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -59,6 +58,11 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	// Try to find a partner who hasn't blocked us (and vice versa)
 	var matchedPartner string
 
+	// Pre-fetch user's block list and friend set from Redis cache to avoid
+	// per-iteration Postgres queries in the match loop.
+	blockedSet := getCachedBlockedSet(ctx, userID)
+	friendSet := getCachedFriendSet(ctx, userID)
+
 	for range config.MaxMatchAttempts {
 		// Pull a random person from the queue
 		partnerID, err := rdb.SPop(ctx, queue).Result()
@@ -71,35 +75,20 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Check Postgres: did either of us block the other?
-		query := `
-			SELECT EXISTS (
-				SELECT 1 FROM blocked_users 
-				WHERE (blocker_id = $1 AND blocked_id = $2) 
-				   OR (blocker_id = $2 AND blocked_id = $1)
-			)
-		`
-		var isBlocked bool
-		err = postgress.GetRawDB().QueryRow(query, userID, partnerID).Scan(&isBlocked)
-
-		if err == nil && !isBlocked {
-			// Check if we're already friends — friends shouldn't be matched as strangers
-			uid1, uid2 := sortUUIDs(userID, partnerID)
-			var areFriends bool
-			postgress.GetRawDB().QueryRow(
-				`SELECT EXISTS (SELECT 1 FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2)`,
-				uid1, uid2,
-			).Scan(&areFriends)
-
-			if !areFriends {
-				// Found a clean match
-				matchedPartner = partnerID
-				break
-			}
+		// Check in-memory: blocked or already friends?
+		if blockedSet[partnerID] {
+			rdb.SAdd(ctx, queue, partnerID) // put back for others
+			continue
 		}
 
-		// Blocked or already friends — put them back for someone else
-		rdb.SAdd(ctx, queue, partnerID)
+		if friendSet[partnerID] {
+			rdb.SAdd(ctx, queue, partnerID) // put back for others
+			continue
+		}
+
+		// Found a clean match
+		matchedPartner = partnerID
+		break
 	}
 
 	// Route the result
@@ -190,7 +179,6 @@ func notifyMatchWithLocation(ctx context.Context, targetUser, roomID, partnerLoc
 // ---------------------------------------------------------------------------
 
 // LeaveMatchQueueHandler removes the user from the matchmaking queue.
-//
 func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -228,7 +216,6 @@ type MatchActionRequest struct {
 }
 
 // MatchActionHandler processes skip/block/friend actions during a stranger chat.
-//
 func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -518,7 +505,6 @@ type ReportRequest struct {
 }
 
 // ReportUserHandler saves a user report to Postgres for moderation review.
-//
 func ReportUserHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {

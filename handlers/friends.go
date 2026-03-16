@@ -389,6 +389,8 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 		reqType = "received"
 	}
 
+	limit, offset := parsePagination(r)
+
 	var query string
 	if reqType == "sent" {
 		query = `
@@ -400,6 +402,7 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 				JOIN users u ON u.id = fr.receiver_id
 				WHERE fr.sender_id = $1 AND fr.status = 'pending'
 				ORDER BY fr.created_at DESC
+				LIMIT $2 OFFSET $3
 			) t
 		`
 	} else {
@@ -413,12 +416,13 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 				JOIN users u ON u.id = fr.sender_id
 				WHERE fr.receiver_id = $1 AND fr.status = 'pending'
 				ORDER BY fr.is_premium DESC, donor_total DESC, fr.created_at DESC
+				LIMIT $2 OFFSET $3
 			) t
 		`
 	}
 
 	var raw []byte
-	err := postgress.GetRawDB().QueryRow(query, userID).Scan(&raw)
+	err := postgress.GetRawDB().QueryRow(query, userID, limit, offset).Scan(&raw)
 	if err != nil {
 		log.Printf("[friends] GetFriendRequests query failed user=%s type=%s: %v", userID, reqType, err)
 		JSONError(w, "Failed to fetch requests", http.StatusInternalServerError)

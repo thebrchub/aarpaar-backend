@@ -399,6 +399,96 @@
 </div>
 
 <!-- ================================================================ -->
+<!-- BOOKMARKS                                                        -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3>Bookmarks</h3>
+  <div class="grid-3">
+    <!-- Bookmark Post -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> <code>/api/v1/arena/posts/{postId}/bookmark</code></p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="bookmarkPostId" placeholder="1" /></div>
+        <button class="btn btn-success" onclick="bookmarkPost()">Bookmark</button>
+      </div>
+      <div id="bookmarkResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Unbookmark Post -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-delete">DELETE</span> <code>/api/v1/arena/posts/{postId}/bookmark</code></p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="unbookmarkPostId" placeholder="1" /></div>
+        <button class="btn btn-error" onclick="unbookmarkPost()">Unbookmark</button>
+      </div>
+      <div id="unbookmarkResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Get Bookmarks -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-get">GET</span> <code>/api/v1/arena/bookmarks</code></p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:80px"><label>Limit</label><input type="number" id="bookmarksLimit" value="10" /></div>
+        <div class="form-row" style="max-width:80px"><label>Offset</label><input type="number" id="bookmarksOffset" value="0" /></div>
+        <button class="btn btn-primary" onclick="getBookmarks()">Get Bookmarks</button>
+      </div>
+      <div id="bookmarksResult" class="response-panel hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- ENGAGEMENT (VIEWS, ACTIVITY, REPOSTS, PROFILE CLICK)             -->
+<!-- ================================================================ -->
+<div class="card">
+  <h3>Engagement &amp; Analytics</h3>
+  <div class="grid-2">
+    <!-- Record Views -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> <code>/api/v1/arena/posts/views</code></p>
+      <div class="form-row"><label>Post IDs (comma-separated)</label><input type="text" id="viewPostIds" placeholder="1,2,3" /></div>
+      <button class="btn btn-primary" onclick="recordViews()">Record Views</button>
+      <div id="viewsResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Post Activity -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-get">GET</span> <code>/api/v1/arena/posts/{postId}/activity</code></p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="activityPostId" placeholder="1" /></div>
+        <button class="btn btn-primary" onclick="getPostActivity()">Get Activity</button>
+      </div>
+      <div id="activityResult" class="response-panel hidden"></div>
+    </div>
+  </div>
+
+  <div class="section-break"></div>
+  <div class="grid-2">
+    <!-- Get Reposts -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-get">GET</span> <code>/api/v1/arena/posts/{postId}/reposts</code></p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="repostsPostId" placeholder="1" /></div>
+        <div class="form-row" style="max-width:80px"><label>Limit</label><input type="number" id="repostsLimit" value="10" /></div>
+        <div class="form-row" style="max-width:80px"><label>Offset</label><input type="number" id="repostsOffset" value="0" /></div>
+        <button class="btn btn-primary" onclick="getReposts()">Get Reposts</button>
+      </div>
+      <div id="repostsResult" class="response-panel hidden"></div>
+    </div>
+
+    <!-- Record Profile Click -->
+    <div>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-post">POST</span> <code>/api/v1/arena/posts/{postId}/profile-click</code></p>
+      <div class="inline-form">
+        <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="profileClickPostId" placeholder="1" /></div>
+        <button class="btn btn-primary" onclick="recordProfileClick()">Record Click</button>
+      </div>
+      <div id="profileClickResult" class="response-panel hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================ -->
 <!-- COMMENTS                                                         -->
 <!-- ================================================================ -->
 <div class="card">
@@ -1278,11 +1368,16 @@ async function createPost() {
         return;
       }
 
-      // 2. Upload file to presigned URL
-      const uploadRes = await fetch(presignData.uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': uploadType },
-        body: uploadBlob,
+      // 2. Upload file via presigned POST (multipart/form-data)
+      const formData = new FormData();
+      for (const [k, v] of Object.entries(presignData.fields)) {
+        formData.append(k, v);
+      }
+      formData.append('file', uploadBlob);
+
+      const uploadRes = await fetch(presignData.url, {
+        method: 'POST',
+        body: formData,
       });
       if (!uploadRes.ok) {
         showPanel('createPostResult', 'Upload failed for ' + file.name + ' (HTTP ' + uploadRes.status + ')', true);
@@ -1481,6 +1576,89 @@ async function reportPost() {
     });
     showPanel('reportResult', await res.json(), !res.ok);
   } catch (err) { showPanel('reportResult', err.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Bookmarks
+// ---------------------------------------------------------------------------
+async function bookmarkPost() {
+  const id = document.getElementById('bookmarkPostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/bookmark', { method: 'POST', headers: getHeaders() });
+    showPanel('bookmarkResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('bookmarkResult', err.message, true); }
+}
+
+async function unbookmarkPost() {
+  const id = document.getElementById('unbookmarkPostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/bookmark', { method: 'DELETE', headers: getHeaders() });
+    showPanel('unbookmarkResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('unbookmarkResult', err.message, true); }
+}
+
+async function getBookmarks() {
+  const limit = document.getElementById('bookmarksLimit').value || '10';
+  const offset = document.getElementById('bookmarksOffset').value || '0';
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/bookmarks?limit=' + limit + '&offset=' + offset, { headers: getHeaders() });
+    showPanel('bookmarksResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('bookmarksResult', err.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Engagement & Analytics
+// ---------------------------------------------------------------------------
+async function recordViews() {
+  const raw = document.getElementById('viewPostIds').value;
+  if (!raw) return;
+  const postIds = raw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+  if (postIds.length === 0) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/views', {
+      method: 'POST', headers: getHeaders(true), body: JSON.stringify({ postIds }),
+    });
+    if (res.status === 204) {
+      showPanel('viewsResult', { status: 'success', message: 'Views recorded (' + postIds.length + ' posts)' }, false);
+    } else {
+      showPanel('viewsResult', await res.json(), true);
+    }
+  } catch (err) { showPanel('viewsResult', err.message, true); }
+}
+
+async function getPostActivity() {
+  const id = document.getElementById('activityPostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/activity', { headers: getHeaders() });
+    showPanel('activityResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('activityResult', err.message, true); }
+}
+
+async function getReposts() {
+  const id = document.getElementById('repostsPostId').value;
+  if (!id) return;
+  const limit = document.getElementById('repostsLimit').value || '10';
+  const offset = document.getElementById('repostsOffset').value || '0';
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/reposts?limit=' + limit + '&offset=' + offset, { headers: getHeaders() });
+    showPanel('repostsResult', await res.json(), !res.ok);
+  } catch (err) { showPanel('repostsResult', err.message, true); }
+}
+
+async function recordProfileClick() {
+  const id = document.getElementById('profileClickPostId').value;
+  if (!id) return;
+  try {
+    const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + id + '/profile-click', { method: 'POST', headers: getHeaders() });
+    if (res.status === 204) {
+      showPanel('profileClickResult', { status: 'success', message: 'Profile click recorded' }, false);
+    } else {
+      showPanel('profileClickResult', await res.json(), true);
+    }
+  } catch (err) { showPanel('profileClickResult', err.message, true); }
 }
 
 async function presignUpload() {

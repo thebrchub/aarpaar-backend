@@ -423,6 +423,7 @@ const (
 	MimePNG  = "image/png"
 	MimeMp4  = "video/mp4"
 	MimeWebM = "video/webm"
+	MimeMOV  = "video/quicktime"
 
 	// Default presigned URL expiry (minutes); overridden by arena_limits at runtime
 	DefaultPresignPutMins = 5

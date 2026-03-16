@@ -1,12 +1,10 @@
 package handlers
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
@@ -339,9 +337,7 @@ func enrichWithBadge(rawJSON string, userID string) string {
 	totalDonated, _ := profile["total_donated"].(float64)
 
 	if totalDonated > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
-		defer cancel()
-		badge := computeBadgeFromDB(ctx, totalDonated)
+		badge := computeBadgeFromDB(totalDonated)
 		if badge != nil {
 			profile["badge"] = badge
 		}

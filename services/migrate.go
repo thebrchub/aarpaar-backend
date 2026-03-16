@@ -436,20 +436,10 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON post_likes (post_id, created_at DESC)`,
 
-	// Trigger: increment/decrement posts.like_count on post_likes insert/delete
-	`CREATE OR REPLACE FUNCTION update_post_like_count() RETURNS TRIGGER AS $$
-	BEGIN
-		IF TG_OP = 'INSERT' THEN
-			UPDATE posts SET like_count = like_count + 1 WHERE id = NEW.post_id;
-		ELSIF TG_OP = 'DELETE' THEN
-			UPDATE posts SET like_count = like_count - 1 WHERE id = OLD.post_id;
-		END IF;
-		RETURN NULL;
-	END;
-	$$ LANGUAGE plpgsql`,
+	// Trigger: like_count is now maintained by the arena flusher (batch approach).
+	// Drop the per-row trigger to prevent double-counting.
 	`DROP TRIGGER IF EXISTS trg_post_like_count ON post_likes`,
-	`CREATE TRIGGER trg_post_like_count AFTER INSERT OR DELETE ON post_likes
-	 FOR EACH ROW EXECUTE FUNCTION update_post_like_count()`,
+	`DROP FUNCTION IF EXISTS update_post_like_count()`,
 
 	// TABLE: post_comments (nested via ltree)
 	`CREATE TABLE IF NOT EXISTS post_comments (
@@ -623,8 +613,92 @@ var migrationStatements = []string{
 	`CREATE TRIGGER trg_user_total_donated AFTER INSERT OR DELETE ON donations
 	 FOR EACH ROW EXECUTE FUNCTION update_user_total_donated()`,
 
-	// Expression index for trending feed sort (avoids seq scan + sort)
-	`CREATE INDEX IF NOT EXISTS idx_posts_trending ON posts ((like_count + comment_count * 2 + repost_count * 3), created_at DESC) WHERE visibility = 'public'`,
+	// view_count on posts: denormalized unique-view counter
+	`ALTER TABLE posts ADD COLUMN IF NOT EXISTS view_count INT NOT NULL DEFAULT 0`,
+
+	// bookmark_count on posts: denormalized bookmark counter
+	`ALTER TABLE posts ADD COLUMN IF NOT EXISTS bookmark_count INT NOT NULL DEFAULT 0`,
+
+	// quote_count on posts: denormalized quote-repost counter (reposts with caption)
+	`ALTER TABLE posts ADD COLUMN IF NOT EXISTS quote_count INT NOT NULL DEFAULT 0`,
+
+	// TABLE: post_views (unique views per user per post)
+	// NOTE: No trigger — view_count is updated via CTE in RecordViewsHandler
+	// to avoid N separate trigger UPDATEs when inserting a batch of N views.
+	`CREATE TABLE IF NOT EXISTS post_views (
+		user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		PRIMARY KEY (user_id, post_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_views_post_id ON post_views (post_id)`,
+
+	// Drop the old row-level view trigger if it exists (replaced by CTE approach)
+	`DROP TRIGGER IF EXISTS trg_post_view_count ON post_views`,
+	`DROP FUNCTION IF EXISTS update_post_view_count()`,
+
+	// TABLE: post_bookmarks
+	`CREATE TABLE IF NOT EXISTS post_bookmarks (
+		user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		post_id    BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		PRIMARY KEY (user_id, post_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_bookmarks_user ON post_bookmarks (user_id, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_bookmarks_post ON post_bookmarks (post_id)`,
+
+	// Trigger: increment/decrement posts.bookmark_count on post_bookmarks insert/delete
+	`CREATE OR REPLACE FUNCTION update_post_bookmark_count() RETURNS TRIGGER AS $$
+	BEGIN
+		IF TG_OP = 'INSERT' THEN
+			UPDATE posts SET bookmark_count = bookmark_count + 1 WHERE id = NEW.post_id;
+		ELSIF TG_OP = 'DELETE' THEN
+			UPDATE posts SET bookmark_count = bookmark_count - 1 WHERE id = OLD.post_id;
+		END IF;
+		RETURN NULL;
+	END;
+	$$ LANGUAGE plpgsql`,
+	`DROP TRIGGER IF EXISTS trg_post_bookmark_count ON post_bookmarks`,
+	`CREATE TRIGGER trg_post_bookmark_count AFTER INSERT OR DELETE ON post_bookmarks
+	 FOR EACH ROW EXECUTE FUNCTION update_post_bookmark_count()`,
+
+	// Expression index for trending feed sort (includes view_count)
+	`DROP INDEX IF EXISTS idx_posts_trending`,
+	`CREATE INDEX IF NOT EXISTS idx_posts_trending ON posts ((like_count + comment_count * 2 + repost_count * 3 + view_count / 10), created_at DESC) WHERE visibility = 'public'`,
+
+	// detail_expand_count: number of unique users who opened the full post detail
+	`ALTER TABLE posts ADD COLUMN IF NOT EXISTS detail_expand_count INT NOT NULL DEFAULT 0`,
+
+	// profile_click_count: number of unique users who clicked the author's profile from this post
+	`ALTER TABLE posts ADD COLUMN IF NOT EXISTS profile_click_count INT NOT NULL DEFAULT 0`,
+
+	// TABLE: post_detail_expands (unique detail views per user per post)
+	// NOTE: No trigger — counter is updated via CTE in the handler.
+	`CREATE TABLE IF NOT EXISTS post_detail_expands (
+		user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		PRIMARY KEY (user_id, post_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_detail_expands_post ON post_detail_expands (post_id)`,
+
+	// Drop old row-level trigger if it exists
+	`DROP TRIGGER IF EXISTS trg_post_detail_expand_count ON post_detail_expands`,
+	`DROP FUNCTION IF EXISTS update_post_detail_expand_count()`,
+
+	// TABLE: post_profile_clicks (unique profile visits from a post per user)
+	// NOTE: No trigger — counter is updated via CTE in the handler.
+	`CREATE TABLE IF NOT EXISTS post_profile_clicks (
+		user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+		PRIMARY KEY (user_id, post_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_post_profile_clicks_post ON post_profile_clicks (post_id)`,
+
+	// Drop old row-level trigger if it exists
+	`DROP TRIGGER IF EXISTS trg_post_profile_click_count ON post_profile_clicks`,
+	`DROP FUNCTION IF EXISTS update_post_profile_click_count()`,
+
+	// Covering index for repost queries: WHERE original_post_id = $1 AND post_type = 'repost'
+	`CREATE INDEX IF NOT EXISTS idx_posts_original_reposts ON posts (original_post_id, created_at DESC) WHERE post_type = 'repost' AND caption != ''`,
 
 	// report_count on users: avoids COUNT(*) FROM user_reports per row in admin panel
 	`ALTER TABLE users ADD COLUMN IF NOT EXISTS report_count INT NOT NULL DEFAULT 0`,

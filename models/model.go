@@ -152,7 +152,10 @@ type PostResponse struct {
 	LikeCount      int                 `json:"likeCount"`
 	CommentCount   int                 `json:"commentCount"`
 	RepostCount    int                 `json:"repostCount"`
+	ViewCount      int                 `json:"viewCount"`
+	BookmarkCount  int                 `json:"bookmarkCount"`
 	HasLiked       bool                `json:"hasLiked"`
+	HasBookmarked  bool                `json:"hasBookmarked"`
 	Media          []PostMediaResponse `json:"media"`
 	CreatedAt      time.Time           `json:"createdAt"`
 }
@@ -177,8 +180,9 @@ type PresignRequest struct {
 
 // PresignResponse is returned by the presign endpoint.
 type PresignResponse struct {
-	UploadURL string `json:"uploadUrl"`
-	ObjectKey string `json:"objectKey"`
+	URL       string            `json:"url"`
+	Fields    map[string]string `json:"fields"`
+	ObjectKey string            `json:"objectKey"`
 }
 
 // RepostRequest is the JSON body for POST /api/v1/arena/posts/{postId}/repost.

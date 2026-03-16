@@ -84,6 +84,7 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, "Database error", http.StatusInternalServerError)
 			return
 		}
+		defer rows.Close()
 		validMembers := make(map[string]bool)
 		for rows.Next() {
 			var id string
@@ -91,7 +92,6 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 				validMembers[id] = true
 			}
 		}
-		rows.Close()
 
 		if len(validMembers) != len(uniqueMembers) {
 			JSONError(w, "One or more member IDs are invalid", http.StatusBadRequest)
@@ -114,6 +114,7 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, "Database error", http.StatusInternalServerError)
 			return
 		}
+		defer blockRows.Close()
 		blocked := make(map[string]bool)
 		for blockRows.Next() {
 			var id string
@@ -121,7 +122,6 @@ func CreateGroupHandler(w http.ResponseWriter, r *http.Request) {
 				blocked[id] = true
 			}
 		}
-		blockRows.Close()
 
 		// Filter out blocked users
 		for _, id := range uniqueMembers {
@@ -255,7 +255,8 @@ func GetGroupHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT u.id, u.username, u.name, COALESCE(u.avatar_url,''), rm.role
 		 FROM room_members rm
 		 JOIN users u ON u.id = rm.user_id
-		 WHERE rm.room_id = $1 AND rm.status = 'active'`,
+		 WHERE rm.room_id = $1 AND rm.status = 'active'
+		 LIMIT 500`,
 		groupID,
 	)
 	if err != nil {
@@ -335,26 +336,33 @@ func UpdateGroupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build update query dynamically
+	// Build a single dynamic UPDATE instead of N separate calls
+	setClauses := []string{}
+	args := []any{}
+	argIdx := 1
 	if req.Name != nil {
-		if _, err := postgress.GetRawDB().ExecContext(ctx,
-			`UPDATE rooms SET name = $1 WHERE id = $2`, *req.Name, groupID); err != nil {
-			log.Printf("[groups] UpdateGroup name failed group=%s: %v", groupID, err)
-		}
+		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argIdx))
+		args = append(args, *req.Name)
+		argIdx++
 	}
 	if req.AvatarURL != nil {
-		if _, err := postgress.GetRawDB().ExecContext(ctx,
-			`UPDATE rooms SET avatar_url = $1 WHERE id = $2`, *req.AvatarURL, groupID); err != nil {
-			log.Printf("[groups] UpdateGroup avatar failed group=%s: %v", groupID, err)
-		}
+		setClauses = append(setClauses, fmt.Sprintf("avatar_url = $%d", argIdx))
+		args = append(args, *req.AvatarURL)
+		argIdx++
 	}
 	if req.Visibility != nil {
 		v := *req.Visibility
 		if v == config.VisibilityPublic || v == config.VisibilityPrivate {
-			if _, err := postgress.GetRawDB().ExecContext(ctx,
-				`UPDATE rooms SET visibility = $1 WHERE id = $2`, v, groupID); err != nil {
-				log.Printf("[groups] UpdateGroup visibility failed group=%s: %v", groupID, err)
-			}
+			setClauses = append(setClauses, fmt.Sprintf("visibility = $%d", argIdx))
+			args = append(args, v)
+			argIdx++
+		}
+	}
+	if len(setClauses) > 0 {
+		args = append(args, groupID)
+		query := fmt.Sprintf("UPDATE rooms SET %s WHERE id = $%d", strings.Join(setClauses, ", "), argIdx)
+		if _, err := postgress.GetRawDB().ExecContext(ctx, query, args...); err != nil {
+			log.Printf("[groups] UpdateGroup failed group=%s: %v", groupID, err)
 		}
 	}
 
@@ -438,6 +446,7 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
+	defer rows.Close()
 	validIDs := make(map[string]bool)
 	privateIDs := make(map[string]bool)
 	for rows.Next() {
@@ -450,7 +459,6 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	rows.Close()
 
 	// Check blocks between adder and new members
 	blocked := getBlockedBetween(ctx, userID, req.MemberIDs)
@@ -464,53 +472,77 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 			 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`, userID,
 		)
 		if fErr == nil {
+			defer friendRows.Close()
 			for friendRows.Next() {
 				var fid string
 				if friendRows.Scan(&fid) == nil {
 					friendSet[fid] = true
 				}
 			}
-			friendRows.Close()
 		}
 	}
 
 	added := make([]string, 0)
 	invited := make([]string, 0)
+	toAdd := make([]string, 0)
+	toInvite := make([]string, 0)
 	for _, memberID := range req.MemberIDs {
 		if !validIDs[memberID] || blocked[memberID] {
 			continue
 		}
-
-		// Private non-friend users get an invite instead of direct add
 		if privateIDs[memberID] && !friendSet[memberID] {
-			_, err := postgress.GetRawDB().ExecContext(ctx,
-				`INSERT INTO room_members (room_id, user_id, status, role, joined_at)
-				 VALUES ($1, $2, 'invited', 'member', NOW())
-				 ON CONFLICT (room_id, user_id)
-				 DO UPDATE SET status = 'invited', joined_at = NOW(), left_at = NULL`,
-				groupID, memberID,
-			)
-			if err != nil {
-				log.Printf("[groups] invite member failed group=%s user=%s: %v", groupID, memberID, err)
-				continue
-			}
-			invited = append(invited, memberID)
-			continue
+			toInvite = append(toInvite, memberID)
+		} else {
+			toAdd = append(toAdd, memberID)
 		}
+	}
 
-		// Upsert: if member previously left, reactivate them
+	// Batch upsert invited members
+	if len(toInvite) > 0 {
+		values := make([]string, len(toInvite))
+		params := make([]any, 0, len(toInvite)+1)
+		params = append(params, groupID)
+		for i, memberID := range toInvite {
+			params = append(params, memberID)
+			values[i] = fmt.Sprintf("($1, $%d::uuid, 'invited', 'member', NOW())", i+2)
+		}
 		_, err := postgress.GetRawDB().ExecContext(ctx,
-			`INSERT INTO room_members (room_id, user_id, status, role, joined_at)
-			 VALUES ($1, $2, 'active', 'member', NOW())
+			fmt.Sprintf(`INSERT INTO room_members (room_id, user_id, status, role, joined_at)
+			 VALUES %s
 			 ON CONFLICT (room_id, user_id)
-			 DO UPDATE SET status = 'active', role = 'member', joined_at = NOW(), left_at = NULL`,
-			groupID, memberID,
+			 DO UPDATE SET status = 'invited', joined_at = NOW(), left_at = NULL`,
+				joinStrings(values, ", ")),
+			params...,
 		)
 		if err != nil {
-			log.Printf("[groups] add member failed group=%s user=%s: %v", groupID, memberID, err)
-			continue
+			log.Printf("[groups] batch invite failed group=%s: %v", groupID, err)
+		} else {
+			invited = toInvite
 		}
-		added = append(added, memberID)
+	}
+
+	// Batch upsert directly added members
+	if len(toAdd) > 0 {
+		values := make([]string, len(toAdd))
+		params := make([]any, 0, len(toAdd)+1)
+		params = append(params, groupID)
+		for i, memberID := range toAdd {
+			params = append(params, memberID)
+			values[i] = fmt.Sprintf("($1, $%d::uuid, 'active', 'member', NOW())", i+2)
+		}
+		_, err := postgress.GetRawDB().ExecContext(ctx,
+			fmt.Sprintf(`INSERT INTO room_members (room_id, user_id, status, role, joined_at)
+			 VALUES %s
+			 ON CONFLICT (room_id, user_id)
+			 DO UPDATE SET status = 'active', role = 'member', joined_at = NOW(), left_at = NULL`,
+				joinStrings(values, ", ")),
+			params...,
+		)
+		if err != nil {
+			log.Printf("[groups] batch add failed group=%s: %v", groupID, err)
+		} else {
+			added = toAdd
+		}
 	}
 
 	// Subscribe directly added members to the room
@@ -793,6 +825,7 @@ func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 		 LEFT JOIN room_members my_rm ON my_rm.room_id = r.id AND my_rm.user_id = $1 AND my_rm.status = 'active'
 		 WHERE r.type = 'GROUP' AND r.visibility = 'public'`
 
+	limit, offset := parsePagination(r)
 	var args []interface{}
 	args = append(args, userID)
 
@@ -800,8 +833,8 @@ func ListGroupsHandler(w http.ResponseWriter, r *http.Request) {
 		baseQuery += ` AND LOWER(r.name) LIKE LOWER('%' || $2 || '%')`
 		args = append(args, search)
 	}
-	limit, offset := parsePagination(r)
-	baseQuery += fmt.Sprintf(` ORDER BY member_count DESC LIMIT %d OFFSET %d`, limit, offset)
+	args = append(args, limit, offset)
+	baseQuery += fmt.Sprintf(` ORDER BY member_count DESC LIMIT $%d OFFSET $%d`, len(args)-1, len(args))
 
 	rows, err := postgress.GetRawDB().QueryContext(ctx, baseQuery, args...)
 	if err != nil {
@@ -1343,10 +1376,8 @@ func isGroupMember(ctx context.Context, groupID, userID string) bool {
 	var exists bool
 	postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT EXISTS(
-			SELECT 1 FROM room_members rm
-			JOIN rooms r ON r.id = rm.room_id
-			WHERE rm.room_id = $1 AND rm.user_id = $2
-			AND rm.status = 'active' AND r.type = 'GROUP'
+			SELECT 1 FROM room_members
+			WHERE room_id = $1 AND user_id = $2 AND status = 'active'
 		)`, groupID, userID,
 	).Scan(&exists)
 	return exists
@@ -1357,10 +1388,8 @@ func isGroupAdmin(ctx context.Context, groupID, userID string) bool {
 	var exists bool
 	postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT EXISTS(
-			SELECT 1 FROM room_members rm
-			JOIN rooms r ON r.id = rm.room_id
-			WHERE rm.room_id = $1 AND rm.user_id = $2
-			AND rm.status = 'active' AND rm.role = 'admin' AND r.type = 'GROUP'
+			SELECT 1 FROM room_members
+			WHERE room_id = $1 AND user_id = $2 AND status = 'active' AND role = 'admin'
 		)`, groupID, userID,
 	).Scan(&exists)
 	return exists

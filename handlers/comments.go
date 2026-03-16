@@ -125,10 +125,7 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 	// Notify post owner and parent comment author
 	chat.RunBackground(func() {
 		bgCtx := context.Background()
-		var postOwnerID string
-		_ = postgress.GetRawDB().QueryRowContext(bgCtx,
-			`SELECT user_id FROM posts WHERE id = $1`, postID,
-		).Scan(&postOwnerID)
+		postOwnerID := services.GetPostOwnerCached(bgCtx, postID)
 		if postOwnerID != "" && postOwnerID != userID {
 			notifyUser(bgCtx, postOwnerID, map[string]interface{}{
 				config.FieldType: config.MsgTypePostCommented,

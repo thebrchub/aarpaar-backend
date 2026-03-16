@@ -457,6 +457,7 @@ func getCachedFriendSet(ctx context.Context, userID string) map[string]bool {
 	if err != nil {
 		return friendSet
 	}
+	defer friendRows.Close()
 	ids := make([]interface{}, 0, 64)
 	for friendRows.Next() {
 		var fid string
@@ -465,7 +466,6 @@ func getCachedFriendSet(ctx context.Context, userID string) map[string]bool {
 			ids = append(ids, fid)
 		}
 	}
-	friendRows.Close()
 
 	if len(ids) > 0 {
 		rdb.SAdd(ctx, cacheKey, ids...)
@@ -496,6 +496,7 @@ func getCachedBlockedSet(ctx context.Context, userID string) map[string]bool {
 	if err != nil {
 		return blockedSet
 	}
+	defer blockedRows.Close()
 	ids := make([]interface{}, 0, 16)
 	for blockedRows.Next() {
 		var bid string
@@ -504,7 +505,6 @@ func getCachedBlockedSet(ctx context.Context, userID string) map[string]bool {
 			ids = append(ids, bid)
 		}
 	}
-	blockedRows.Close()
 
 	if len(ids) > 0 {
 		rdb.SAdd(ctx, cacheKey, ids...)

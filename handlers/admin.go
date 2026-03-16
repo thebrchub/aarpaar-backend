@@ -575,8 +575,13 @@ func joinStrings(parts []string, sep string) string {
 	return result
 }
 
-// GetAppSetting reads a JSONB setting from app_settings and unmarshals it.
+// GetAppSetting reads a setting from the in-memory cache (refreshed every 60s).
+// Falls back to Postgres if not cached.
 func GetAppSetting(ctx context.Context, key string, dest interface{}) error {
+	if services.GetCachedAppSetting(key, dest) {
+		return nil
+	}
+	// Fallback to Postgres (first boot before cache is warm)
 	var raw []byte
 	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT value FROM app_settings WHERE key = $1`, key,
@@ -589,21 +594,25 @@ func GetAppSetting(ctx context.Context, key string, dest interface{}) error {
 
 // GetUserTotalDonation returns the total donation amount for a user.
 // Uses the materialized total_donated column (maintained by trigger).
+// Cached in Redis for 2 minutes to avoid per-request PG hits.
 func GetUserTotalDonation(ctx context.Context, userID string) float64 {
+	cacheKey := "user:donated:" + userID
 	var total float64
+	if found, _ := redis.Get(ctx, cacheKey, &total); found {
+		return total
+	}
 	postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT total_donated FROM users WHERE id = $1`, userID,
 	).Scan(&total)
+	_ = redis.PutWithTTL(ctx, cacheKey, total, 2*time.Minute)
 	return total
 }
 
 // IsUserVIP checks if a user qualifies as VIP (total donations >= lowest badge tier).
+// Uses the in-memory cached min tier (refreshed every 60s) — zero PG queries.
 func IsUserVIP(ctx context.Context, userID string) bool {
-	var minTier float64
-	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT COALESCE(MIN(min_amount), 0) FROM badge_tiers`,
-	).Scan(&minTier)
-	if err != nil || minTier == 0 {
+	minTier := services.GetVIPMinTier()
+	if minTier == 0 {
 		return false
 	}
 	return GetUserTotalDonation(ctx, userID) >= minTier

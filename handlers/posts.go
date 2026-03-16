@@ -110,12 +110,20 @@ func CreatePostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Insert media
-	for _, m := range req.Media {
+	// Insert media (single multi-row INSERT instead of N separate calls)
+	if len(req.Media) > 0 {
+		values := make([]string, len(req.Media))
+		params := make([]any, 0, len(req.Media)*8)
+		for i, m := range req.Media {
+			base := i * 8
+			values[i] = fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8)
+			params = append(params, postID, m.MediaType, m.ObjectKey, m.Width, m.Height, m.DurationMs, m.PreviewHash, m.SortOrder)
+		}
 		_, err := postgress.Exec(
-			`INSERT INTO post_media (post_id, media_type, object_key, width, height, duration_ms, preview_hash, sort_order)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			postID, m.MediaType, m.ObjectKey, m.Width, m.Height, m.DurationMs, m.PreviewHash, m.SortOrder,
+			fmt.Sprintf(`INSERT INTO post_media (post_id, media_type, object_key, width, height, duration_ms, preview_hash, sort_order)
+				VALUES %s`, strings.Join(values, ", ")),
+			params...,
 		)
 		if err != nil {
 			log.Printf("[arena] insert media failed post=%d: %v", postID, err)
@@ -157,6 +165,12 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Post not found", http.StatusNotFound)
 		return
 	}
+
+	// Record detail expand (unique per user, buffered in Redis)
+	chat.RunBackground(func() {
+		services.BufferDetailExpand(context.Background(), userID, postID)
+	})
+
 	JSONSuccess(w, post)
 }
 
@@ -186,6 +200,7 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT object_key FROM post_media WHERE post_id = $1`, postID,
 	)
 	if err == nil {
+		defer rows.Close()
 		var keys []string
 		for rows.Next() {
 			var key string
@@ -193,7 +208,6 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 				keys = append(keys, key)
 			}
 		}
-		rows.Close()
 
 		// Delete from storage
 		if len(keys) > 0 && Store != nil {
@@ -294,10 +308,19 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Increment repost count on original
-	_, _ = postgress.Exec(
-		`UPDATE posts SET repost_count = repost_count + 1 WHERE id = $1`, postID,
-	)
+	// Increment repost count on original in background (non-blocking)
+	capturedCaption := strings.TrimSpace(req.Caption)
+	chat.RunBackground(func() {
+		if capturedCaption != "" {
+			_, _ = postgress.Exec(
+				`UPDATE posts SET repost_count = repost_count + 1, quote_count = quote_count + 1 WHERE id = $1`, postID,
+			)
+		} else {
+			_, _ = postgress.Exec(
+				`UPDATE posts SET repost_count = repost_count + 1 WHERE id = $1`, postID,
+			)
+		}
+	})
 
 	post, err := getPostByID(ctx, newPostID, userID)
 	if err != nil {
@@ -365,11 +388,14 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
+		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
+		        my_bm.user_id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
 		 WHERE p.visibility = 'public' AND p.created_at < $2
 		 ORDER BY p.created_at DESC
 		 LIMIT $3`,
@@ -426,12 +452,15 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
+		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
+		        my_bm.user_id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 JOIN my_friends mf ON mf.friend_id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
 		 WHERE p.created_at < $2
 		 ORDER BY p.created_at DESC
 		 LIMIT $3`,
@@ -494,11 +523,14 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		       p.caption, p.post_type, p.original_post_id, p.visibility,
 		       p.is_pinned, p.like_count, p.comment_count, p.repost_count,
+		       p.view_count, p.bookmark_count,
 		       my_like.user_id IS NOT NULL,
+		       my_bm.user_id IS NOT NULL,
 		       p.created_at
 		FROM posts p
 		JOIN users u ON u.id = p.user_id
 		LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
 		WHERE p.user_id = $2 %s
 		ORDER BY p.is_pinned DESC, p.created_at DESC
 		LIMIT $3 OFFSET $4`, visFilter)
@@ -550,14 +582,17 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
+		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
+		        my_bm.user_id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
 		 WHERE p.visibility = 'public'
 		   AND p.created_at > NOW() - INTERVAL '24 hours'
-		 ORDER BY (p.like_count + p.comment_count * 2 + p.repost_count * 3) DESC, p.created_at DESC
+		 ORDER BY (p.like_count + p.comment_count * 2 + p.repost_count * 3 + p.view_count / 10) DESC, p.created_at DESC
 		 LIMIT $2 OFFSET $3`,
 		userID, limit, offset,
 	)
@@ -642,6 +677,7 @@ func AdminDeletePostHandler(w http.ResponseWriter, r *http.Request) {
 		`SELECT object_key FROM post_media WHERE post_id = $1`, postID,
 	)
 	if err == nil {
+		defer rows.Close()
 		var keys []string
 		for rows.Next() {
 			var key string
@@ -649,7 +685,6 @@ func AdminDeletePostHandler(w http.ResponseWriter, r *http.Request) {
 				keys = append(keys, key)
 			}
 		}
-		rows.Close()
 		if len(keys) > 0 && Store != nil {
 			chat.RunBackground(func() {
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -727,7 +762,8 @@ func scanPost(rows *sql.Rows) (models.PostResponse, error) {
 		&p.ID, &p.UserID, &p.Username, &p.DisplayName, &p.AvatarURL,
 		&p.Caption, &p.PostType, &p.OriginalPostID, &p.Visibility,
 		&p.IsPinned, &p.LikeCount, &p.CommentCount, &p.RepostCount,
-		&p.HasLiked, &p.CreatedAt,
+		&p.ViewCount, &p.BookmarkCount,
+		&p.HasLiked, &p.HasBookmarked, &p.CreatedAt,
 	)
 	return p, err
 }
@@ -836,11 +872,14 @@ func attachOriginalPosts(ctx context.Context, posts []models.PostResponse, viewe
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
+		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
+		        my_bm.user_id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
 		 WHERE p.id IN (%s)`,
 		strings.Join(placeholders, ","),
 	)
@@ -929,18 +968,22 @@ func getPostByID(ctx context.Context, postID int64, viewerID string) (models.Pos
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
+		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
+		        my_bm.user_id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
 		 WHERE p.id = $2`,
 		viewerID, postID,
 	).Scan(
 		&p.ID, &p.UserID, &p.Username, &p.DisplayName, &p.AvatarURL,
 		&p.Caption, &p.PostType, &p.OriginalPostID, &p.Visibility,
 		&p.IsPinned, &p.LikeCount, &p.CommentCount, &p.RepostCount,
-		&p.HasLiked, &p.CreatedAt,
+		&p.ViewCount, &p.BookmarkCount,
+		&p.HasLiked, &p.HasBookmarked, &p.CreatedAt,
 	)
 	if err != nil {
 		return p, err

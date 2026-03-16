@@ -129,6 +129,13 @@ const (
 	CALL_ACTIVE_COLON      = "call:active:"           // call:active:{user_id} -> JSON call state (tracks active calls per user)
 	GROUP_CALL_COLON       = "group_call:"            // group_call:{roomId} -> hash with callId, initiatedBy, startedAt, participants
 	BOT_SESSIONS_COLON     = "bot:session:"           // bot:session:{room_id} -> Marker for active bot chat sessions
+
+	// Arena engagement buffering (flushed to Postgres periodically)
+	ARENA_VIEWS_BUFFER       = "arena:views"          // Set of "userId:postId" pairs pending flush
+	ARENA_EXPANDS_BUFFER     = "arena:expands"        // Set of "userId:postId" detail-expand pairs
+	ARENA_PROFILE_CLICKS_BUF = "arena:profile_clicks" // Set of "userId:postId" profile-click pairs
+	ARENA_LIKES_BUFFER       = "arena:likes"          // Set of "userId:postId" pending like inserts
+	ARENA_UNLIKES_BUFFER     = "arena:unlikes"        // Set of "userId:postId" pending like deletes
 )
 
 // ---------------------------------------------------------------------------

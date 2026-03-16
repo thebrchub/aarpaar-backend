@@ -13,6 +13,7 @@ import (
 	sdkpay "github.com/shivanand-burli/go-starter-kit/payment"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/thebrchub/aarpaar/services"
 )
 
 // PaymentSvc is the SDK payment service (Razorpay or nil), initialized in main.go.
@@ -23,7 +24,6 @@ var PaymentSvc sdkpay.PaymentService
 // ---------------------------------------------------------------------------
 
 // GetDonationHistoryHandler returns the authenticated user's donation history.
-//
 func GetDonationHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
@@ -60,7 +60,6 @@ func GetDonationHistoryHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // GetBadgeTiersHandler returns all badge tiers sorted by display_order.
-//
 func GetBadgeTiersHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
@@ -95,30 +94,13 @@ type BadgeInfo struct {
 	Min  float64 `json:"min_amount"`
 }
 
-// computeBadgeFromDB loads badge tiers from DB and returns the highest qualifying badge.
-func computeBadgeFromDB(ctx context.Context, totalDonated float64) *BadgeInfo {
-	if totalDonated <= 0 {
+// computeBadgeFromDB loads badge tiers from the in-memory cache and returns the highest qualifying badge.
+func computeBadgeFromDB(totalDonated float64) *BadgeInfo {
+	name, icon, tier, min, ok := services.GetCachedBadge(totalDonated)
+	if !ok {
 		return nil
 	}
-
-	rows, err := postgress.GetRawDB().Query(
-		`SELECT name, icon, display_order, min_amount FROM badge_tiers
-		 WHERE min_amount <= $1 ORDER BY min_amount DESC LIMIT 1`,
-		totalDonated,
-	)
-	if err != nil {
-		log.Printf("[donations] computeBadgeFromDB query failed: %v", err)
-		return nil
-	}
-	defer rows.Close()
-
-	if rows.Next() {
-		var b BadgeInfo
-		if err := rows.Scan(&b.Name, &b.Icon, &b.Tier, &b.Min); err == nil {
-			return &b
-		}
-	}
-	return nil
+	return &BadgeInfo{Name: name, Icon: icon, Tier: tier, Min: min}
 }
 
 // ---------------------------------------------------------------------------
