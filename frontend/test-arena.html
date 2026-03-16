@@ -257,7 +257,7 @@
     <div>
       <div class="form-row">
         <label>Media (JPEG, WebP, MP4, WebM)</label>
-        <input type="file" id="postMedia" accept="image/jpeg,image/webp,video/mp4,video/webm" multiple
+        <input type="file" id="postMedia" accept="image/jpeg,image/webp,image/avif,image/png,video/mp4,video/webm" multiple
                style="background:none;border:none;padding:4px 0;" onchange="previewMedia()" />
       </div>
       <div id="mediaPreview" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
@@ -1104,7 +1104,8 @@ async function submitInlineComment(postId) {
   const body = (input ? input.value.trim() : '');
   if (!body) return;
   const payload = { body };
-  if (replyField && replyField.value) payload.parentId = parseInt(replyField.value);
+  const replyParentId = (replyField && replyField.value) ? parseInt(replyField.value) : null;
+  if (replyParentId) payload.parentId = replyParentId;
   try {
     input.disabled = true;
     const res = await fetch(getBaseUrl() + '/api/v1/arena/posts/' + postId + '/comments', {
@@ -1115,8 +1116,11 @@ async function submitInlineComment(postId) {
     input.placeholder = 'Write a comment...';
     if (replyField) replyField.value = '';
     input.disabled = false;
-    // Reload comments
+    // Reload comments then auto-expand the reply thread if it was a reply
     await loadInlineComments(postId);
+    if (replyParentId) {
+      await loadReplies(postId, replyParentId, 0);
+    }
   } catch (err) { alert('Error: ' + err.message); if (input) input.disabled = false; }
 }
 

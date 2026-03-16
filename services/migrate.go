@@ -472,19 +472,18 @@ var migrationStatements = []string{
 	// reply_count: materialized count of direct replies (maintained by trigger)
 	`ALTER TABLE post_comments ADD COLUMN IF NOT EXISTS reply_count INT NOT NULL DEFAULT 0`,
 
-	// Trigger: increment/decrement parent's reply_count when a reply is inserted/deleted
+	// Trigger: increment/decrement parent's reply_count when a reply is inserted/deleted/path updated
 	`CREATE OR REPLACE FUNCTION update_comment_reply_count() RETURNS TRIGGER AS $$
-	DECLARE parent_label TEXT; parent_id BIGINT;
+	DECLARE parent_id BIGINT;
 	BEGIN
-		IF TG_OP = 'INSERT' AND NEW.depth > 0 THEN
-			parent_label := split_part(NEW.path::text, '.', nlevel(NEW.path) - 1 + 0);
-			-- extract second-to-last segment: e.g. c5.c12 -> get 'c5'
+		IF TG_OP = 'UPDATE' AND NEW.depth > 0 AND nlevel(OLD.path) = 0 AND nlevel(NEW.path) > 0 THEN
+			-- Path was just assigned (INSERT sets path='', then UPDATE sets real path)
 			SELECT id INTO parent_id FROM post_comments
 			  WHERE post_id = NEW.post_id AND path = subpath(NEW.path, 0, nlevel(NEW.path)-1);
 			IF parent_id IS NOT NULL THEN
 				UPDATE post_comments SET reply_count = reply_count + 1 WHERE id = parent_id;
 			END IF;
-		ELSIF TG_OP = 'DELETE' AND OLD.depth > 0 THEN
+		ELSIF TG_OP = 'DELETE' AND OLD.depth > 0 AND nlevel(OLD.path) > 0 THEN
 			SELECT id INTO parent_id FROM post_comments
 			  WHERE post_id = OLD.post_id AND path = subpath(OLD.path, 0, nlevel(OLD.path)-1);
 			IF parent_id IS NOT NULL THEN
@@ -495,8 +494,20 @@ var migrationStatements = []string{
 	END;
 	$$ LANGUAGE plpgsql`,
 	`DROP TRIGGER IF EXISTS trg_comment_reply_count ON post_comments`,
-	`CREATE TRIGGER trg_comment_reply_count AFTER INSERT OR DELETE ON post_comments
+	`CREATE TRIGGER trg_comment_reply_count AFTER DELETE OR UPDATE OF path ON post_comments
 	 FOR EACH ROW EXECUTE FUNCTION update_comment_reply_count()`,
+
+	// Backfill reply_count for any existing comments
+	`UPDATE post_comments SET reply_count = COALESCE(sub.cnt, 0)
+	 FROM (
+	   SELECT parent.id, COUNT(child.id) AS cnt
+	   FROM post_comments parent
+	   JOIN post_comments child ON child.post_id = parent.post_id
+	     AND child.path <@ parent.path AND child.path != parent.path
+	     AND child.depth = parent.depth + 1
+	   GROUP BY parent.id
+	 ) sub
+	 WHERE post_comments.id = sub.id AND post_comments.reply_count != sub.cnt`,
 
 	// Trigger: increment/decrement posts.comment_count on post_comments insert/delete
 	`CREATE OR REPLACE FUNCTION update_post_comment_count() RETURNS TRIGGER AS $$
@@ -653,7 +664,7 @@ var migrationStatements = []string{
 
 	// Seed: arena_limits (admin-configurable post limits + upload sizes)
 	`INSERT INTO app_settings (key, value) VALUES
-		('arena_limits', '{"max_posts_per_user": 50, "max_media_per_post": 10, "max_image_size_kb": 100, "max_video_size_kb": 500, "max_caption_length": 2200, "max_comment_length": 1000, "trending_threshold": 50}')
+		('arena_limits', '{"max_posts_per_user": 50, "max_media_per_post": 10, "max_image_size_kb": 100, "max_video_size_kb": 500, "max_caption_length": 2200, "max_comment_length": 1000, "free_caption_length": 300, "free_comment_length": 200, "trending_threshold": 50, "presign_put_mins": 5, "presign_get_mins": 30}')
 	 ON CONFLICT (key) DO NOTHING`,
 }
 

@@ -39,9 +39,13 @@ func CreatePostHandler(w http.ResponseWriter, r *http.Request) {
 
 	limits := services.GetArenaLimits()
 
-	// Validate caption length
-	if len(req.Caption) > limits.MaxCaptionLength {
-		JSONError(w, fmt.Sprintf("Caption too long (max %d chars)", limits.MaxCaptionLength), http.StatusBadRequest)
+	// Validate caption length (paid users get higher limit)
+	maxCaption := limits.FreeCaptionLength
+	if IsUserVIP(r.Context(), userID) {
+		maxCaption = limits.MaxCaptionLength
+	}
+	if len(req.Caption) > maxCaption {
+		JSONError(w, fmt.Sprintf("Caption too long (max %d chars)", maxCaption), http.StatusBadRequest)
 		return
 	}
 
@@ -245,8 +249,12 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limits := services.GetArenaLimits()
-	if len(req.Caption) > limits.MaxCaptionLength {
-		JSONError(w, fmt.Sprintf("Caption too long (max %d chars)", limits.MaxCaptionLength), http.StatusBadRequest)
+	maxCaption := limits.FreeCaptionLength
+	if IsUserVIP(r.Context(), userID) {
+		maxCaption = limits.MaxCaptionLength
+	}
+	if len(req.Caption) > maxCaption {
+		JSONError(w, fmt.Sprintf("Caption too long (max %d chars)", maxCaption), http.StatusBadRequest)
 		return
 	}
 
@@ -775,11 +783,13 @@ func attachMedia(ctx context.Context, posts []models.PostResponse, store storage
 			m.PreviewHash = previewHash.String
 		}
 
-		// Generate presigned GET URL
-		if store != nil {
+		// Build media URL: use public URL if configured, otherwise presigned GET
+		if config.StoragePublicURL != "" {
+			m.URL = strings.TrimRight(config.StoragePublicURL, "/") + "/" + objectKey
+		} else if store != nil {
 			url, err := store.PresignGet(ctx, &storage.PresignGetInput{
 				Key:    objectKey,
-				Expiry: config.PresignGetExpiry,
+				Expiry: getPresignGetExpiry(),
 			})
 			if err == nil {
 				m.URL = url
@@ -870,6 +880,14 @@ func attachOriginalPosts(ctx context.Context, posts []models.PostResponse, viewe
 			}
 		}
 	}
+}
+
+func getPresignGetExpiry() time.Duration {
+	mins := services.GetArenaLimits().PresignGetMins
+	if mins <= 0 {
+		mins = config.DefaultPresignGetMins
+	}
+	return time.Duration(mins) * time.Minute
 }
 
 func parseFeedPagination(r *http.Request) (limit, offset int) {

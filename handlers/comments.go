@@ -49,8 +49,12 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limits := services.GetArenaLimits()
-	if len(req.Body) > limits.MaxCommentLength {
-		JSONError(w, fmt.Sprintf("Comment too long (max %d chars)", limits.MaxCommentLength), http.StatusBadRequest)
+	maxComment := limits.FreeCommentLength
+	if IsUserVIP(r.Context(), userID) {
+		maxComment = limits.MaxCommentLength
+	}
+	if len(req.Body) > maxComment {
+		JSONError(w, fmt.Sprintf("Comment too long (max %d chars)", maxComment), http.StatusBadRequest)
 		return
 	}
 

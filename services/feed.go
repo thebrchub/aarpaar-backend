@@ -96,13 +96,17 @@ func setDefaultArenaLimits() {
 		return // already set, don't overwrite with defaults
 	}
 	arenaLimits = models.ArenaLimits{
-		MaxPostsPerUser:   50,
+		MaxPostsPerUser:   1000,
 		MaxMediaPerPost:   10,
 		MaxImageSizeKB:    config.ArenaMaxImageSizeKB,
 		MaxVideoSizeKB:    config.ArenaMaxVideoSizeKB,
 		MaxCaptionLength:  2200,
 		MaxCommentLength:  1000,
+		FreeCaptionLength: 300,
+		FreeCommentLength: 200,
 		TrendingThreshold: 50,
+		PresignPutMins:    config.DefaultPresignPutMins,
+		PresignGetMins:    config.DefaultPresignGetMins,
 	}
 	arenaLimitsOK = true
 }

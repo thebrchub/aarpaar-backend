@@ -419,12 +419,14 @@ const (
 	// Allowed MIME types for upload
 	MimeJPEG = "image/jpeg"
 	MimeWebP = "image/webp"
+	MimeAVIF = "image/avif"
+	MimePNG  = "image/png"
 	MimeMp4  = "video/mp4"
 	MimeWebM = "video/webm"
 
-	// Presigned URL expiry times
-	PresignPutExpiry = 5 * time.Minute  // Upload URL validity
-	PresignGetExpiry = 30 * time.Minute // Download URL validity
+	// Default presigned URL expiry (minutes); overridden by arena_limits at runtime
+	DefaultPresignPutMins = 5
+	DefaultPresignGetMins = 30
 
 	// Feed defaults
 	DefaultFeedLimit = 20

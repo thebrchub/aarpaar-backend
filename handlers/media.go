@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 	"github.com/google/uuid"
@@ -40,7 +41,7 @@ func PresignUploadHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate content type
 	ct := strings.ToLower(req.ContentType)
 	if !isAllowedMediaType(ct) {
-		JSONError(w, "Unsupported media type. Allowed: image/jpeg, image/webp, video/mp4, video/webm", http.StatusBadRequest)
+		JSONError(w, "Unsupported media type. Allowed: image/jpeg, image/webp, image/avif, image/png, video/mp4, video/webm", http.StatusBadRequest)
 		return
 	}
 
@@ -60,11 +61,16 @@ func PresignUploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	objectKey := fmt.Sprintf("arena/%s/%s%s", userID, uuid.New().String(), ext)
 
+	putMins := limits.PresignPutMins
+	if putMins <= 0 {
+		putMins = config.DefaultPresignPutMins
+	}
+
 	url, err := Store.PresignPut(r.Context(), &storage.PresignPutInput{
 		Key:         objectKey,
 		ContentType: ct,
 		MaxBytes:    maxBytes,
-		Expiry:      config.PresignPutExpiry,
+		Expiry:      time.Duration(putMins) * time.Minute,
 	})
 	if err != nil {
 		JSONError(w, "Failed to generate upload URL", http.StatusInternalServerError)
@@ -79,14 +85,18 @@ func PresignUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 func isAllowedMediaType(ct string) bool {
 	switch ct {
-	case config.MimeJPEG, config.MimeWebP, config.MimeMp4, config.MimeWebM:
+	case config.MimeJPEG, config.MimeWebP, config.MimeAVIF, config.MimePNG, config.MimeMp4, config.MimeWebM:
 		return true
 	}
 	return false
 }
 
 func isImageType(ct string) bool {
-	return ct == config.MimeJPEG || ct == config.MimeWebP
+	switch ct {
+	case config.MimeJPEG, config.MimeWebP, config.MimeAVIF, config.MimePNG:
+		return true
+	}
+	return false
 }
 
 func mimeToExt(ct string) string {
@@ -95,6 +105,10 @@ func mimeToExt(ct string) string {
 		return ".jpg"
 	case config.MimeWebP:
 		return ".webp"
+	case config.MimeAVIF:
+		return ".avif"
+	case config.MimePNG:
+		return ".png"
 	case config.MimeMp4:
 		return ".mp4"
 	case config.MimeWebM:

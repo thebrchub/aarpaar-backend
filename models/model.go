@@ -109,9 +109,13 @@ type ArenaLimits struct {
 	MaxMediaPerPost   int `json:"max_media_per_post"`
 	MaxImageSizeKB    int `json:"max_image_size_kb"`
 	MaxVideoSizeKB    int `json:"max_video_size_kb"`
-	MaxCaptionLength  int `json:"max_caption_length"`
-	MaxCommentLength  int `json:"max_comment_length"`
+	MaxCaptionLength  int `json:"max_caption_length"`  // Paid/donated users
+	MaxCommentLength  int `json:"max_comment_length"`  // Paid/donated users
+	FreeCaptionLength int `json:"free_caption_length"` // Free users
+	FreeCommentLength int `json:"free_comment_length"` // Free users
 	TrendingThreshold int `json:"trending_threshold"`
+	PresignPutMins    int `json:"presign_put_mins"` // Upload URL validity in minutes
+	PresignGetMins    int `json:"presign_get_mins"` // Download URL validity in minutes
 }
 
 // CreatePostRequest is the JSON body for POST /api/v1/arena/posts.
