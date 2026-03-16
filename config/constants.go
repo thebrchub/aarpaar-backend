@@ -305,6 +305,7 @@ const (
 	FieldData            = "data"           // Nested event payload
 	FieldTempID          = "tempId"         // Client-generated temp ID for delivery confirmation
 	FieldText            = "text"           // Message content body
+	FieldPartnerID       = "partnerId"      // Real user ID of the matched partner
 	FieldPartnerFakeName = "displayName"    // Display name for stranger matches
 	FieldPartnerAvatar   = "partner_avatar" // Avatar URL (empty for strangers)
 	FieldCode            = "code"           // Error code for error events

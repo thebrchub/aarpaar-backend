@@ -105,8 +105,8 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 		userLocRaw, _ := rdb.Get(ctx, config.MATCH_LOCATION_COLON+userID).Result()
 		partnerLocRaw, _ := rdb.Get(ctx, config.MATCH_LOCATION_COLON+matchedPartner).Result()
 
-		notifyMatchWithLocation(ctx, userID, roomID, partnerLocRaw)
-		notifyMatchWithLocation(ctx, matchedPartner, roomID, userLocRaw)
+		notifyMatchWithLocation(ctx, userID, matchedPartner, roomID, partnerLocRaw)
+		notifyMatchWithLocation(ctx, matchedPartner, userID, roomID, userLocRaw)
 
 		// Clean up location keys after match
 		rdb.Del(ctx, config.MATCH_LOCATION_COLON+userID, config.MATCH_LOCATION_COLON+matchedPartner)
@@ -140,15 +140,16 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 
 // notifyMatch sends a "match_found" event to a specific user via Redis Pub/Sub.
 // The engine picks this up and delivers it over their WebSocket.
-func notifyMatch(ctx context.Context, targetUser, roomID string) {
-	notifyMatchWithLocation(ctx, targetUser, roomID, "")
+func notifyMatch(ctx context.Context, targetUser, partnerID, roomID string) {
+	notifyMatchWithLocation(ctx, targetUser, partnerID, roomID, "")
 }
 
 // notifyMatchWithLocation sends a "match_found" event including optional partner location.
-func notifyMatchWithLocation(ctx context.Context, targetUser, roomID, partnerLocation string) {
+func notifyMatchWithLocation(ctx context.Context, targetUser, partnerID, roomID, partnerLocation string) {
 	eventPayload := map[string]interface{}{
 		config.FieldType:            config.MsgTypeMatchFound,
 		config.FieldRoomID:          roomID,
+		config.FieldPartnerID:       partnerID,
 		config.FieldPartnerFakeName: services.PickRandomName(),
 		config.FieldPartnerAvatar:   "",
 	}
