@@ -558,8 +558,12 @@ var migrationStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_comment_reports_comment ON comment_reports (comment_id)`,
 
-	// Repost dedup index (covers WHERE user_id = $1 AND original_post_id = $2 AND post_type = 'repost')
-	`CREATE INDEX IF NOT EXISTS idx_posts_repost_dedup ON posts (user_id, original_post_id) WHERE post_type = 'repost'`,
+	// Drop old broad dedup index (allowed only one repost per user per post regardless of caption).
+	`DROP INDEX IF EXISTS idx_posts_repost_dedup`,
+
+	// Unique index: only ONE plain (non-quote) repost per user per original post.
+	// Quote reposts (caption != '') are allowed multiple times.
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_repost_plain_dedup ON posts (user_id, original_post_id) WHERE post_type = 'repost' AND caption = ''`,
 
 	// Missing indexes for scale
 	`CREATE INDEX IF NOT EXISTS idx_call_logs_peer_id ON call_logs (peer_id, started_at DESC)`,
@@ -740,6 +744,9 @@ var migrationStatements = []string{
 	`INSERT INTO app_settings (key, value) VALUES
 		('arena_limits', '{"max_posts_per_user": 50, "max_media_per_post": 10, "max_image_size_kb": 100, "max_video_size_kb": 500, "max_caption_length": 2200, "max_comment_length": 1000, "free_caption_length": 300, "free_comment_length": 200, "trending_threshold": 50, "presign_put_mins": 5, "presign_get_mins": 30}')
 	 ON CONFLICT (key) DO NOTHING`,
+
+	// User bio
+	`ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ''`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

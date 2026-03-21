@@ -1046,6 +1046,11 @@
           <label>Show Last Seen / Online</label>
           <span style="font-size:.7rem;color:var(--text-muted)">(visible to friends)</span>
         </div>
+        <div class="form-row">
+          <label>Bio <span style="font-size:.65rem;color:var(--text-muted)">(free: 200 chars, VIP: 500 chars)</span></label>
+          <textarea id="patchBio" placeholder="Tell everyone about yourself..." maxlength="500" rows="2"></textarea>
+          <span id="patchBioCounter" style="font-size:.68rem;color:var(--text-muted)">0 / 200</span>
+        </div>
         <button class="btn btn-primary" onclick="patchProfile()">Update (PATCH)</button>
         <div id="patchResponse" class="response-panel hidden"></div>
       </div>
@@ -1089,6 +1094,10 @@
             <span class="slider"></span>
           </label>
           <label>Show Last Seen / Online</label>
+        </div>
+        <div class="form-row">
+          <label>Bio <span style="font-size:.65rem;color:var(--text-muted)">(omit to reset to empty)</span></label>
+          <textarea id="putBio" placeholder="Tell everyone about yourself..." maxlength="500" rows="2"></textarea>
         </div>
         <button class="btn btn-primary" onclick="putProfile()">Replace (PUT)</button>
         <div id="putResponse" class="response-panel hidden"></div>
@@ -2843,6 +2852,7 @@ async function getMyProfile() {
           <p style="font-size:.72rem;color:var(--text-muted)">Gender: ${escapeHtml(d.gender || 'Any')} &bull; Mobile: ${escapeHtml(d.mobile || '—')}</p>
           <p style="font-size:.72rem;color:var(--text-muted)">Last Seen: ${d.show_last_seen !== false ? '👁 Visible to friends' : '🔒 Hidden'}</p>
           <p style="font-size:.72rem;color:var(--text-muted)">Total Donated: ₹${d.total_donated != null ? d.total_donated : 0}${d.badge ? ' &bull; Badge: ' + escapeHtml(d.badge.icon || '') + ' ' + escapeHtml(d.badge.name || '') : ''}</p>
+          ${d.bio ? '<p style="font-size:.82rem;margin-top:6px">' + escapeHtml(d.bio) + '</p>' : '<p style="font-size:.72rem;color:var(--text-muted);font-style:italic">No bio set</p>'}
           <p style="font-family:var(--mono);font-size:.7rem;color:var(--text-muted)">${escapeHtml(d.id)}</p>
         </div>
       </div>`;
@@ -2869,6 +2879,12 @@ async function getMyProfile() {
       document.getElementById('putUsername').style.opacity = '1';
     }
     if (d.gender) document.getElementById('putGender').value = d.gender;
+    // Sync bio fields
+    if (d.bio !== undefined) {
+      document.getElementById('patchBio').value = d.bio;
+      document.getElementById('putBio').value = d.bio;
+      document.getElementById('patchBioCounter').textContent = (d.bio || '').length + ' / ' + (document.getElementById('patchBio').maxLength || 200);
+    }
   } else {
     el.innerHTML = '<div class="empty-state">No profile data</div>';
   }
@@ -3771,6 +3787,8 @@ async function patchProfile() {
   // Only send is_private if the checkbox was explicitly changed
   if (privCheckbox.dataset.changed === '1') body.is_private = privCheckbox.checked;
   if (lastSeenCheckbox.dataset.changed === '1') body.show_last_seen = lastSeenCheckbox.checked;
+  const bioEl = document.getElementById('patchBio');
+  if (bioEl && bioEl.dataset.changed === '1') body.bio = bioEl.value;
   if (Object.keys(body).length === 0) return toast('Enter at least one field to update', 'error');
   const r = await apiCall('PATCH', '/api/v1/users/me', body, 'patchResponse');
   if (r.status >= 200 && r.status < 300) {
@@ -3782,10 +3800,15 @@ async function patchProfile() {
   }
   privCheckbox.dataset.changed = '';
   lastSeenCheckbox.dataset.changed = '';
+  if (bioEl) bioEl.dataset.changed = '';
 }
-// Track if privacy toggles were explicitly changed
+// Track if privacy toggles / bio were explicitly changed
 document.getElementById('patchIsPrivate').addEventListener('change', function() { this.dataset.changed = '1'; });
 document.getElementById('patchShowLastSeen').addEventListener('change', function() { this.dataset.changed = '1'; });
+document.getElementById('patchBio').addEventListener('input', function() {
+  this.dataset.changed = '1';
+  document.getElementById('patchBioCounter').textContent = this.value.length + ' / ' + (this.maxLength || 200);
+});
 
 // ======================================================================
 //  USERS: Replace Profile (PUT)
@@ -3800,6 +3823,8 @@ async function putProfile() {
   const m = document.getElementById('putMobile').value.trim();
   if (m) body.mobile = m;
   body.gender = document.getElementById('putGender').value;
+  const putBio = document.getElementById('putBio').value;
+  if (putBio !== undefined) body.bio = putBio;
   const r = await apiCall('PUT', '/api/v1/users/me', body, 'putResponse');
   if (r.status >= 200 && r.status < 300) {
     toast('Profile replaced!', 'success');

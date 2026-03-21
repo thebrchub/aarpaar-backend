@@ -1,11 +1,16 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/models"
 )
@@ -45,6 +50,9 @@ func BookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate bookmarks cache for this user
+	invalidateBookmarksCache(userID)
+
 	JSONMessage(w, "success", "Post bookmarked")
 }
 
@@ -76,6 +84,9 @@ func UnbookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate bookmarks cache for this user
+	invalidateBookmarksCache(userID)
+
 	JSONMessage(w, "success", "Bookmark removed")
 }
 
@@ -96,6 +107,16 @@ func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
+	// Cache per-user bookmarks feed for 1 minute
+	cacheKey := fmt.Sprintf("bookmarks:%s:%d:%d", userID, limit, offset)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
@@ -103,11 +124,13 @@ func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
 		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
 		        true,
+		        my_repost.id IS NOT NULL,
 		        p.created_at
 		 FROM post_bookmarks bm
 		 JOIN posts p ON p.id = bm.post_id
 		 JOIN users u ON u.id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
+		 LEFT JOIN posts my_repost ON my_repost.original_post_id = p.id AND my_repost.user_id = $1 AND my_repost.post_type = 'repost' AND my_repost.caption = ''
 		 WHERE bm.user_id = $1
 		 ORDER BY bm.created_at DESC
 		 LIMIT $2 OFFSET $3`,
@@ -134,5 +157,28 @@ func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	attachOriginalPosts(ctx, posts, userID)
 
+	if respBytes, err := json.Marshal(posts); err == nil {
+		rdb.Set(ctx, cacheKey, respBytes, 1*time.Minute)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+		return
+	}
+
 	JSONSuccess(w, posts)
+}
+
+// invalidateBookmarksCache deletes all cached bookmark feed pages for a user.
+func invalidateBookmarksCache(userID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// Delete common page combinations (first few pages cover 99% of usage)
+	rdb := redis.GetRawClient()
+	keys := make([]string, 0, 6)
+	for _, limit := range []int{config.DefaultFeedLimit, config.MaxFeedLimit} {
+		for _, offset := range []int{0, config.DefaultFeedLimit, config.DefaultFeedLimit * 2} {
+			keys = append(keys, fmt.Sprintf("bookmarks:%s:%d:%d", userID, limit, offset))
+		}
+	}
+	rdb.Del(ctx, keys...)
 }

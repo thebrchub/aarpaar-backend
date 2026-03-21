@@ -141,6 +141,7 @@
     }
     .post-actions .action-btn:hover { border-color: var(--accent); color: var(--text); }
     .post-actions .action-btn.liked { color: var(--error); border-color: var(--error); }
+    .post-actions .action-btn.reposted { color: var(--success); border-color: var(--success); }
     .inline-comments {
       margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
     }
@@ -819,6 +820,8 @@ function renderPost(p) {
 
   const likedClass = p.hasLiked ? ' liked' : '';
   const likedIcon = p.hasLiked ? '❤️' : '🤍';
+  const repostedClass = p.hasReposted ? ' reposted' : '';
+  const repostIcon = p.hasReposted ? '🔁' : '🔄';
 
   return `
     <div class="post-card" id="post-${p.id}">
@@ -839,7 +842,7 @@ function renderPost(p) {
           <span id="like-count-${p.id}">${p.likeCount || 0}</span>
         </button>
         <button class="action-btn" onclick="toggleComments(${p.id})">💬 <span id="comment-count-${p.id}">${p.commentCount || 0}</span></button>
-        <button class="action-btn" onclick="toggleRepostForm(${p.id})">🔄 ${p.repostCount || 0}</button>
+        <button class="action-btn${repostedClass}" id="repost-btn-${p.id}" onclick="toggleRepostForm(${p.id})">${repostIcon} <span id="repost-count-${p.id}">${p.repostCount || 0}</span></button>
         <button class="action-btn" onclick="document.getElementById('reportPostId').value='${p.id}';document.getElementById('reportPostId').scrollIntoView({behavior:'smooth'})">🚩</button>
       </div>
       <div id="repost-form-${p.id}" style="display:none">
@@ -1249,6 +1252,13 @@ async function submitInlineRepost(postId) {
     alert('Reposted! New post ID: ' + (data.id || data.postId || ''));
     if (captionInput) captionInput.value = '';
     document.getElementById('repost-form-' + postId).style.display = 'none';
+    // Update repost button state (plain repost sets hasReposted)
+    if (!caption) {
+      const btn = document.getElementById('repost-btn-' + postId);
+      if (btn) { btn.classList.add('reposted'); btn.querySelector('span')?.replaceWith(document.createTextNode('🔁 ')); }
+    }
+    const countEl = document.getElementById('repost-count-' + postId);
+    if (countEl) countEl.textContent = parseInt(countEl.textContent || '0') + 1;
   } catch (err) { alert('Error: ' + err.message); }
 }
 

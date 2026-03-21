@@ -9,6 +9,7 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/config"
+	"github.com/thebrchub/aarpaar/services"
 )
 
 // GetMeHandler returns the authenticated user's own profile.
@@ -23,7 +24,7 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT COALESCE(
 			(SELECT row_to_json(t)::text FROM (
-				SELECT id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, created_at,
+				SELECT id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, bio, created_at,
 				       total_donated
 				FROM users WHERE id = $1 AND is_banned = false
 			) t),
@@ -142,13 +143,14 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		AvatarURL    *string `json:"avatar_url"`
 		IsPrivate    *bool   `json:"is_private"`
 		ShowLastSeen *bool   `json:"show_last_seen"`
+		Bio          *string `json:"bio"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		JSONError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if body.Username == nil && body.Name == nil && body.Mobile == nil && body.Gender == nil && body.AvatarURL == nil && body.IsPrivate == nil && body.ShowLastSeen == nil {
+	if body.Username == nil && body.Name == nil && body.Mobile == nil && body.Gender == nil && body.AvatarURL == nil && body.IsPrivate == nil && body.ShowLastSeen == nil && body.Bio == nil {
 		JSONError(w, "Nothing to update", http.StatusBadRequest)
 		return
 	}
@@ -209,13 +211,27 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		args = append(args, *body.ShowLastSeen)
 		i++
 	}
+	if body.Bio != nil {
+		limits := services.GetArenaLimits()
+		maxBio := limits.FreeBioLength
+		if IsUserVIP(r.Context(), userID) {
+			maxBio = limits.MaxBioLength
+		}
+		if len(*body.Bio) > maxBio {
+			JSONError(w, fmt.Sprintf("Bio too long (max %d chars)", maxBio), http.StatusBadRequest)
+			return
+		}
+		sets = append(sets, fmt.Sprintf("bio = $%d", i))
+		args = append(args, *body.Bio)
+		i++
+	}
 
 	args = append(args, userID)
 	query := fmt.Sprintf(`
 		WITH updated AS (
 			UPDATE users SET %s
 			WHERE id = $%d AND is_banned = false
-			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, created_at
+			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, bio, created_at
 		)
 		SELECT COALESCE(
 			(SELECT row_to_json(updated)::text FROM updated),
@@ -252,6 +268,7 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 		Gender       *string `json:"gender"`
 		IsPrivate    *bool   `json:"is_private"`
 		ShowLastSeen *bool   `json:"show_last_seen"`
+		Bio          *string `json:"bio"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		JSONError(w, "Invalid request body", http.StatusBadRequest)
@@ -297,11 +314,25 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 		gender = *body.Gender
 	}
 
+	bio := ""
+	if body.Bio != nil {
+		limits := services.GetArenaLimits()
+		maxBio := limits.FreeBioLength
+		if IsUserVIP(r.Context(), userID) {
+			maxBio = limits.MaxBioLength
+		}
+		if len(*body.Bio) > maxBio {
+			JSONError(w, fmt.Sprintf("Bio too long (max %d chars)", maxBio), http.StatusBadRequest)
+			return
+		}
+		bio = *body.Bio
+	}
+
 	query := `
 		WITH updated AS (
-			UPDATE users SET username = $1, name = $2, is_private = $3, mobile = $4, gender = $5, show_last_seen = $6
-			WHERE id = $7 AND is_banned = false
-			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, created_at
+			UPDATE users SET username = $1, name = $2, is_private = $3, mobile = $4, gender = $5, show_last_seen = $6, bio = $7
+			WHERE id = $8 AND is_banned = false
+			RETURNING id, email, name, username, avatar_url, mobile, gender, is_private, show_last_seen, bio, created_at
 		)
 		SELECT COALESCE(
 			(SELECT row_to_json(updated)::text FROM updated),
@@ -310,7 +341,7 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	var rawJSON string
-	err = postgress.GetRawDB().QueryRow(query, body.Username, body.Name, isPrivate, mobile, gender, showLastSeen, userID).Scan(&rawJSON)
+	err = postgress.GetRawDB().QueryRow(query, body.Username, body.Name, isPrivate, mobile, gender, showLastSeen, bio, userID).Scan(&rawJSON)
 	if err != nil || rawJSON == "" {
 		log.Printf("[PutMe] DB error: %v", err)
 		JSONError(w, "Update failed", http.StatusInternalServerError)

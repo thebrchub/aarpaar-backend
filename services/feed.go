@@ -126,6 +126,12 @@ func backfillArenaDefaults(l *models.ArenaLimits) {
 	if l.FreeCommentLength == 0 {
 		l.FreeCommentLength = 200
 	}
+	if l.MaxBioLength == 0 {
+		l.MaxBioLength = 500
+	}
+	if l.FreeBioLength == 0 {
+		l.FreeBioLength = 200
+	}
 	if l.TrendingThreshold == 0 {
 		l.TrendingThreshold = 50
 	}
@@ -152,6 +158,8 @@ func setDefaultArenaLimits() {
 		MaxCommentLength:  1000,
 		FreeCaptionLength: 300,
 		FreeCommentLength: 200,
+		MaxBioLength:      500,
+		FreeBioLength:     200,
 		TrendingThreshold: 50,
 		PresignPutMins:    config.DefaultPresignPutMins,
 		PresignGetMins:    config.DefaultPresignGetMins,

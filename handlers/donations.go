@@ -12,6 +12,7 @@ import (
 	sdkmodels "github.com/shivanand-burli/go-starter-kit/models"
 	sdkpay "github.com/shivanand-burli/go-starter-kit/payment"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
 )
@@ -64,6 +65,16 @@ func GetBadgeTiersHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
+	// Try Redis cache first (badge tiers rarely change)
+	const cacheKey = "badge_tiers:all"
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	var raw []byte
 	err := postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT COALESCE(json_agg(t), '[]')::text FROM (
@@ -76,6 +87,9 @@ func GetBadgeTiersHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Database error", http.StatusInternalServerError)
 		return
 	}
+
+	// Cache for 10 minutes
+	rdb.Set(ctx, cacheKey, raw, 10*time.Minute)
 
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)

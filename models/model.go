@@ -113,6 +113,8 @@ type ArenaLimits struct {
 	MaxCommentLength  int `json:"max_comment_length"`  // Paid/donated users
 	FreeCaptionLength int `json:"free_caption_length"` // Free users
 	FreeCommentLength int `json:"free_comment_length"` // Free users
+	MaxBioLength      int `json:"max_bio_length"`      // Paid/donated users
+	FreeBioLength     int `json:"free_bio_length"`     // Free users
 	TrendingThreshold int `json:"trending_threshold"`
 	PresignPutMins    int `json:"presign_put_mins"` // Upload URL validity in minutes
 	PresignGetMins    int `json:"presign_get_mins"` // Download URL validity in minutes
@@ -156,6 +158,7 @@ type PostResponse struct {
 	BookmarkCount  int                 `json:"bookmarkCount"`
 	HasLiked       bool                `json:"hasLiked"`
 	HasBookmarked  bool                `json:"hasBookmarked"`
+	HasReposted    bool                `json:"hasReposted"`
 	Media          []PostMediaResponse `json:"media"`
 	CreatedAt      time.Time           `json:"createdAt"`
 }

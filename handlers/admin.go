@@ -331,6 +331,8 @@ func CreateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	invalidateBadgeTiersCache()
+
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusCreated)
 	bytes, _ := json.Marshal(map[string]interface{}{"id": id, "name": req.Name, "min_amount": req.MinAmount})
@@ -339,7 +341,7 @@ func CreateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateBadgeTierHandler updates a badge tier.
 func UpdateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
-	tierID := r.PathValue("tierId")
+	tierID := r.PathValue("badgeId")
 	if tierID == "" {
 		JSONError(w, "tierId is required", http.StatusBadRequest)
 		return
@@ -405,12 +407,14 @@ func UpdateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	invalidateBadgeTiersCache()
+
 	JSONMessage(w, "success", "Badge tier updated")
 }
 
 // DeleteBadgeTierHandler deletes a badge tier.
 func DeleteBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
-	tierID := r.PathValue("tierId")
+	tierID := r.PathValue("badgeId")
 	if tierID == "" {
 		JSONError(w, "tierId is required", http.StatusBadRequest)
 		return
@@ -427,7 +431,16 @@ func DeleteBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	invalidateBadgeTiersCache()
+
 	JSONMessage(w, "success", "Badge tier deleted")
+}
+
+// invalidateBadgeTiersCache removes the cached badge tiers from Redis.
+func invalidateBadgeTiersCache() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	redis.GetRawClient().Del(ctx, "badge_tiers:all")
 }
 
 // ---------------------------------------------------------------------------

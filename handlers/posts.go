@@ -12,6 +12,7 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/shivanand-burli/go-starter-kit/storage"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
@@ -136,6 +137,10 @@ func CreatePostHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Post created but failed to fetch", http.StatusInternalServerError)
 		return
 	}
+
+	// Invalidate feed caches so new post appears immediately
+	chat.RunBackground(func() { InvalidateFeedCaches() })
+
 	JSONSuccess(w, post)
 }
 
@@ -160,6 +165,20 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
+	// Cache single-post detail for 2 minutes (user-specific for hasLiked/hasBookmarked)
+	cacheKey := fmt.Sprintf("post:%d:%s", postID, userID)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		// Still record the detail expand
+		chat.RunBackground(func() {
+			services.BufferDetailExpand(context.Background(), userID, postID)
+		})
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	post, err := getPostByID(ctx, postID, userID)
 	if err != nil {
 		JSONError(w, "Post not found", http.StatusNotFound)
@@ -170,6 +189,14 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 	chat.RunBackground(func() {
 		services.BufferDetailExpand(context.Background(), userID, postID)
 	})
+
+	if respBytes, err := json.Marshal(post); err == nil {
+		rdb.Set(ctx, cacheKey, respBytes, 2*time.Minute)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+		return
+	}
 
 	JSONSuccess(w, post)
 }
@@ -221,6 +248,15 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// If this is a repost, decrement counters on the original post.
+	var postType string
+	var origPostID *int64
+	var caption string
+	_ = postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT post_type, original_post_id, caption FROM posts WHERE id = $1 AND user_id = $2`,
+		postID, userID,
+	).Scan(&postType, &origPostID, &caption)
+
 	// Delete post (cascades to media, likes, comments)
 	result, err := postgress.Exec(
 		`DELETE FROM posts WHERE id = $1 AND user_id = $2`, postID, userID,
@@ -234,6 +270,29 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Post not found or not yours", http.StatusNotFound)
 		return
 	}
+
+	// Decrement repost/quote counters on the original post in background.
+	if postType == config.PostTypeRepost && origPostID != nil {
+		origID := *origPostID
+		captionTrimmed := strings.TrimSpace(caption)
+		chat.RunBackground(func() {
+			if captionTrimmed != "" {
+				_, _ = postgress.Exec(
+					`UPDATE posts SET repost_count = GREATEST(repost_count - 1, 0), quote_count = GREATEST(quote_count - 1, 0) WHERE id = $1`, origID,
+				)
+			} else {
+				_, _ = postgress.Exec(
+					`UPDATE posts SET repost_count = GREATEST(repost_count - 1, 0) WHERE id = $1`, origID,
+				)
+			}
+		})
+	}
+
+	// Invalidate feed caches + single post cache
+	chat.RunBackground(func() {
+		InvalidateFeedCaches()
+		redis.GetRawClient().Del(context.Background(), fmt.Sprintf("post:%d:%s", postID, userID))
+	})
 
 	JSONMessage(w, "success", "Post deleted")
 }
@@ -285,15 +344,19 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Prevent duplicate repost
-	var alreadyReposted bool
-	_ = postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM posts WHERE user_id = $1 AND original_post_id = $2 AND post_type = $3)`,
-		userID, postID, config.PostTypeRepost,
-	).Scan(&alreadyReposted)
-	if alreadyReposted {
-		JSONError(w, "Already reposted", http.StatusConflict)
-		return
+	// Prevent duplicate plain (non-quote) repost — only one allowed per user per post.
+	// Quote reposts (with caption) are allowed multiple times.
+	captionTrimmed := strings.TrimSpace(req.Caption)
+	if captionTrimmed == "" {
+		var alreadyReposted bool
+		_ = postgress.GetRawDB().QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM posts WHERE user_id = $1 AND original_post_id = $2 AND post_type = $3 AND caption = '')`,
+			userID, postID, config.PostTypeRepost,
+		).Scan(&alreadyReposted)
+		if alreadyReposted {
+			JSONError(w, "Already reposted", http.StatusConflict)
+			return
+		}
 	}
 
 	var newPostID int64
@@ -309,9 +372,8 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Increment repost count on original in background (non-blocking)
-	capturedCaption := strings.TrimSpace(req.Caption)
 	chat.RunBackground(func() {
-		if capturedCaption != "" {
+		if captionTrimmed != "" {
 			_, _ = postgress.Exec(
 				`UPDATE posts SET repost_count = repost_count + 1, quote_count = quote_count + 1 WHERE id = $1`, postID,
 			)
@@ -327,6 +389,13 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Repost created but failed to fetch", http.StatusInternalServerError)
 		return
 	}
+
+	// Invalidate single-post cache immediately so hasReposted / counts are fresh
+	invalidatePostCache(postID)
+
+	// Invalidate feed caches in background (heavier SCAN)
+	chat.RunBackground(func() { InvalidateFeedCaches() })
+
 	JSONSuccess(w, post)
 }
 
@@ -384,6 +453,18 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
+	// Cache key truncates cursor to the minute so all requests in the same
+	// 60-second window share a single cached page.
+	truncated := cursor.Truncate(time.Minute).Unix()
+	cacheKey := fmt.Sprintf("feed:global:%d:%d", truncated, limit)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
@@ -391,11 +472,13 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
 		        my_bm.user_id IS NOT NULL,
+		        my_repost.id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
 		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
+		 LEFT JOIN posts my_repost ON my_repost.original_post_id = p.id AND my_repost.user_id = $1 AND my_repost.post_type = 'repost' AND my_repost.caption = ''
 		 WHERE p.visibility = 'public' AND p.created_at < $2
 		 ORDER BY p.created_at DESC
 		 LIMIT $3`,
@@ -422,6 +505,15 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[arena] attach media failed: %v", err)
 	}
 	attachOriginalPosts(ctx, posts, userID)
+
+	// Cache the serialized response for 1 minute
+	if respBytes, err := json.Marshal(posts); err == nil {
+		rdb.Set(ctx, cacheKey, respBytes, 1*time.Minute)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+		return
+	}
 
 	JSONSuccess(w, posts)
 }
@@ -455,12 +547,14 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
 		        my_bm.user_id IS NOT NULL,
+		        my_repost.id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 JOIN my_friends mf ON mf.friend_id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
 		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
+		 LEFT JOIN posts my_repost ON my_repost.original_post_id = p.id AND my_repost.user_id = $1 AND my_repost.post_type = 'repost' AND my_repost.caption = ''
 		 WHERE p.created_at < $2
 		 ORDER BY p.created_at DESC
 		 LIMIT $3`,
@@ -526,11 +620,13 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 		       p.view_count, p.bookmark_count,
 		       my_like.user_id IS NOT NULL,
 		       my_bm.user_id IS NOT NULL,
+		       my_repost.id IS NOT NULL,
 		       p.created_at
 		FROM posts p
 		JOIN users u ON u.id = p.user_id
 		LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
 		LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
+		LEFT JOIN posts my_repost ON my_repost.original_post_id = p.id AND my_repost.user_id = $1 AND my_repost.post_type = 'repost' AND my_repost.caption = ''
 		WHERE p.user_id = $2 %s
 		ORDER BY p.is_pinned DESC, p.created_at DESC
 		LIMIT $3 OFFSET $4`, visFilter)
@@ -577,6 +673,16 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
+	// Cache trending feed for 2 minutes (trending ranking is time-insensitive)
+	cacheKey := fmt.Sprintf("feed:trending:%d:%d", limit, offset)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	// Trending = most engagement in last 24h
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
@@ -585,11 +691,13 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
 		        my_bm.user_id IS NOT NULL,
+		        my_repost.id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
 		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
+		 LEFT JOIN posts my_repost ON my_repost.original_post_id = p.id AND my_repost.user_id = $1 AND my_repost.post_type = 'repost' AND my_repost.caption = ''
 		 WHERE p.visibility = 'public'
 		   AND p.created_at > NOW() - INTERVAL '24 hours'
 		 ORDER BY (p.like_count + p.comment_count * 2 + p.repost_count * 3 + p.view_count / 10) DESC, p.created_at DESC
@@ -616,6 +724,15 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[arena] attach media failed: %v", err)
 	}
 	attachOriginalPosts(ctx, posts, userID)
+
+	// Cache the serialized response for 2 minutes
+	if respBytes, err := json.Marshal(posts); err == nil {
+		rdb.Set(ctx, cacheKey, respBytes, 2*time.Minute)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+		return
+	}
 
 	JSONSuccess(w, posts)
 }
@@ -704,6 +821,9 @@ func AdminDeletePostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate feed caches
+	chat.RunBackground(func() { InvalidateFeedCaches() })
+
 	JSONMessage(w, "success", "Post deleted by admin")
 }
 
@@ -763,7 +883,7 @@ func scanPost(rows *sql.Rows) (models.PostResponse, error) {
 		&p.Caption, &p.PostType, &p.OriginalPostID, &p.Visibility,
 		&p.IsPinned, &p.LikeCount, &p.CommentCount, &p.RepostCount,
 		&p.ViewCount, &p.BookmarkCount,
-		&p.HasLiked, &p.HasBookmarked, &p.CreatedAt,
+		&p.HasLiked, &p.HasBookmarked, &p.HasReposted, &p.CreatedAt,
 	)
 	return p, err
 }
@@ -875,11 +995,13 @@ func attachOriginalPosts(ctx context.Context, posts []models.PostResponse, viewe
 		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
 		        my_bm.user_id IS NOT NULL,
+		        my_repost.id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
 		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
+		 LEFT JOIN posts my_repost ON my_repost.original_post_id = p.id AND my_repost.user_id = $1 AND my_repost.post_type = 'repost' AND my_repost.caption = ''
 		 WHERE p.id IN (%s)`,
 		strings.Join(placeholders, ","),
 	)
@@ -971,11 +1093,13 @@ func getPostByID(ctx context.Context, postID int64, viewerID string) (models.Pos
 		        p.view_count, p.bookmark_count,
 		        my_like.user_id IS NOT NULL,
 		        my_bm.user_id IS NOT NULL,
+		        my_repost.id IS NOT NULL,
 		        p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
 		 LEFT JOIN post_likes my_like ON my_like.post_id = p.id AND my_like.user_id = $1
 		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
+		 LEFT JOIN posts my_repost ON my_repost.original_post_id = p.id AND my_repost.user_id = $1 AND my_repost.post_type = 'repost' AND my_repost.caption = ''
 		 WHERE p.id = $2`,
 		viewerID, postID,
 	).Scan(
@@ -983,7 +1107,7 @@ func getPostByID(ctx context.Context, postID int64, viewerID string) (models.Pos
 		&p.Caption, &p.PostType, &p.OriginalPostID, &p.Visibility,
 		&p.IsPinned, &p.LikeCount, &p.CommentCount, &p.RepostCount,
 		&p.ViewCount, &p.BookmarkCount,
-		&p.HasLiked, &p.HasBookmarked, &p.CreatedAt,
+		&p.HasLiked, &p.HasBookmarked, &p.HasReposted, &p.CreatedAt,
 	)
 	if err != nil {
 		return p, err
@@ -1006,4 +1130,54 @@ func getPostByID(ctx context.Context, postID int64, viewerID string) (models.Pos
 	}
 
 	return p, nil
+}
+
+// InvalidateFeedCaches deletes cached feed entries (global + trending) from Redis.
+// Called after post creation, deletion, or repost.
+func InvalidateFeedCaches() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	rdb := redis.GetRawClient()
+
+	// Use SCAN to find and delete all feed cache keys.
+	// Pattern matches: feed:global:*, feed:trending:*
+	for _, pattern := range []string{"feed:global:*", "feed:trending:*"} {
+		var cursor uint64
+		for {
+			keys, next, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
+			if err != nil {
+				break
+			}
+			if len(keys) > 0 {
+				rdb.Del(ctx, keys...)
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+	}
+}
+
+// invalidatePostCache removes all cached single-post entries for a given post ID
+// (across all users) so that stale hasReposted / counts are not served.
+func invalidatePostCache(postID int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	rdb := redis.GetRawClient()
+	pattern := fmt.Sprintf("post:%d:*", postID)
+	var cursor uint64
+	for {
+		keys, next, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			break
+		}
+		if len(keys) > 0 {
+			rdb.Del(ctx, keys...)
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
 }

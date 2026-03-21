@@ -97,6 +97,9 @@ func SetupTestInfra(t *testing.T) {
 			log.Fatalf("[test] Redis init failed: %v", err)
 		}
 
+		// Arena limits (loads defaults since no app_settings row exists in test DB)
+		services.StartArenaLimitsRefresher(context.Background())
+
 		// RTC optional stub
 		handlers.RTC = rtc.NewClientOptional(rtc.Config{})
 		chat.SetRTC(handlers.RTC)
@@ -197,6 +200,51 @@ func BuildTestMux(engine *chat.Engine) http.Handler {
 
 	// Online count (own rate limit)
 	mux.HandleFunc("GET /api/v1/online", healthLimiter.LimitMiddleware(handlers.GetOnlineCountHandler))
+
+	// Arena Posts
+	mux.HandleFunc("POST /api/v1/arena/posts", mw.Auth(handlers.CreatePostHandler))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}", mw.Auth(handlers.GetPostHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}", mw.Auth(handlers.DeletePostHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/repost", mw.Auth(handlers.RepostHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/pin", mw.Auth(handlers.PinPostHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/pin", mw.Auth(handlers.PinPostHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/report", mw.Auth(handlers.ReportPostHandler))
+
+	// Arena Likes
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/like", mw.Auth(handlers.LikePostHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/like", mw.Auth(handlers.UnlikePostHandler))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/likes", mw.Auth(handlers.GetPostLikersHandler))
+
+	// Arena Bookmarks
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/bookmark", mw.Auth(handlers.BookmarkPostHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/bookmark", mw.Auth(handlers.UnbookmarkPostHandler))
+	mux.HandleFunc("GET /api/v1/arena/bookmarks", mw.Auth(handlers.GetBookmarksHandler))
+
+	// Arena Views
+	mux.HandleFunc("POST /api/v1/arena/posts/views", mw.Auth(handlers.RecordViewsHandler))
+
+	// Arena Post Activity
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/activity", mw.Auth(handlers.GetPostActivityHandler))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/reposts", mw.Auth(handlers.GetRepostsHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/profile-click", mw.Auth(handlers.RecordProfileClickHandler))
+
+	// Arena Comments
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/comments", mw.Auth(handlers.CreateCommentHandler))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/comments", mw.Auth(handlers.GetCommentsHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/comments/{commentId}", mw.Auth(handlers.DeleteCommentHandler))
+	mux.HandleFunc("POST /api/v1/arena/comments/{commentId}/like", mw.Auth(handlers.LikeCommentHandler))
+	mux.HandleFunc("DELETE /api/v1/arena/comments/{commentId}/like", mw.Auth(handlers.UnlikeCommentHandler))
+	mux.HandleFunc("POST /api/v1/arena/comments/{commentId}/report", mw.Auth(handlers.ReportCommentHandler))
+
+	// Arena Feeds
+	mux.HandleFunc("GET /api/v1/arena/feed/global", mw.Auth(handlers.GlobalFeedHandler))
+	mux.HandleFunc("GET /api/v1/arena/feed/network", mw.Auth(handlers.NetworkFeedHandler))
+	mux.HandleFunc("GET /api/v1/arena/feed/trending", mw.Auth(handlers.TrendingFeedHandler))
+	mux.HandleFunc("GET /api/v1/arena/users/{userId}/posts", mw.Auth(handlers.UserPostsHandler))
+
+	// Arena Admin
+	mux.HandleFunc("DELETE /api/v1/admin/arena/posts/{postId}", mw.Auth(mw.BenkiAdminOnly(handlers.AdminDeletePostHandler)))
+	mux.HandleFunc("GET /api/v1/admin/arena/reports", mw.Auth(mw.BenkiAdminOnly(handlers.AdminGetPostReportsHandler)))
 
 	// Admin
 	mux.HandleFunc("GET /api/v1/admin/stats", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminStatsHandler)))
@@ -434,4 +482,22 @@ func SeedBlock(t *testing.T, blockerID, blockedID string) {
 	if err != nil {
 		t.Fatalf("[seed] Failed to create block: %v", err)
 	}
+}
+
+// SeedPost creates a post in the database and returns its ID.
+func SeedPost(t *testing.T, userID, caption string) int64 {
+	t.Helper()
+	db := postgress.GetRawDB()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var postID int64
+	err := db.QueryRowContext(ctx,
+		`INSERT INTO posts (user_id, caption, post_type, visibility) VALUES ($1, $2, 'original', 'public') RETURNING id`,
+		userID, caption,
+	).Scan(&postID)
+	if err != nil {
+		t.Fatalf("[seed] Failed to create post: %v", err)
+	}
+	return postID
 }
