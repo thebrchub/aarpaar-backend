@@ -5,9 +5,11 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
 )
@@ -17,6 +19,16 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(config.UserIDKey).(string)
 	if !ok || userID == "" {
 		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Cache own profile for 60s
+	cacheKey := config.CacheUserMe + userID
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(r.Context(), cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
 		return
 	}
 
@@ -46,6 +58,9 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Enrich with computed badge
 	rawJSON = enrichWithBadge(rawJSON, userID)
+
+	// Cache the enriched result
+	rdb.Set(r.Context(), cacheKey, []byte(rawJSON), 60*time.Second)
 
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
@@ -247,6 +262,8 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	redis.GetRawClient().Del(r.Context(), config.CacheUserMe+userID)
+
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(rawJSON))
@@ -348,6 +365,8 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	redis.GetRawClient().Del(r.Context(), config.CacheUserMe+userID)
+
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(rawJSON))
@@ -379,4 +398,100 @@ func enrichWithBadge(rawJSON string, userID string) string {
 		return rawJSON
 	}
 	return string(enriched)
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/users/me/notification-preferences
+// ---------------------------------------------------------------------------
+
+func GetNotificationPreferencesHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Cache notification preferences for 30s (rarely changes, frequently read)
+	cacheKey := config.CacheUserNotifP + userID
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(r.Context(), cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
+	var prefsJSON []byte
+	err := postgress.GetRawDB().QueryRow(
+		`SELECT notification_prefs FROM users WHERE id = $1`, userID,
+	).Scan(&prefsJSON)
+	if err != nil {
+		log.Printf("[users] GetNotificationPreferences failed user=%s: %v", userID, err)
+		JSONError(w, "Failed to load preferences", http.StatusInternalServerError)
+		return
+	}
+
+	rdb.Set(r.Context(), cacheKey, prefsJSON, config.CacheTTLMedium)
+
+	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+	w.WriteHeader(http.StatusOK)
+	w.Write(prefsJSON)
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /api/v1/users/me/notification-preferences
+// Body: { "likes": false, "comments": true, ... } (partial update)
+// ---------------------------------------------------------------------------
+
+func UpdateNotificationPreferencesHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(config.UserIDKey).(string)
+	if !ok || userID == "" {
+		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var incoming map[string]bool
+	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+		JSONError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Whitelist allowed keys to prevent injection of arbitrary JSON fields
+	allowed := map[string]bool{
+		"likes": true, "comments": true, "friend_requests": true, "reposts": true,
+		"dm_requests": true, "group_invites": true, "match_activity": true, "mentions": true,
+	}
+	for k := range incoming {
+		if !allowed[k] {
+			JSONError(w, "Unknown preference key: "+k, http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Merge with jsonb_set is fragile for multiple keys; instead use || merge
+	patchJSON, err := json.Marshal(incoming)
+	if err != nil {
+		JSONError(w, "Invalid preferences", http.StatusBadRequest)
+		return
+	}
+
+	var updatedPrefs []byte
+	err = postgress.GetRawDB().QueryRow(
+		`UPDATE users SET notification_prefs = notification_prefs || $1::jsonb
+		 WHERE id = $2 RETURNING notification_prefs`,
+		patchJSON, userID,
+	).Scan(&updatedPrefs)
+	if err != nil {
+		log.Printf("[users] UpdateNotificationPreferences failed user=%s: %v", userID, err)
+		JSONError(w, "Failed to update preferences", http.StatusInternalServerError)
+		return
+	}
+
+	// Invalidate cached preferences
+	services.InvalidateNotifPrefsCache(r.Context(), userID)
+	redis.GetRawClient().Del(r.Context(), config.CacheUserNotifP+userID)
+
+	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+	w.WriteHeader(http.StatusOK)
+	w.Write(updatedPrefs)
 }

@@ -2,10 +2,14 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
@@ -29,6 +33,9 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plain reposts (no caption) redirect likes to the original post (Twitter-like).
+	postID = services.ResolveOriginalPostID(r.Context(), postID)
+
 	// Buffer in Redis — O(1) SADD, flushed to Postgres by arena flusher.
 	// No direct Postgres write, no trigger storm on viral posts.
 	services.BufferLike(r.Context(), userID, postID)
@@ -37,7 +44,7 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 	chat.RunBackground(func() {
 		bgCtx := context.Background()
 		ownerID := services.GetPostOwnerCached(bgCtx, postID)
-		if ownerID != "" && ownerID != userID {
+		if ownerID != "" && ownerID != userID && services.ShouldNotify(bgCtx, ownerID, services.NotifPrefLikes) {
 			notifyUser(bgCtx, ownerID, map[string]interface{}{
 				config.FieldType: config.MsgTypePostLiked,
 				"postId":         postID,
@@ -66,6 +73,9 @@ func UnlikePostHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Invalid post ID", http.StatusBadRequest)
 		return
 	}
+
+	// Plain reposts (no caption) redirect unlikes to the original post.
+	postID = services.ResolveOriginalPostID(r.Context(), postID)
 
 	// Buffer in Redis — O(1) SADD, flushed to Postgres by arena flusher.
 	services.BufferUnlike(r.Context(), userID, postID)
@@ -97,6 +107,16 @@ func GetPostLikersHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
+	// Cache likers list per post+page for 30s
+	cacheKey := fmt.Sprintf("%s%d:%d:%d", config.CachePostLikers, postID, limit, offset)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT u.id, u.username, u.name, u.avatar_url
 		 FROM post_likes pl
@@ -125,5 +145,14 @@ func GetPostLikersHandler(w http.ResponseWriter, r *http.Request) {
 			likers = append(likers, l)
 		}
 	}
+
+	if respBytes, err := json.Marshal(likers); err == nil {
+		rdb.Set(ctx, cacheKey, respBytes, 30*time.Second)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+		return
+	}
+
 	JSONSuccess(w, likers)
 }

@@ -239,8 +239,8 @@ func RazorpayWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		var amount int64
 		var currency string
 		err := postgress.GetRawDB().QueryRowContext(ctx,
-			`SELECT user_id, amount, currency FROM pending_orders WHERE order_id = $1 AND status = 'pending'`,
-			resp.OrderId,
+			`SELECT user_id, amount, currency FROM pending_orders WHERE order_id = $1 AND status = $2`,
+			resp.OrderId, config.OrderStatusPending,
 		).Scan(&userID, &amount, &currency)
 		if err != nil {
 			log.Printf("[webhook] pending order not found for order_id=%s: %v", resp.OrderId, err)
@@ -261,16 +261,16 @@ func RazorpayWebhookHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Update pending order status
 		if _, err := postgress.Exec(
-			`UPDATE pending_orders SET status = 'completed' WHERE order_id = $1`,
-			resp.OrderId,
+			`UPDATE pending_orders SET status = $1 WHERE order_id = $2`,
+			config.OrderStatusCompleted, resp.OrderId,
 		); err != nil {
 			log.Printf("[webhook] update pending_orders completed failed order=%s: %v", resp.OrderId, err)
 		}
 
 	case sdkpay.PaymentStatusFailed:
 		if _, err := postgress.Exec(
-			`UPDATE pending_orders SET status = 'failed' WHERE order_id = $1`,
-			resp.OrderId,
+			`UPDATE pending_orders SET status = $1 WHERE order_id = $2`,
+			config.OrderStatusFailed, resp.OrderId,
 		); err != nil {
 			log.Printf("[webhook] update pending_orders failed order=%s: %v", resp.OrderId, err)
 		}

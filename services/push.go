@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/goccy/go-json"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/push"
 	"github.com/shivanand-burli/go-starter-kit/redis"
@@ -67,6 +69,76 @@ func ClosePush() {
 		fcmSvc.Close()
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Notification Preference Check
+// ---------------------------------------------------------------------------
+
+// ShouldNotify returns true if the target user has the given notification type
+// enabled. The prefKey must match a JSON key in users.notification_prefs
+// (e.g. "likes", "comments", "friend_requests", "dm_requests", etc.).
+// Returns true on any error (fail open — better to over-notify than miss).
+func ShouldNotify(ctx context.Context, userID string, prefKey string) bool {
+	// Try Redis cache first (5-min TTL)
+	cacheKey := config.CacheNotifPrefs + userID
+	rdb := redis.GetRawClient()
+	cached, err := rdb.HGet(ctx, cacheKey, prefKey).Result()
+	if err == nil {
+		return cached != "false"
+	}
+
+	// Cache miss — load from Postgres and populate full hash
+	var prefsJSON []byte
+	err = postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT notification_prefs FROM users WHERE id = $1`, userID,
+	).Scan(&prefsJSON)
+	if err != nil {
+		return true // fail open
+	}
+
+	var prefs map[string]bool
+	if err := json.Unmarshal(prefsJSON, &prefs); err != nil {
+		return true
+	}
+
+	// Cache all prefs as a Redis hash (atomic HSet + Expire via pipeline)
+	fields := make(map[string]interface{}, len(prefs))
+	for k, v := range prefs {
+		if v {
+			fields[k] = "true"
+		} else {
+			fields[k] = "false"
+		}
+	}
+	if len(fields) > 0 {
+		pipe := rdb.Pipeline()
+		pipe.HSet(ctx, cacheKey, fields)
+		pipe.Expire(ctx, cacheKey, config.CacheTTLNotifPrefs)
+		pipe.Exec(ctx)
+	}
+
+	enabled, exists := prefs[prefKey]
+	return !exists || enabled // default to true if key missing
+}
+
+// InvalidateNotifPrefsCache removes the cached notification preferences.
+// Called after a user updates their preferences.
+func InvalidateNotifPrefsCache(ctx context.Context, userID string) {
+	rdb := redis.GetRawClient()
+	rdb.Del(ctx, config.CacheNotifPrefs+userID)
+}
+
+// Notification preference keys (must match JSON keys in users.notification_prefs)
+const (
+	NotifPrefLikes          = "likes"
+	NotifPrefComments       = "comments"
+	NotifPrefFriendRequests = "friend_requests"
+	NotifPrefReposts        = "reposts"
+	NotifPrefDMRequests     = "dm_requests"
+	NotifPrefGroupInvites   = "group_invites"
+	NotifPrefMatchActivity  = "match_activity"
+	NotifPrefMentions       = "mentions"
+)
 
 // PushPayload holds the key-value pairs for a push notification data message.
 type PushPayload struct {
@@ -209,7 +281,7 @@ const pushDebounceTTL = 30 * time.Second
 // Returns true if no push was sent recently (within debounceTTL).
 // Sets the debounce key atomically so concurrent calls don't double-send.
 func ShouldPushMessage(ctx context.Context, roomID, userID string) bool {
-	key := "push:sent:" + roomID + ":" + userID
+	key := config.CachePushSent + roomID + ":" + userID
 	set, err := redis.GetRawClient().SetNX(ctx, key, "1", pushDebounceTTL).Result()
 	if err != nil {
 		log.Printf("[push] ShouldPushMessage Redis SetNX failed room=%s user=%s: %v", roomID, userID, err)
@@ -223,11 +295,11 @@ func ShouldPushMessage(ctx context.Context, roomID, userID string) bool {
 // ---------------------------------------------------------------------------
 
 // deviceTokenCacheTTL is how long device tokens are cached in Redis.
-const deviceTokenCacheTTL = 5 * time.Minute
+const deviceTokenCacheTTL = config.CacheTTLPushTokens
 
 func getDeviceTokens(ctx context.Context, userID string) []string {
 	// Try Redis cache first
-	cacheKey := "push:tokens:" + userID
+	cacheKey := config.CachePushTokens + userID
 	cached, err := redis.GetRawClient().Get(ctx, cacheKey).Result()
 	if err == nil && cached != "" {
 		return strings.Split(cached, ",")
@@ -264,24 +336,56 @@ func getDeviceTokensMulti(ctx context.Context, userIDs []string) []string {
 		return nil
 	}
 
-	// Build parameterized IN clause
-	query := `SELECT token FROM device_tokens WHERE user_id = ANY($1)`
-	rows, err := postgress.GetRawDB().QueryContext(ctx, query, pgStringArray(userIDs))
+	// Try per-user Redis cache via pipeline (same keys as getDeviceTokens)
+	rdb := redis.GetRawClient()
+	pipe := rdb.Pipeline()
+	cmds := make([]*goredis.StringCmd, len(userIDs))
+	for i, uid := range userIDs {
+		cmds[i] = pipe.Get(ctx, config.CachePushTokens+uid)
+	}
+	_, _ = pipe.Exec(ctx)
+
+	var tokens []string
+	var missingIDs []string
+	for i, cmd := range cmds {
+		if val, err := cmd.Result(); err == nil && val != "" {
+			tokens = append(tokens, strings.Split(val, ",")...)
+		} else {
+			missingIDs = append(missingIDs, userIDs[i])
+		}
+	}
+
+	if len(missingIDs) == 0 {
+		return tokens
+	}
+
+	// Fallback: DB query only for cache misses
+	query := `SELECT user_id, token FROM device_tokens WHERE user_id = ANY($1)`
+	rows, err := postgress.GetRawDB().QueryContext(ctx, query, pgStringArray(missingIDs))
 	if err != nil {
 		log.Printf("[push] query tokens multi failed: %v", err)
-		return nil
+		return tokens
 	}
 	defer rows.Close()
 
-	var tokens []string
+	// Collect tokens per user for caching
+	perUser := make(map[string][]string)
 	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
-			log.Printf("[push] Scan device token multi failed: %v", err)
+		var uid, t string
+		if err := rows.Scan(&uid, &t); err != nil {
 			continue
 		}
 		tokens = append(tokens, t)
+		perUser[uid] = append(perUser[uid], t)
 	}
+
+	// Cache each user's tokens
+	cachePipe := rdb.Pipeline()
+	for uid, toks := range perUser {
+		cachePipe.Set(ctx, config.CachePushTokens+uid, strings.Join(toks, ","), deviceTokenCacheTTL)
+	}
+	_, _ = cachePipe.Exec(ctx)
+
 	return tokens
 }
 

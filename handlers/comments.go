@@ -12,6 +12,7 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/models"
@@ -35,6 +36,9 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Invalid post ID", http.StatusBadRequest)
 		return
 	}
+
+	// Plain reposts (no caption) redirect comments to the original post (Twitter-like).
+	postID = services.ResolveOriginalPostID(r.Context(), postID)
 
 	var req models.CreateCommentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -126,7 +130,7 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 	chat.RunBackground(func() {
 		bgCtx := context.Background()
 		postOwnerID := services.GetPostOwnerCached(bgCtx, postID)
-		if postOwnerID != "" && postOwnerID != userID {
+		if postOwnerID != "" && postOwnerID != userID && services.ShouldNotify(bgCtx, postOwnerID, services.NotifPrefComments) {
 			notifyUser(bgCtx, postOwnerID, map[string]interface{}{
 				config.FieldType: config.MsgTypePostCommented,
 				"postId":         postID,
@@ -138,7 +142,7 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 			_ = postgress.GetRawDB().QueryRowContext(bgCtx,
 				`SELECT user_id FROM post_comments WHERE id = $1`, *req.ParentID,
 			).Scan(&parentAuthorID)
-			if parentAuthorID != "" && parentAuthorID != userID && parentAuthorID != postOwnerID {
+			if parentAuthorID != "" && parentAuthorID != userID && parentAuthorID != postOwnerID && services.ShouldNotify(bgCtx, parentAuthorID, services.NotifPrefComments) {
 				notifyUser(bgCtx, parentAuthorID, map[string]interface{}{
 					config.FieldType: config.MsgTypeCommentReplied,
 					"postId":         postID,
@@ -187,8 +191,18 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
-	// If parentId is set, fetch replies to that comment; otherwise top-level only
+	// Cache comments per post+parent+page for 30s
 	parentIDParam := r.URL.Query().Get("parentId")
+	cacheKey := fmt.Sprintf("%s%d:%s:%d:%d", config.CacheComments, postID, parentIDParam, limit, offset)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
+	// If parentId is set, fetch replies to that comment; otherwise top-level only
 
 	var rows *sql.Rows
 	if parentIDParam != "" {
@@ -272,6 +286,14 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 		comments = append(comments, c)
 	}
 
+	if respBytes, err := json.Marshal(comments); err == nil {
+		rdb.Set(ctx, cacheKey, respBytes, config.CacheTTLMedium)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+		return
+	}
+
 	JSONSuccess(w, comments)
 }
 
@@ -293,17 +315,25 @@ func DeleteCommentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := postgress.Exec(
-		`DELETE FROM post_comments WHERE id = $1 AND user_id = $2`,
+	// Fetch the comment's ltree path (also verifies ownership)
+	var commentPath string
+	err = postgress.GetRawDB().QueryRow(
+		`SELECT path::text FROM post_comments WHERE id = $1 AND user_id = $2`,
 		commentID, userID,
-	)
-	if err != nil {
-		log.Printf("[arena] delete comment failed comment=%d user=%s: %v", commentID, userID, err)
-		JSONError(w, "Failed to delete comment", http.StatusInternalServerError)
+	).Scan(&commentPath)
+	if err != nil || commentPath == "" {
+		JSONError(w, "Comment not found or not yours", http.StatusNotFound)
 		return
 	}
-	if result == 0 {
-		JSONError(w, "Comment not found or not yours", http.StatusNotFound)
+
+	// Delete the comment and all its descendants in one shot
+	_, err = postgress.Exec(
+		`DELETE FROM post_comments WHERE path <@ $1::ltree`,
+		commentPath,
+	)
+	if err != nil {
+		log.Printf("[arena] delete comment tree failed comment=%d user=%s: %v", commentID, userID, err)
+		JSONError(w, "Failed to delete comment", http.StatusInternalServerError)
 		return
 	}
 
@@ -329,15 +359,7 @@ func LikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = postgress.Exec(
-		`INSERT INTO comment_likes (user_id, comment_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-		userID, commentID,
-	)
-	if err != nil {
-		log.Printf("[arena] like comment failed user=%s comment=%d: %v", userID, commentID, err)
-		JSONError(w, "Failed to like comment", http.StatusInternalServerError)
-		return
-	}
+	services.BufferCommentLike(r.Context(), userID, commentID)
 
 	JSONMessage(w, "success", "Comment liked")
 }
@@ -355,15 +377,7 @@ func UnlikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = postgress.Exec(
-		`DELETE FROM comment_likes WHERE user_id = $1 AND comment_id = $2`,
-		userID, commentID,
-	)
-	if err != nil {
-		log.Printf("[arena] unlike comment failed user=%s comment=%d: %v", userID, commentID, err)
-		JSONError(w, "Failed to unlike comment", http.StatusInternalServerError)
-		return
-	}
+	services.BufferCommentUnlike(r.Context(), userID, commentID)
 
 	JSONMessage(w, "success", "Comment unliked")
 }
@@ -397,8 +411,12 @@ func ReportCommentHandler(w http.ResponseWriter, r *http.Request) {
 		userID, commentID, req.Reason,
 	)
 	if err != nil {
-		log.Printf("[arena] report comment failed user=%s comment=%d: %v", userID, commentID, err)
-		JSONError(w, "Failed to report comment", http.StatusInternalServerError)
+		if strings.Contains(err.Error(), "violates foreign key") {
+			JSONError(w, "Comment not found", http.StatusNotFound)
+		} else {
+			log.Printf("[arena] report comment failed user=%s comment=%d: %v", userID, commentID, err)
+			JSONError(w, "Failed to report comment", http.StatusInternalServerError)
+		}
 		return
 	}
 

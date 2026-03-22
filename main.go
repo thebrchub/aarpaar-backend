@@ -201,6 +201,8 @@ func main() {
 	mux.HandleFunc("GET /api/v1/users/me", mw.Auth(handlers.GetMeHandler))
 	mux.HandleFunc("PATCH /api/v1/users/me", mw.Auth(handlers.UpdateMeHandler))
 	mux.HandleFunc("PUT /api/v1/users/me", mw.Auth(handlers.PutMeHandler))
+	mux.HandleFunc("GET /api/v1/users/me/notification-preferences", mw.Auth(handlers.GetNotificationPreferencesHandler))
+	mux.HandleFunc("PATCH /api/v1/users/me/notification-preferences", mw.Auth(handlers.UpdateNotificationPreferencesHandler))
 	mux.HandleFunc("GET /api/v1/users/search", mw.Auth(handlers.SearchUsersHandler))
 	mux.HandleFunc("GET /api/v1/users/check-username", mw.Auth(handlers.CheckUsernameHandler))
 

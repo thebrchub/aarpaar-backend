@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
 )
@@ -19,6 +21,19 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, offset := parsePagination(r)
+
+	ctx, cancel := pgCtx(r)
+	defer cancel()
+
+	// Cache DM requests per user+page for 15s
+	cacheKey := fmt.Sprintf("%s%s:%d:%d", config.CacheDMRequests, userID, limit, offset)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
 
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
@@ -43,12 +58,14 @@ func GetDMRequestsHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	var raw []byte
-	err := postgress.GetRawDB().QueryRow(query, userID, limit, offset).Scan(&raw)
+	err := postgress.GetRawDB().QueryRowContext(ctx, query, userID, limit, offset).Scan(&raw)
 	if err != nil {
 		log.Printf("[dm] GetDMRequests query failed user=%s: %v", userID, err)
 		JSONError(w, "Failed to fetch DM requests", http.StatusInternalServerError)
 		return
 	}
+
+	rdb.Set(ctx, cacheKey, raw, config.CacheTTLShort)
 
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)

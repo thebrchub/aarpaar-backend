@@ -437,3 +437,95 @@ const (
 	// Comment depth
 	MaxCommentDepth = 3
 )
+
+// ---------------------------------------------------------------------------
+// Call Types & Statuses
+// ---------------------------------------------------------------------------
+
+const (
+	CallTypeAudio = "audio"
+	CallTypeVideo = "video"
+
+	TrackTypeAudio  = "audio"
+	TrackTypeVideo  = "video"
+	TrackTypeScreen = "screen"
+)
+
+const (
+	CallStatusCompleted = "completed"
+	CallStatusCancelled = "cancelled"
+	CallStatusMissed    = "missed"
+	CallStatusRejected  = "rejected"
+)
+
+// ---------------------------------------------------------------------------
+// Room Member Inactive Status (set when removed/left)
+// ---------------------------------------------------------------------------
+
+const RoomMemberInactive = "inactive"
+
+// ---------------------------------------------------------------------------
+// Payment Order Statuses
+// ---------------------------------------------------------------------------
+
+const (
+	OrderStatusPending   = "pending"
+	OrderStatusCompleted = "completed"
+	OrderStatusFailed    = "failed"
+)
+
+// ---------------------------------------------------------------------------
+// Redis Cache Key Prefixes
+//
+// All Redis keys used across the codebase are defined here for discoverability,
+// typo prevention, and easy migration. Format comments show the full key shape.
+// ---------------------------------------------------------------------------
+
+const (
+	CacheUserMe       = "user:me:"          // user:me:{userId}
+	CacheUserNotifP   = "user:notifp:"      // user:notifp:{userId}
+	CacheUserDonated  = "user:donated:"     // user:donated:{userId}
+	CacheNotifPrefs   = "notif:prefs:"      // notif:prefs:{userId} (hash)
+	CachePushTokens   = "push:tokens:"      // push:tokens:{userId}
+	CachePushSent     = "push:sent:"        // push:sent:{roomId}:{userId}
+	CacheFriends      = "friends:"          // friends:{userId}:{limit}:{offset}
+	CacheFriendReqs   = "freq:"             // freq:{userId}:{type}:{limit}:{offset}
+	CacheFriendSet    = "friendset:"        // friendset:{userId}
+	CacheBlockedSet   = "blockedset:"       // blockedset:{userId}
+	CacheDMRequests   = "dmreq:"            // dmreq:{userId}:{limit}:{offset}
+	CacheComments     = "comments:"         // comments:{postId}:{parentId}:{limit}:{offset}
+	CacheReposts      = "reposts:"          // reposts:{postId}:{limit}:{offset}
+	CachePostLikers   = "post:likers:"      // post:likers:{postId}:{limit}:{offset}
+	CachePost         = "post:"             // post:{postId}:{userId}
+	CacheBookmarks    = "bookmarks:"        // bookmarks:{userId}:{limit}:{offset}
+	CacheLeaderboard  = "leaderboard:"      // leaderboard:{scope}:{limit}:{offset}
+	CacheRooms        = "rooms:"            // rooms:{userId}:{gen}:{cursor}:{limit}
+	CacheRoomMembers  = "room:members:"     // room:members:{roomId} (set)
+	CacheRoomMember   = "room:member:"      // room:member:{roomId}:{userId}
+	CacheDMOther      = "dm:other:"         // dm:other:{roomId}:{senderId}
+	CacheBlockPair    = "blockpair:"        // blockpair:{a}:{b}
+	CacheBan          = "ban:"              // ban:{userId}
+	CacheFeedGlobal   = "feed:global:"      // feed:global:{cursor}:{limit}
+	CacheFeedNetwork  = "feed:network:"     // feed:network:{userId}:{gen}:{cursor}:{limit}
+	CacheFeedUser     = "feed:user:"        // feed:user:{viewerId}:{targetId}:{limit}:{offset}
+	CacheFeedTrending = "feed:trending:"    // feed:trending:{limit}:{offset}
+	CacheNetworkGen   = "feed:network:gen:" // feed:network:gen:{userId}
+	CacheRoomsGen     = "rooms:gen:"        // rooms:gen:{userId}
+	CachePostOwner    = "post:owner:"       // post:owner:{postId}
+	CachePostResolve  = "post:resolve:"     // post:resolve:{postId}
+	CacheArenaLimits  = "arena:limits"      // arena:limits (single key)
+)
+
+// ---------------------------------------------------------------------------
+// Cache TTL Constants
+// ---------------------------------------------------------------------------
+
+const (
+	CacheTTLShort       = 15 * time.Second // DM requests, friend requests
+	CacheTTLMedium      = 30 * time.Second // Friends list, comments, block pairs, notification prefs
+	CacheTTLLong        = 2 * time.Minute  // Room members, arena limits, leaderboard stats, user donated
+	CacheTTLDMOther     = 5 * time.Minute  // DM room → other-user mapping
+	CacheTTLNotifPrefs  = 5 * time.Minute  // Notification preference hash
+	CacheTTLPushTokens  = 5 * time.Minute  // Device token cache
+	CacheTTLPostResolve = 10 * time.Minute // Resolve original post ID
+)

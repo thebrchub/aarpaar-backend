@@ -26,7 +26,7 @@ func GetLeaderboardHandler(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePagination(r)
 
 	// Try Redis cache first
-	cacheKey := fmt.Sprintf("leaderboard:%s:%d:%d", scope, limit, offset)
+	cacheKey := fmt.Sprintf("%s%s:%d:%d", config.CacheLeaderboard, scope, limit, offset)
 	rdb := redis.GetRawClient()
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()

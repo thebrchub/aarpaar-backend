@@ -48,6 +48,20 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 		limit = parsed
 	}
 
+	// 3b. Cache per-user rooms list for 10s (WebSocket handles real-time updates)
+	gen := services.GetRoomsGen(r.Context(), userID)
+	// Truncate cursor to 10s granularity to improve cache hit rate.
+	// Use the same truncated value in the SQL query for consistency.
+	cursor = cursor.Truncate(10 * time.Second)
+	cacheKey := fmt.Sprintf("%s%s:%s:%d:%d", config.CacheRooms, userID, gen, cursor.Unix(), limit)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(r.Context(), cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	// 4. Build the response in two parts:
 	//    a) rooms with member_ids (not full member objects)
 	//    b) deduplicated users map for all members across rooms
@@ -127,14 +141,19 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	// 6. Enrich users map with real-time is_online status
 	usersJSON = enrichUsersMapWithOnlineStatus(usersJSON, userID)
 
-	// 7. Build final response: {"rooms": [...], "users": {...}}
+	// 7. Build final response and cache it
+	var buf []byte
+	buf = append(buf, `{"rooms":`...)
+	buf = append(buf, roomsJSON...)
+	buf = append(buf, `,"users":`...)
+	buf = append(buf, usersJSON...)
+	buf = append(buf, '}')
+
+	rdb.Set(r.Context(), cacheKey, buf, 10*time.Second)
+
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"rooms":`))
-	w.Write(roomsJSON)
-	w.Write([]byte(`,"users":`))
-	w.Write(usersJSON)
-	w.Write([]byte(`}`))
+	w.Write(buf)
 }
 
 // CreateDMHandler creates a new DM room between two users.
@@ -335,16 +354,21 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If pending, notify target via WebSocket
 	if isPending {
-		notifyUser(context.Background(), targetUserID, map[string]interface{}{
-			config.FieldType:   config.MsgTypeDMRequest,
-			config.FieldRoomID: roomID,
-			config.FieldFrom:   userID,
-		})
+		if services.ShouldNotify(context.Background(), targetUserID, services.NotifPrefDMRequests) {
+			notifyUser(context.Background(), targetUserID, map[string]interface{}{
+				config.FieldType:   config.MsgTypeDMRequest,
+				config.FieldRoomID: roomID,
+				config.FieldFrom:   userID,
+			})
+		}
 
 		// Push notification for offline target
 		chat.RunBackground(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 			defer cancel()
+			if !services.ShouldNotify(ctx, targetUserID, services.NotifPrefDMRequests) {
+				return
+			}
 			var senderName string
 			if err := postgress.GetRawDB().QueryRowContext(ctx,
 				`SELECT COALESCE(name, 'Someone') FROM users WHERE id = $1`, userID,
@@ -437,7 +461,7 @@ func enrichUsersMapWithOnlineStatus(raw []byte, currentUserID string) []byte {
 
 // getCachedFriendSet returns the friend ID set for a user, cached in Redis for 30s.
 func getCachedFriendSet(ctx context.Context, userID string) map[string]bool {
-	cacheKey := "friendset:" + userID
+	cacheKey := config.CacheFriendSet + userID
 	rdb := redis.GetRawClient()
 
 	if members, err := rdb.SMembers(ctx, cacheKey).Result(); err == nil && len(members) > 0 {
@@ -469,14 +493,14 @@ func getCachedFriendSet(ctx context.Context, userID string) map[string]bool {
 
 	if len(ids) > 0 {
 		rdb.SAdd(ctx, cacheKey, ids...)
-		rdb.Expire(ctx, cacheKey, 30*time.Second)
+		rdb.Expire(ctx, cacheKey, config.CacheTTLMedium)
 	}
 	return friendSet
 }
 
 // getCachedBlockedSet returns the blocked user ID set, cached in Redis for 30s.
 func getCachedBlockedSet(ctx context.Context, userID string) map[string]bool {
-	cacheKey := "blockedset:" + userID
+	cacheKey := config.CacheBlockedSet + userID
 	rdb := redis.GetRawClient()
 
 	if members, err := rdb.SMembers(ctx, cacheKey).Result(); err == nil && len(members) > 0 {
@@ -508,7 +532,7 @@ func getCachedBlockedSet(ctx context.Context, userID string) map[string]bool {
 
 	if len(ids) > 0 {
 		rdb.SAdd(ctx, cacheKey, ids...)
-		rdb.Expire(ctx, cacheKey, 30*time.Second)
+		rdb.Expire(ctx, cacheKey, config.CacheTTLMedium)
 	}
 	return blockedSet
 }

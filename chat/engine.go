@@ -691,7 +691,7 @@ func isBlockedInRoom(senderID, roomID string) bool {
 
 	// Resolve the other user in the DM room. Cached in Redis to avoid a
 	// Postgres hit on every single DM message.
-	dmKey := "dm:other:" + roomID + ":" + senderID
+	dmKey := config.CacheDMOther + roomID + ":" + senderID
 	otherID, err := rdb.Get(ctx, dmKey).Result()
 	if err != nil {
 		// Cache miss — hit Postgres once and cache for 5 minutes
@@ -704,7 +704,7 @@ func isBlockedInRoom(senderID, roomID string) bool {
 		if err != nil {
 			return false // not a DM room or no other member
 		}
-		rdb.Set(ctx, dmKey, otherID, 5*time.Minute)
+		rdb.Set(ctx, dmKey, otherID, config.CacheTTLDMOther)
 	}
 
 	return isBlockedPairCached(ctx, senderID, otherID)
@@ -717,7 +717,7 @@ func isBlockedPairCached(ctx context.Context, userA, userB string) bool {
 	if a > b {
 		a, b = b, a
 	}
-	cacheKey := "blockpair:" + a + ":" + b
+	cacheKey := config.CacheBlockPair + a + ":" + b
 
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
@@ -741,7 +741,7 @@ func isBlockedPairCached(ctx context.Context, userA, userB string) bool {
 	if blocked {
 		val = "1"
 	}
-	rdb.Set(ctx, cacheKey, val, 30*time.Second)
+	rdb.Set(ctx, cacheKey, val, config.CacheTTLMedium)
 	return blocked
 }
 
@@ -754,7 +754,7 @@ func InvalidateBlockCache(userA, userB string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	redis.GetRawClient().Del(ctx, "blockpair:"+a+":"+b)
+	redis.GetRawClient().Del(ctx, config.CacheBlockPair+a+":"+b)
 }
 
 // isBlockedPair checks if either user has blocked the other.
@@ -781,22 +781,42 @@ func (e *Engine) sendMessagePush(roomID, senderID, senderName, preview string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
 
-	// Query room members except the sender (capped at 200 to prevent
-	// unbounded result sets in large groups)
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
-		`SELECT user_id FROM room_members WHERE room_id = $1 AND user_id != $2 AND status = 'active' LIMIT 200`,
-		roomID, senderID,
-	)
-	if err != nil {
-		log.Printf("[engine] sendMessagePush query failed room=%s: %v", roomID, err)
-		return
-	}
-	defer rows.Close()
+	// Try Redis-cached room members first to avoid per-message Postgres hit
+	rdb := redis.GetRawClient()
+	memberCacheKey := config.CacheRoomMembers + roomID
+	memberIDs, cacheErr := rdb.SMembers(ctx, memberCacheKey).Result()
+	if cacheErr != nil || len(memberIDs) == 0 {
+		// Cache miss — query Postgres and populate cache
+		rows, err := postgress.GetRawDB().QueryContext(ctx,
+			`SELECT user_id FROM room_members WHERE room_id = $1 AND status = 'active' LIMIT 200`,
+			roomID,
+		)
+		if err != nil {
+			log.Printf("[engine] sendMessagePush query failed room=%s: %v", roomID, err)
+			return
+		}
+		defer rows.Close()
 
-	for rows.Next() {
-		var memberID string
-		if err := rows.Scan(&memberID); err != nil {
-			log.Printf("[engine] sendMessagePush scan failed room=%s: %v", roomID, err)
+		memberIDs = nil
+		for rows.Next() {
+			var mid string
+			if err := rows.Scan(&mid); err != nil {
+				continue
+			}
+			memberIDs = append(memberIDs, mid)
+		}
+
+		// Cache for 2 minutes (members change rarely within a conversation)
+		if len(memberIDs) > 0 {
+			pipe := rdb.Pipeline()
+			pipe.SAdd(ctx, memberCacheKey, stringsToInterfaces(memberIDs)...)
+			pipe.Expire(ctx, memberCacheKey, config.CacheTTLLong)
+			pipe.Exec(ctx)
+		}
+	}
+
+	for _, memberID := range memberIDs {
+		if memberID == senderID {
 			continue
 		}
 
@@ -823,6 +843,15 @@ func (e *Engine) sendMessagePush(roomID, senderID, senderName, preview string) {
 // ---------------------------------------------------------------------------
 // Presence Helpers
 // ---------------------------------------------------------------------------
+
+// stringsToInterfaces converts a string slice to []interface{} for Redis SAdd.
+func stringsToInterfaces(ss []string) []interface{} {
+	ifaces := make([]interface{}, len(ss))
+	for i, s := range ss {
+		ifaces[i] = s
+	}
+	return ifaces
+}
 
 // IsUserOnline checks whether a user has at least one connected device.
 func (e *Engine) IsUserOnline(userID string) bool {

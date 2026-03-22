@@ -367,10 +367,16 @@ func matchWithBot(userID string) {
 		log.Printf("[bot] SRem from match queue failed user=%s: %v", userID, err)
 	}
 
-	// Admission control — reject if too many concurrent sessions
-	if sessionCount.Load() >= maxBotSessions {
-		log.Printf("[bot] Max bot sessions (%d) reached — skipping bot match for user=%s", maxBotSessions, userID)
-		return
+	// Admission control — reject if too many concurrent sessions (CAS to prevent race)
+	for {
+		current := sessionCount.Load()
+		if current >= maxBotSessions {
+			log.Printf("[bot] Max bot sessions (%d) reached — skipping bot match for user=%s", maxBotSessions, userID)
+			return
+		}
+		if sessionCount.CompareAndSwap(current, current+1) {
+			break
+		}
 	}
 
 	// Pick a random persona
@@ -409,7 +415,6 @@ func matchWithBot(userID string) {
 	}
 	session.lastUserMsg.Store(time.Now().UnixNano())
 	sessions.Store(roomID, session)
-	sessionCount.Add(1)
 	botUserIDs.Store(botUserID, roomID)
 
 	// Notify user with match_found — identical payload to human match

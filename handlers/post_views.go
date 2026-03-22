@@ -45,7 +45,10 @@ func RecordViewsHandler(w http.ResponseWriter, r *http.Request) {
 	for _, pid := range req.PostIDs {
 		pipe.SAdd(ctx, config.ARENA_VIEWS_BUFFER, userID+":"+strconv.FormatInt(pid, 10))
 	}
-	pipe.Exec(ctx)
+	if _, err := pipe.Exec(ctx); err != nil {
+		JSONError(w, "Failed to record views", http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -178,7 +178,7 @@ func BanUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Cache ban status in Redis for fast auth middleware checks (24h TTL)
 	rdb := redis.GetRawClient()
-	rdb.Set(ctx, "ban:"+targetID, "1", 24*time.Hour)
+	rdb.Set(ctx, config.CacheBan+targetID, "1", 24*time.Hour)
 
 	// Force-disconnect WebSocket
 	if e := chat.GetEngine(); e != nil {
@@ -215,7 +215,7 @@ func UnbanUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove ban cache
-	redis.GetRawClient().Del(ctx, "ban:"+targetID)
+	redis.GetRawClient().Del(ctx, config.CacheBan+targetID)
 
 	log.Printf("[admin] User %s unbanned by BENKI_ADMIN", targetID)
 	JSONMessage(w, "success", "User unbanned successfully")
@@ -609,7 +609,7 @@ func GetAppSetting(ctx context.Context, key string, dest interface{}) error {
 // Uses the materialized total_donated column (maintained by trigger).
 // Cached in Redis for 2 minutes to avoid per-request PG hits.
 func GetUserTotalDonation(ctx context.Context, userID string) float64 {
-	cacheKey := "user:donated:" + userID
+	cacheKey := config.CacheUserDonated + userID
 	var total float64
 	if found, _ := redis.Get(ctx, cacheKey, &total); found {
 		return total
@@ -617,7 +617,7 @@ func GetUserTotalDonation(ctx context.Context, userID string) float64 {
 	postgress.GetRawDB().QueryRowContext(ctx,
 		`SELECT total_donated FROM users WHERE id = $1`, userID,
 	).Scan(&total)
-	_ = redis.PutWithTTL(ctx, cacheKey, total, 2*time.Minute)
+	_ = redis.PutWithTTL(ctx, cacheKey, total, config.CacheTTLLong)
 	return total
 }
 

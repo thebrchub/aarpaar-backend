@@ -185,10 +185,10 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	// Parse request body
 	var req models.StartGroupCallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		req.CallType = "video" // default
+		req.CallType = config.CallTypeVideo // default
 	}
-	if req.CallType != "audio" && req.CallType != "video" {
-		req.CallType = "video"
+	if req.CallType != config.CallTypeAudio && req.CallType != config.CallTypeVideo {
+		req.CallType = config.CallTypeVideo
 	}
 
 	// Generate a unique call ID
@@ -697,7 +697,7 @@ func MuteParticipantHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "userId is required", http.StatusBadRequest)
 		return
 	}
-	if req.TrackType != "audio" && req.TrackType != "video" && req.TrackType != "screen" {
+	if req.TrackType != config.TrackTypeAudio && req.TrackType != config.TrackTypeVideo && req.TrackType != config.TrackTypeScreen {
 		JSONError(w, "trackType must be one of: audio, video, screen", http.StatusBadRequest)
 		return
 	}
@@ -754,11 +754,11 @@ func MuteParticipantHandler(w http.ResponseWriter, r *http.Request) {
 		for _, t := range participant.GetTracks() {
 			trackMatch := false
 			switch req.TrackType {
-			case "audio":
+			case config.TrackTypeAudio:
 				trackMatch = t.GetType() == 0 && t.GetSource() == 1 // AUDIO + MICROPHONE
-			case "video":
+			case config.TrackTypeVideo:
 				trackMatch = t.GetType() == 1 && t.GetSource() == 2 // VIDEO + CAMERA
-			case "screen":
+			case config.TrackTypeScreen:
 				trackMatch = t.GetType() == 1 && t.GetSource() == 3 // VIDEO + SCREEN_SHARE
 			}
 			if trackMatch {

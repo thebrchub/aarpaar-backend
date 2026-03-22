@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"strconv"
 	"sync"
@@ -22,7 +23,7 @@ import (
 // on the next refresh cycle (≤60s). The goroutine stops on context cancel.
 // ---------------------------------------------------------------------------
 
-const arenaLimitsCacheKey = "arena:limits"
+const arenaLimitsCacheKey = config.CacheArenaLimits
 const arenaLimitsRefresh = 60 * time.Second
 
 var (
@@ -96,7 +97,7 @@ func loadArenaLimits() {
 	arenaLimitsMu.Unlock()
 
 	// Cache in Redis for 2 minutes
-	_ = redis.PutWithTTL(ctx, arenaLimitsCacheKey, limits, 2*time.Minute)
+	_ = redis.PutWithTTL(ctx, arenaLimitsCacheKey, limits, config.CacheTTLLong)
 }
 
 // backfillArenaDefaults fills in zero-valued fields with sensible defaults.
@@ -335,7 +336,7 @@ const postOwnerTTL = 5 * time.Minute
 
 // GetPostOwnerCached returns the owner user ID for a post, using Redis cache.
 func GetPostOwnerCached(ctx context.Context, postID int64) string {
-	key := "post:owner:" + strconv.FormatInt(postID, 10)
+	key := config.CachePostOwner + strconv.FormatInt(postID, 10)
 	var ownerID string
 	found, _ := redis.Get(ctx, key, &ownerID)
 	if found {
@@ -348,4 +349,84 @@ func GetPostOwnerCached(ctx context.Context, postID int64) string {
 		_ = redis.PutWithTTL(ctx, key, ownerID, postOwnerTTL)
 	}
 	return ownerID
+}
+
+// resolveOriginalTTL is the cache duration for plain-repost resolution.
+const resolveOriginalTTL = config.CacheTTLPostResolve
+
+// InvalidateNetworkFeedCache bumps a per-user generation counter so that
+// existing cached network feed pages become stale. This is cheaper than
+// SCAN+DEL of all matching keys and avoids Lua scripts.
+func InvalidateNetworkFeedCache(ctx context.Context, userIDs ...string) {
+	rdb := redis.GetRawClient()
+	pipe := rdb.Pipeline()
+	for _, uid := range userIDs {
+		pipe.Incr(ctx, config.CacheNetworkGen+uid)
+	}
+	_, _ = pipe.Exec(ctx)
+}
+
+// GetNetworkFeedGen returns the current generation counter for a user's
+// network feed cache. Returns "0" on miss (first load), which is fine.
+func GetNetworkFeedGen(ctx context.Context, userID string) string {
+	val, err := redis.GetRawClient().Get(ctx, config.CacheNetworkGen+userID).Result()
+	if err != nil {
+		return "0"
+	}
+	return val
+}
+
+// InvalidateRoomsCache bumps a per-user generation counter for the rooms list.
+func InvalidateRoomsCache(ctx context.Context, userIDs ...string) {
+	rdb := redis.GetRawClient()
+	pipe := rdb.Pipeline()
+	for _, uid := range userIDs {
+		pipe.Incr(ctx, config.CacheRoomsGen+uid)
+	}
+	_, _ = pipe.Exec(ctx)
+}
+
+// GetRoomsGen returns the current generation counter for a user's rooms cache.
+func GetRoomsGen(ctx context.Context, userID string) string {
+	val, err := redis.GetRawClient().Get(ctx, config.CacheRoomsGen+userID).Result()
+	if err != nil {
+		return "0"
+	}
+	return val
+}
+
+// ResolveOriginalPostID returns the original post ID if the given post is a
+// plain repost (no caption). For original posts or quote reposts, it returns
+// the same postID unchanged. Uses Redis cache to avoid Postgres lookups on
+// every like/unlike/comment at scale.
+func ResolveOriginalPostID(ctx context.Context, postID int64) int64 {
+	key := config.CachePostResolve + strconv.FormatInt(postID, 10)
+
+	// Check Redis cache first
+	var cached int64
+	found, _ := redis.Get(ctx, key, &cached)
+	if found {
+		if cached == 0 {
+			return postID // cached as "not a plain repost"
+		}
+		return cached
+	}
+
+	// Cache miss — query Postgres once
+	var originalID sql.NullInt64
+	err := postgress.GetRawDB().QueryRowContext(ctx,
+		`SELECT original_post_id FROM posts
+		 WHERE id = $1 AND post_type = 'repost' AND caption = ''
+		   AND original_post_id IS NOT NULL`,
+		postID,
+	).Scan(&originalID)
+
+	if err != nil || !originalID.Valid {
+		// Not a plain repost — cache 0 as sentinel to avoid repeated DB lookups
+		_ = redis.PutWithTTL(ctx, key, int64(0), resolveOriginalTTL)
+		return postID
+	}
+
+	_ = redis.PutWithTTL(ctx, key, originalID.Int64, resolveOriginalTTL)
+	return originalID.Int64
 }

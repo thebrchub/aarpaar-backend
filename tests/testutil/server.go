@@ -432,6 +432,22 @@ func SeedFriendship(t *testing.T, userID1, userID2 string) string {
 		t.Fatalf("[seed] Failed to add room members: %v", err)
 	}
 
+	// Invalidate network feed, rooms, and friends list cache for both users (same as production handler)
+	services.InvalidateNetworkFeedCache(ctx, userID1, userID2)
+	services.InvalidateRoomsCache(ctx, userID1, userID2)
+
+	// Invalidate friends list cache (mirrors handlers.invalidateFriendsListCache)
+	rdb := redis.GetRawClient()
+	friendsKeys := make([]string, 0, 12)
+	for _, uid := range []string{userID1, userID2} {
+		for _, limit := range []int{config.DefaultPageLimit, config.MaxPageLimit} {
+			for _, offset := range []int{0, config.DefaultPageLimit, config.DefaultPageLimit * 2} {
+				friendsKeys = append(friendsKeys, fmt.Sprintf("%s%s:%d:%d", config.CacheFriends, uid, limit, offset))
+			}
+		}
+	}
+	rdb.Del(ctx, friendsKeys...)
+
 	return roomID
 }
 
@@ -466,7 +482,7 @@ func SeedBan(t *testing.T, userID string) {
 	}
 
 	// Also set in Redis cache
-	redis.GetRawClient().Set(ctx, "ban:"+userID, "1", 24*time.Hour)
+	redis.GetRawClient().Set(ctx, config.CacheBan+userID, "1", 24*time.Hour)
 }
 
 // SeedBlock creates a block relationship.

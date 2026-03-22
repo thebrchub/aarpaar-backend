@@ -11,6 +11,7 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
+	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/models"
 )
@@ -50,8 +51,8 @@ func BookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Invalidate bookmarks cache for this user
-	invalidateBookmarksCache(userID)
+	// Invalidate bookmarks cache for this user (async to not block response)
+	chat.RunBackground(func() { invalidateBookmarksCache(userID) })
 
 	JSONMessage(w, "success", "Post bookmarked")
 }
@@ -84,8 +85,8 @@ func UnbookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Invalidate bookmarks cache for this user
-	invalidateBookmarksCache(userID)
+	// Invalidate bookmarks cache for this user (async to not block response)
+	chat.RunBackground(func() { invalidateBookmarksCache(userID) })
 
 	JSONMessage(w, "success", "Bookmark removed")
 }
@@ -108,7 +109,7 @@ func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Cache per-user bookmarks feed for 1 minute
-	cacheKey := fmt.Sprintf("bookmarks:%s:%d:%d", userID, limit, offset)
+	cacheKey := fmt.Sprintf("%s%s:%d:%d", config.CacheBookmarks, userID, limit, offset)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
@@ -177,7 +178,7 @@ func invalidateBookmarksCache(userID string) {
 	keys := make([]string, 0, 6)
 	for _, limit := range []int{config.DefaultFeedLimit, config.MaxFeedLimit} {
 		for _, offset := range []int{0, config.DefaultFeedLimit, config.DefaultFeedLimit * 2} {
-			keys = append(keys, fmt.Sprintf("bookmarks:%s:%d:%d", userID, limit, offset))
+			keys = append(keys, fmt.Sprintf("%s%s:%d:%d", config.CacheBookmarks, userID, limit, offset))
 		}
 	}
 	rdb.Del(ctx, keys...)

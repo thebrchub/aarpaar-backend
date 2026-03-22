@@ -1103,6 +1103,27 @@
         <div id="putResponse" class="response-panel hidden"></div>
       </div>
     </div>
+
+    <!-- Notification Preferences -->
+    <div class="card">
+      <h3><span class="badge badge-get">GET</span> / <span class="badge badge-patch">PATCH</span> Notification Preferences</h3>
+      <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px">
+        <code>/api/v1/users/me/notification-preferences</code> — Toggle push + WebSocket notifications per category. Backend respects these for all real-time events.
+      </p>
+      <button class="btn btn-primary" onclick="getNotifPrefs()" style="margin-bottom:14px">Fetch Preferences</button>
+      <div id="notifPrefsToggles">
+        <div class="toggle-row"><label class="toggle"><input type="checkbox" id="notifLikes" checked /><span class="slider"></span></label><label>Likes</label></div>
+        <div class="toggle-row"><label class="toggle"><input type="checkbox" id="notifComments" checked /><span class="slider"></span></label><label>Comments</label></div>
+        <div class="toggle-row"><label class="toggle"><input type="checkbox" id="notifFriendRequests" checked /><span class="slider"></span></label><label>Friend Requests</label></div>
+        <div class="toggle-row"><label class="toggle"><input type="checkbox" id="notifReposts" checked /><span class="slider"></span></label><label>Reposts</label></div>
+        <div class="toggle-row"><label class="toggle"><input type="checkbox" id="notifDmRequests" checked /><span class="slider"></span></label><label>DM Requests</label></div>
+        <div class="toggle-row"><label class="toggle"><input type="checkbox" id="notifGroupInvites" checked /><span class="slider"></span></label><label>Group Invites</label></div>
+        <div class="toggle-row"><label class="toggle"><input type="checkbox" id="notifMatchActivity" checked /><span class="slider"></span></label><label>Match Activity</label></div>
+        <div class="toggle-row"><label class="toggle"><input type="checkbox" id="notifMentions" checked /><span class="slider"></span></label><label>Mentions</label></div>
+      </div>
+      <button class="btn btn-success" onclick="saveNotifPrefs()" style="margin-top:10px">Save Preferences</button>
+      <div id="notifPrefsResponse" class="response-panel hidden"></div>
+    </div>
   </div>
 
   <!-- ========== ROOMS TAB ========== -->
@@ -3831,6 +3852,42 @@ async function putProfile() {
     fetchAndCacheProfile();
   } else if (r.status === 409) {
     toast('Username cannot be changed once set', 'error');
+  }
+}
+
+// ======================================================================
+//  NOTIFICATION PREFERENCES
+// ======================================================================
+const NOTIF_PREF_MAP = [
+  { id: 'notifLikes', key: 'likes' },
+  { id: 'notifComments', key: 'comments' },
+  { id: 'notifFriendRequests', key: 'friend_requests' },
+  { id: 'notifReposts', key: 'reposts' },
+  { id: 'notifDmRequests', key: 'dm_requests' },
+  { id: 'notifGroupInvites', key: 'group_invites' },
+  { id: 'notifMatchActivity', key: 'match_activity' },
+  { id: 'notifMentions', key: 'mentions' },
+];
+
+async function getNotifPrefs() {
+  const r = await apiCall('GET', '/api/v1/users/me/notification-preferences', null, 'notifPrefsResponse');
+  if (r.data) {
+    NOTIF_PREF_MAP.forEach(p => {
+      const el = document.getElementById(p.id);
+      if (el) el.checked = r.data[p.key] !== false;
+    });
+    toast('Notification preferences loaded', 'success');
+  }
+}
+
+async function saveNotifPrefs() {
+  const body = {};
+  NOTIF_PREF_MAP.forEach(p => {
+    body[p.key] = document.getElementById(p.id).checked;
+  });
+  const r = await apiCall('PATCH', '/api/v1/users/me/notification-preferences', body, 'notifPrefsResponse');
+  if (r.status >= 200 && r.status < 300) {
+    toast('Notification preferences saved', 'success');
   }
 }
 

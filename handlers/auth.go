@@ -245,7 +245,7 @@ func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Invalidate the device token cache so the next push picks up the new token
 	cacheCtx, cacheCancel := context.WithTimeout(r.Context(), config.RedisOpTimeout)
-	redis.GetRawClient().Del(cacheCtx, "push:tokens:"+userID)
+	redis.GetRawClient().Del(cacheCtx, config.CachePushTokens+userID)
 	cacheCancel()
 
 	// 4. Confirm success

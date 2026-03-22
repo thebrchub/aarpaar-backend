@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -130,17 +131,22 @@ func SendFriendRequestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Notify target via WebSocket
-	notifyUser(context.Background(), targetID, map[string]interface{}{
-		config.FieldType: config.MsgTypeFriendRequest,
-		config.FieldFrom: userID,
-		"username":       body.Username,
-	})
+	// Notify target via WebSocket (if preference allows)
+	if services.ShouldNotify(context.Background(), targetID, services.NotifPrefFriendRequests) {
+		notifyUser(context.Background(), targetID, map[string]interface{}{
+			config.FieldType: config.MsgTypeFriendRequest,
+			config.FieldFrom: userID,
+			"username":       body.Username,
+		})
+	}
 
 	// Send push notification to offline target
 	chat.RunBackground(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 		defer cancel()
+		if !services.ShouldNotify(ctx, targetID, services.NotifPrefFriendRequests) {
+			return
+		}
 		var senderName string
 		if err := postgress.GetRawDB().QueryRowContext(ctx,
 			`SELECT COALESCE(name, 'Someone') FROM users WHERE id = $1`, userID,
@@ -290,6 +296,17 @@ func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 
 	limit, offset := parsePagination(r)
 
+	// Cache friends list per user+page for 30s (online status enriched every time)
+	cacheKey := fmt.Sprintf("%s%s:%d:%d", config.CacheFriends, userID, limit, offset)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(r.Context(), cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		cached = enrichFriendsWithOnlineStatus(cached)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	query := `
 		SELECT COALESCE(json_agg(t), '[]')::text
 		FROM (
@@ -315,6 +332,9 @@ func GetFriendsHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Failed to fetch friends", http.StatusInternalServerError)
 		return
 	}
+
+	// Cache the raw DB result (before online-status enrichment)
+	rdb.Set(r.Context(), cacheKey, raw, config.CacheTTLMedium)
 
 	// Enrich each friend with real-time is_online status from the engine
 	raw = enrichFriendsWithOnlineStatus(raw)
@@ -391,6 +411,16 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 
 	limit, offset := parsePagination(r)
 
+	// Cache friend requests per user+type+page for 15s
+	cacheKey := fmt.Sprintf("%s%s:%s:%d:%d", config.CacheFriendReqs, userID, reqType, limit, offset)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(r.Context(), cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	var query string
 	if reqType == "sent" {
 		query = `
@@ -428,6 +458,8 @@ func GetFriendRequestsHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Failed to fetch requests", http.StatusInternalServerError)
 		return
 	}
+
+	rdb.Set(r.Context(), cacheKey, raw, config.CacheTTLShort)
 
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
@@ -474,7 +506,10 @@ func RemoveFriendHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Invalidate cached friend sets
 	rctx := context.Background()
-	redis.GetRawClient().Del(rctx, "friendset:"+userID, "friendset:"+targetID)
+	redis.GetRawClient().Del(rctx, config.CacheFriendSet+userID, config.CacheFriendSet+targetID)
+	invalidateFriendsListCache(rctx, userID)
+	invalidateFriendsListCache(rctx, targetID)
+	services.InvalidateNetworkFeedCache(rctx, userID, targetID)
 
 	// Also clean up any friend_requests between the two
 	if _, err := postgress.Exec(
@@ -595,9 +630,13 @@ func acceptFriendship(w http.ResponseWriter, accepterID, requesterID string, req
 	redis.GetRawClient().Del(ctx,
 		config.FRIEND_REQUEST_COLON+accepterID,
 		config.FRIEND_REQUEST_COLON+requesterID,
-		"friendset:"+accepterID,
-		"friendset:"+requesterID,
+		config.CacheFriendSet+accepterID,
+		config.CacheFriendSet+requesterID,
 	)
+	services.InvalidateNetworkFeedCache(ctx, accepterID, requesterID)
+	services.InvalidateRoomsCache(ctx, accepterID, requesterID)
+	invalidateFriendsListCache(ctx, accepterID)
+	invalidateFriendsListCache(ctx, requesterID)
 
 	JSONSuccess(w, map[string]string{
 		"status":     "friends",
@@ -652,7 +691,7 @@ func BlockUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Invalidate cached blocked set
 	bctx := context.Background()
-	redis.GetRawClient().Del(bctx, "blockedset:"+userID, "blockedset:"+targetID)
+	redis.GetRawClient().Del(bctx, config.CacheBlockedSet+userID, config.CacheBlockedSet+targetID)
 
 	JSONMessage(w, "success", "User blocked")
 }
@@ -698,7 +737,7 @@ func UnblockUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Invalidate cached blocked set
 	ubctx := context.Background()
-	redis.GetRawClient().Del(ubctx, "blockedset:"+userID, "blockedset:"+targetID)
+	redis.GetRawClient().Del(ubctx, config.CacheBlockedSet+userID, config.CacheBlockedSet+targetID)
 
 	JSONMessage(w, "success", "User unblocked")
 }
@@ -776,4 +815,16 @@ func enrichFriendsWithOnlineStatus(raw []byte) []byte {
 		return raw
 	}
 	return enriched
+}
+
+// invalidateFriendsListCache deletes cached friends list pages for a user.
+func invalidateFriendsListCache(ctx context.Context, userID string) {
+	rdb := redis.GetRawClient()
+	keys := make([]string, 0, 6)
+	for _, limit := range []int{config.DefaultPageLimit, config.MaxPageLimit} {
+		for _, offset := range []int{0, config.DefaultPageLimit, config.DefaultPageLimit * 2} {
+			keys = append(keys, fmt.Sprintf("%s%s:%d:%d", config.CacheFriends, userID, limit, offset))
+		}
+	}
+	rdb.Del(ctx, keys...)
 }

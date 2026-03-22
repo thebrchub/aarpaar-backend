@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/config"
@@ -35,7 +37,9 @@ func BenkiAdminOnly(next http.HandlerFunc) http.HandlerFunc {
 
 		// Look up the user's email from Postgres
 		var email string
-		err := postgress.GetRawDB().QueryRow(
+		adminCtx, adminCancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer adminCancel()
+		err := postgress.GetRawDB().QueryRowContext(adminCtx,
 			`SELECT email FROM users WHERE id = $1`, userID,
 		).Scan(&email)
 		if err != nil || email == "" {

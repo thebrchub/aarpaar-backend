@@ -81,7 +81,7 @@ func isUserBanned(userID string) bool {
 	defer cancel()
 
 	rdb := redisKit.GetRawClient()
-	banKey := "ban:" + userID
+	banKey := config.CacheBan + userID
 
 	// Fast path: check Redis cache
 	val, err := rdb.Get(ctx, banKey).Result()

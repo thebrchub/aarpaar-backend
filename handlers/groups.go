@@ -16,6 +16,7 @@ import (
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/models"
+	"github.com/thebrchub/aarpaar/services"
 )
 
 // CreateGroupHandler creates a new group.
@@ -569,12 +570,14 @@ func AddGroupMembersHandler(w http.ResponseWriter, r *http.Request) {
 			`SELECT COALESCE(name,'') FROM rooms WHERE id = $1`, groupID,
 		).Scan(&groupName)
 		for _, invitedID := range invited {
-			notifyUser(ctx, invitedID, map[string]interface{}{
-				config.FieldType:      config.MsgTypeGroupInvite,
-				config.FieldRoomID:    groupID,
-				config.FieldGroupName: groupName,
-				config.FieldInvitedBy: userID,
-			})
+			if services.ShouldNotify(ctx, invitedID, services.NotifPrefGroupInvites) {
+				notifyUser(ctx, invitedID, map[string]interface{}{
+					config.FieldType:      config.MsgTypeGroupInvite,
+					config.FieldRoomID:    groupID,
+					config.FieldGroupName: groupName,
+					config.FieldInvitedBy: userID,
+				})
+			}
 		}
 	}
 

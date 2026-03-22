@@ -520,9 +520,10 @@
 
   <div class="section-break"></div>
   <div class="grid-3">
-    <!-- Delete Comment -->
+    <!-- Delete Comment (CASCADE) -->
     <div>
       <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:8px"><span class="badge badge-delete">DELETE</span> Delete Comment</p>
+      <p style="font-size:.72rem;color:var(--warn);margin-bottom:8px">⚠ Cascade delete: removes the comment <strong>and all nested replies</strong> (ltree path match).</p>
       <div class="inline-form">
         <div class="form-row" style="max-width:120px"><label>Post ID</label><input type="number" id="deleteCommentPostId" placeholder="1" /></div>
         <div class="form-row" style="max-width:120px"><label>Comment ID</label><input type="number" id="deleteCommentId" placeholder="1" /></div>

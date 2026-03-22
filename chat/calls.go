@@ -197,7 +197,7 @@ func (e *Engine) startRingTimeout(callID, callerID, calleeID string, hasVideo bo
 			redis.Publish(pubCtx, config.CHAT_GLOBAL_CHANNEL, missedMsg)
 			pubCancel()
 
-			logCall(callID, "", callerID, calleeID, hasVideo, "missed", 0)
+			logCall(callID, "", callerID, calleeID, hasVideo, config.CallStatusMissed, 0)
 			RunBackground(func() { sendMissedCallPush(calleeID, callerID, callID) })
 		}
 	})
@@ -260,11 +260,11 @@ func isUserBlocked(callerID, targetID string) bool {
 // ---------------------------------------------------------------------------
 
 // logCall inserts a call record into the call_logs table.
-// status: "completed", "missed", "rejected", "cancelled"
+// status: config.CallStatus* constants
 func logCall(callID, roomID, initiatedBy, peerID string, hasVideo bool, status string, durationSecs int) {
-	callType := "audio"
+	callType := config.CallTypeAudio
 	if hasVideo {
-		callType = "video"
+		callType = config.CallTypeVideo
 	}
 
 	var roomIDPtr *string
@@ -281,7 +281,7 @@ func logCall(callID, roomID, initiatedBy, peerID string, hasVideo bool, status s
 	var endedAt *time.Time
 	var durationPtr *int
 	switch status {
-	case "completed", "cancelled", "missed", "rejected":
+	case config.CallStatusCompleted, config.CallStatusCancelled, config.CallStatusMissed, config.CallStatusRejected:
 		now := time.Now().UTC()
 		endedAt = &now
 		if durationSecs > 0 {
@@ -331,9 +331,9 @@ func sendCallPushNotification(calleeID, callerID, callID string, hasVideo bool) 
 		callerName = "Unknown"
 	}
 
-	callType := "audio"
+	callType := config.CallTypeAudio
 	if hasVideo {
-		callType = "video"
+		callType = config.CallTypeVideo
 	}
 
 	title := callerName + " is calling you"
@@ -480,7 +480,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			default:
 				droppedMessages.Add(1)
 			}
-			RunBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, "missed", 0) })
+			RunBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, config.CallStatusMissed, 0) })
 			return true
 		}
 
@@ -531,7 +531,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		clearActiveCall(targetUser)
 
 		// Log rejected call
-		RunBackground(func() { logCall(callID, "", targetUser, c.UserID, hasVideo, "rejected", 0) })
+		RunBackground(func() { logCall(callID, "", targetUser, c.UserID, hasVideo, config.CallStatusRejected, 0) })
 
 	case config.MsgTypeCallEnd:
 		// Cancel any pending ring timeout
@@ -552,9 +552,9 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		clearActiveCall(targetUser)
 
 		// Log completed call with duration
-		status := "completed"
+		status := config.CallStatusCompleted
 		if callerCall != nil && !callerCall.Answered {
-			status = "cancelled"
+			status = config.CallStatusCancelled
 		}
 		RunBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, status, duration) })
 
@@ -618,9 +618,9 @@ func (e *Engine) handleCallDisconnect(userID string) {
 	clearActiveCall(call.PeerID)
 
 	// Log the call
-	status := "completed"
+	status := config.CallStatusCompleted
 	if !call.Answered {
-		status = "cancelled"
+		status = config.CallStatusCancelled
 	}
 	logCall(call.CallID, "", userID, call.PeerID, call.HasVideo, status, duration)
 }

@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
+	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
 )
@@ -101,6 +104,16 @@ func GetRepostsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
+	// Cache reposts per post+page for 30s
+	cacheKey := fmt.Sprintf("%s%d:%d:%d", config.CacheReposts, postID, limit, offset)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	// Use materialized quote_count: plain reposts = repost_count - quote_count
 	var plainCount int
 	var quoteTotal int
@@ -144,11 +157,20 @@ func GetRepostsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	JSONSuccess(w, map[string]any{
+	resp := map[string]any{
 		"repostCount": plainCount,
 		"quoteCount":  quoteTotal,
 		"quotes":      quotes,
-	})
+	}
+	if respBytes, err := json.Marshal(resp); err == nil {
+		rdb.Set(ctx, cacheKey, respBytes, 30*time.Second)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+		return
+	}
+
+	JSONSuccess(w, resp)
 }
 
 // ---------------------------------------------------------------------------

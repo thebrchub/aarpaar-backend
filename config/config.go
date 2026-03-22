@@ -136,6 +136,10 @@ const (
 	ARENA_PROFILE_CLICKS_BUF = "arena:profile_clicks" // Set of "userId:postId" profile-click pairs
 	ARENA_LIKES_BUFFER       = "arena:likes"          // Set of "userId:postId" pending like inserts
 	ARENA_UNLIKES_BUFFER     = "arena:unlikes"        // Set of "userId:postId" pending like deletes
+
+	// Comment like buffering (same pattern as post likes)
+	COMMENT_LIKES_BUFFER   = "arena:comment_likes"   // Set of "userId:commentId" pending comment like inserts
+	COMMENT_UNLIKES_BUFFER = "arena:comment_unlikes" // Set of "userId:commentId" pending comment like deletes
 )
 
 // ---------------------------------------------------------------------------

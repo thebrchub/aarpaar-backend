@@ -747,6 +747,20 @@ var migrationStatements = []string{
 
 	// User bio
 	`ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ''`,
+
+	// ===================================================================
+	// COLUMN: users.notification_prefs (JSONB notification preferences)
+	// All keys default to true — users opt OUT of specific notification types.
+	// ===================================================================
+	`ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB NOT NULL DEFAULT '{"likes": true, "comments": true, "friend_requests": true, "reposts": true, "dm_requests": true, "group_invites": true, "match_activity": true, "mentions": true}'`,
+
+	// ===================================================================
+	// COLUMN: posts.last_engaged_at (bumped by flusher on any engagement)
+	// Enables trending query to find recently-active posts of ANY age
+	// without expensive CTEs scanning engagement tables.
+	// ===================================================================
+	`ALTER TABLE posts ADD COLUMN IF NOT EXISTS last_engaged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+	`CREATE INDEX IF NOT EXISTS idx_posts_last_engaged ON posts (last_engaged_at DESC) WHERE visibility = 'public'`,
 }
 
 // RunMigrations executes all DDL statements sequentially.

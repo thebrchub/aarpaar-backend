@@ -60,6 +60,7 @@ func flushArenaEngagement() {
 	flushEngagementSet(config.ARENA_EXPANDS_BUFFER, "post_detail_expands", "detail_expand_count")
 	flushEngagementSet(config.ARENA_PROFILE_CLICKS_BUF, "post_profile_clicks", "profile_click_count")
 	flushLikes()
+	flushCommentLikes()
 }
 
 // flushEngagementSet atomically grabs all entries from a Redis SET,
@@ -172,7 +173,7 @@ func flushEngagementSet(redisKey, tableName, counterColumn string) {
 	}
 
 	updateQuery := fmt.Sprintf(
-		`UPDATE posts SET %s = %s + v.cnt
+		`UPDATE posts SET %s = %s + v.cnt, last_engaged_at = NOW()
 		 FROM (VALUES %s) AS v(id, cnt)
 		 WHERE posts.id = v.id`,
 		counterColumn, counterColumn, strings.Join(updateValues, ", "),
@@ -379,7 +380,7 @@ func flushLikes() {
 
 	if len(updateValues) > 0 {
 		_, err := postgress.GetRawDB().ExecContext(ctx,
-			fmt.Sprintf(`UPDATE posts SET like_count = GREATEST(like_count + v.delta, 0)
+			fmt.Sprintf(`UPDATE posts SET like_count = GREATEST(like_count + v.delta, 0), last_engaged_at = NOW()
 				FROM (VALUES %s) AS v(id, delta)
 				WHERE posts.id = v.id`, strings.Join(updateValues, ", ")),
 			updateParams...)
@@ -401,4 +402,152 @@ func requeue(rdb goredis.Cmdable, key string, entries []string) {
 		members[i] = e
 	}
 	rdb.SAdd(ctx, key, members...)
+}
+
+// ---------------------------------------------------------------------------
+// Comment Like / Unlike Buffering
+// ---------------------------------------------------------------------------
+
+// BufferCommentLike adds a comment-like event to the Redis buffer.
+func BufferCommentLike(ctx context.Context, userID string, commentID int64) {
+	rdb := redis.GetRawClient()
+	entry := userID + ":" + strconv.FormatInt(commentID, 10)
+	rdb.SAdd(ctx, config.COMMENT_LIKES_BUFFER, entry)
+	rdb.SRem(ctx, config.COMMENT_UNLIKES_BUFFER, entry)
+}
+
+// BufferCommentUnlike adds a comment-unlike event to the Redis buffer.
+func BufferCommentUnlike(ctx context.Context, userID string, commentID int64) {
+	rdb := redis.GetRawClient()
+	entry := userID + ":" + strconv.FormatInt(commentID, 10)
+	rdb.SAdd(ctx, config.COMMENT_UNLIKES_BUFFER, entry)
+	rdb.SRem(ctx, config.COMMENT_LIKES_BUFFER, entry)
+}
+
+// flushCommentLikes drains comment like/unlike buffers and applies in batch.
+// The comment_likes trigger on Postgres automatically maintains
+// post_comments.like_count on each INSERT/DELETE.
+func flushCommentLikes() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	rdb := redis.GetRawClient()
+
+	likeEntries, err := atomicSMembersAndDel.Run(ctx, rdb, []string{config.COMMENT_LIKES_BUFFER}).StringSlice()
+	if err != nil && err != goredis.Nil {
+		log.Printf("[arena-flusher] Lua error reading comment likes: %v", err)
+	}
+
+	unlikeEntries, err := atomicSMembersAndDel.Run(ctx, rdb, []string{config.COMMENT_UNLIKES_BUFFER}).StringSlice()
+	if err != nil && err != goredis.Nil {
+		log.Printf("[arena-flusher] Lua error reading comment unlikes: %v", err)
+	}
+
+	if len(likeEntries) == 0 && len(unlikeEntries) == 0 {
+		return
+	}
+
+	type pair struct {
+		userID    string
+		commentID int64
+		raw       string
+	}
+
+	parsePairs := func(entries []string) []pair {
+		out := make([]pair, 0, len(entries))
+		for _, e := range entries {
+			lastColon := strings.LastIndex(e, ":")
+			if lastColon <= 0 || lastColon >= len(e)-1 {
+				continue
+			}
+			cid, err := strconv.ParseInt(e[lastColon+1:], 10, 64)
+			if err != nil {
+				continue
+			}
+			out = append(out, pair{e[:lastColon], cid, e})
+		}
+		return out
+	}
+
+	likes := parsePairs(likeEntries)
+	unlikes := parsePairs(unlikeEntries)
+
+	// Cancel out overlapping entries
+	unlikeSet := make(map[string]bool, len(unlikes))
+	for _, u := range unlikes {
+		unlikeSet[u.raw] = true
+	}
+	filteredLikes := make([]pair, 0, len(likes))
+	for _, l := range likes {
+		if unlikeSet[l.raw] {
+			delete(unlikeSet, l.raw)
+		} else {
+			filteredLikes = append(filteredLikes, l)
+		}
+	}
+	filteredUnlikes := make([]pair, 0, len(unlikeSet))
+	for _, u := range unlikes {
+		if unlikeSet[u.raw] {
+			filteredUnlikes = append(filteredUnlikes, u)
+		}
+	}
+
+	rawEntries := func(ps []pair) []string {
+		out := make([]string, len(ps))
+		for i, p := range ps {
+			out[i] = p.raw
+		}
+		return out
+	}
+
+	// Batch INSERT comment likes (trigger handles like_count)
+	const chunkSize = 500
+	for i := 0; i < len(filteredLikes); i += chunkSize {
+		end := i + chunkSize
+		if end > len(filteredLikes) {
+			end = len(filteredLikes)
+		}
+		chunk := filteredLikes[i:end]
+
+		values := make([]string, len(chunk))
+		params := make([]any, 0, len(chunk)*2)
+		for j, p := range chunk {
+			params = append(params, p.userID, p.commentID)
+			values[j] = fmt.Sprintf("($%d::uuid, $%d::bigint)", j*2+1, j*2+2)
+		}
+
+		_, err := postgress.GetRawDB().ExecContext(ctx,
+			fmt.Sprintf(`INSERT INTO comment_likes (user_id, comment_id) VALUES %s ON CONFLICT DO NOTHING`,
+				strings.Join(values, ", ")),
+			params...)
+		if err != nil {
+			log.Printf("[arena-flusher] INSERT comment likes failed: %v", err)
+			requeue(rdb, config.COMMENT_LIKES_BUFFER, rawEntries(chunk))
+		}
+	}
+
+	// Batch DELETE comment unlikes (trigger handles like_count)
+	for i := 0; i < len(filteredUnlikes); i += chunkSize {
+		end := i + chunkSize
+		if end > len(filteredUnlikes) {
+			end = len(filteredUnlikes)
+		}
+		chunk := filteredUnlikes[i:end]
+
+		values := make([]string, len(chunk))
+		params := make([]any, 0, len(chunk)*2)
+		for j, p := range chunk {
+			params = append(params, p.userID, p.commentID)
+			values[j] = fmt.Sprintf("($%d::uuid, $%d::bigint)", j*2+1, j*2+2)
+		}
+
+		_, err := postgress.GetRawDB().ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM comment_likes WHERE (user_id, comment_id) IN (VALUES %s)`,
+				strings.Join(values, ", ")),
+			params...)
+		if err != nil {
+			log.Printf("[arena-flusher] DELETE comment unlikes failed: %v", err)
+			requeue(rdb, config.COMMENT_UNLIKES_BUFFER, rawEntries(chunk))
+		}
+	}
 }

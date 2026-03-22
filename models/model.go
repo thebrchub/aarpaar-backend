@@ -268,3 +268,20 @@ type GroupCallStatusResponse struct {
 	Admins       []string               `json:"admins"`
 	DurationSecs int                    `json:"durationSecs"`
 }
+
+// ---------------------------------------------------------------------------
+// Notification Preferences
+// ---------------------------------------------------------------------------
+
+// NotificationPrefs stores per-type notification toggles for a user.
+// All fields default to true — users opt OUT of specific types.
+type NotificationPrefs struct {
+	Likes          bool `json:"likes"`
+	Comments       bool `json:"comments"`
+	FriendRequests bool `json:"friend_requests"`
+	Reposts        bool `json:"reposts"`
+	DMRequests     bool `json:"dm_requests"`
+	GroupInvites   bool `json:"group_invites"`
+	MatchActivity  bool `json:"match_activity"`
+	Mentions       bool `json:"mentions"`
+}

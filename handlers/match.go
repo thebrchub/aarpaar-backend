@@ -49,7 +49,12 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	queue := config.DefaultMatchQueue
 
 	// Idempotency guard: if the user is already in the queue, don't process again
-	alreadyQueued, _ := rdb.SIsMember(ctx, queue, userID).Result()
+	alreadyQueued, err := rdb.SIsMember(ctx, queue, userID).Result()
+	if err != nil {
+		log.Printf("[match] SIsMember failed user=%s: %v", userID, err)
+		JSONError(w, "Queue check failed", http.StatusInternalServerError)
+		return
+	}
 	if alreadyQueued {
 		JSONMessage(w, "already_queued", "You are already in the queue")
 		return

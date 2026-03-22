@@ -109,3 +109,96 @@ func TestParseFeedPagination(t *testing.T) {
 		assert.Equal(t, tt.wantOffset, offset, "query=%s offset", tt.query)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Unit Tests — Repost Type Constants
+// ---------------------------------------------------------------------------
+
+func TestPostTypeConstants(t *testing.T) {
+	assert.Equal(t, "original", config.PostTypeOriginal)
+	assert.Equal(t, "repost", config.PostTypeRepost)
+	assert.NotEqual(t, config.PostTypeOriginal, config.PostTypeRepost)
+}
+
+func TestPostVisibilityConstants(t *testing.T) {
+	assert.Equal(t, "public", config.PostVisibilityPublic)
+	assert.Equal(t, "friends", config.PostVisibilityFriends)
+}
+
+// ---------------------------------------------------------------------------
+// Unit Tests — Feed Pagination Limits
+// ---------------------------------------------------------------------------
+
+func TestFeedPaginationDefaults(t *testing.T) {
+	assert.Equal(t, 20, config.DefaultFeedLimit)
+	assert.Equal(t, 50, config.MaxFeedLimit)
+	assert.LessOrEqual(t, config.DefaultFeedLimit, config.MaxFeedLimit)
+}
+
+// ---------------------------------------------------------------------------
+// Unit Tests — Like/Unlike Handler Auth Rejection
+// ---------------------------------------------------------------------------
+
+func TestLikePostHandlerNoAuth(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/arena/posts/1/like", nil)
+	w := httptest.NewRecorder()
+
+	LikePostHandler(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestUnlikePostHandlerNoAuth(t *testing.T) {
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/arena/posts/1/like", nil)
+	w := httptest.NewRecorder()
+
+	UnlikePostHandler(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestLikePostHandlerInvalidPostID(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/arena/posts/abc/like", nil)
+	req = setTestUserID(req, "test-user")
+	req.SetPathValue("postId", "abc")
+	w := httptest.NewRecorder()
+
+	LikePostHandler(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestUnlikePostHandlerInvalidPostID(t *testing.T) {
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/arena/posts/abc/like", nil)
+	req = setTestUserID(req, "test-user")
+	req.SetPathValue("postId", "abc")
+	w := httptest.NewRecorder()
+
+	UnlikePostHandler(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// ---------------------------------------------------------------------------
+// Unit Tests — Comment Handler Auth Rejection
+// ---------------------------------------------------------------------------
+
+func TestCreateCommentHandlerNoAuth(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/arena/posts/1/comments", nil)
+	w := httptest.NewRecorder()
+
+	CreateCommentHandler(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestCreateCommentHandlerInvalidPostID(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/arena/posts/abc/comments", nil)
+	req = setTestUserID(req, "test-user")
+	req.SetPathValue("postId", "abc")
+	w := httptest.NewRecorder()
+
+	CreateCommentHandler(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}

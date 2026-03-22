@@ -166,7 +166,7 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Cache single-post detail for 2 minutes (user-specific for hasLiked/hasBookmarked)
-	cacheKey := fmt.Sprintf("post:%d:%s", postID, userID)
+	cacheKey := fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
 		// Still record the detail expand
@@ -235,6 +235,9 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 				keys = append(keys, key)
 			}
 		}
+		if rErr := rows.Err(); rErr != nil {
+			log.Printf("[arena] rows iteration error post=%d: %v", postID, rErr)
+		}
 
 		// Delete from storage
 		if len(keys) > 0 && Store != nil {
@@ -291,7 +294,7 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 	// Invalidate feed caches + single post cache
 	chat.RunBackground(func() {
 		InvalidateFeedCaches()
-		redis.GetRawClient().Del(context.Background(), fmt.Sprintf("post:%d:%s", postID, userID))
+		redis.GetRawClient().Del(context.Background(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
 	})
 
 	JSONMessage(w, "success", "Post deleted")
@@ -456,7 +459,7 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 	// Cache key truncates cursor to the minute so all requests in the same
 	// 60-second window share a single cached page.
 	truncated := cursor.Truncate(time.Minute).Unix()
-	cacheKey := fmt.Sprintf("feed:global:%d:%d", truncated, limit)
+	cacheKey := fmt.Sprintf("%s%d:%d", config.CacheFeedGlobal, truncated, limit)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
@@ -535,6 +538,19 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
+	// Cache per-user: truncate cursor to 30s window so nearby requests share cache.
+	// Include generation counter so friendship changes invalidate immediately.
+	gen := services.GetNetworkFeedGen(ctx, userID)
+	truncated := cursor.Truncate(30 * time.Second).Unix()
+	cacheKey := fmt.Sprintf("%s%s:%s:%d:%d", config.CacheFeedNetwork, userID, gen, truncated, limit)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`WITH my_friends AS (
 			SELECT user_id_2 AS friend_id FROM friendships WHERE user_id_1 = $1
@@ -581,6 +597,14 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	attachOriginalPosts(ctx, posts, userID)
 
+	if respBytes, err := json.Marshal(posts); err == nil {
+		rdb.Set(ctx, cacheKey, respBytes, 30*time.Second)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+		return
+	}
+
 	JSONSuccess(w, posts)
 }
 
@@ -611,6 +635,16 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 	visFilter := "AND p.visibility = 'public'"
 	if targetUserID == viewerID {
 		visFilter = ""
+	}
+
+	// Cache per viewer+target+page for 30s
+	cacheKey := fmt.Sprintf("%s%s:%s:%d:%d", config.CacheFeedUser, viewerID, targetUserID, limit, offset)
+	rdb := redis.GetRawClient()
+	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
 	}
 
 	query := fmt.Sprintf(`
@@ -653,6 +687,14 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	attachOriginalPosts(ctx, posts, viewerID)
 
+	if respBytes, err := json.Marshal(posts); err == nil {
+		rdb.Set(ctx, cacheKey, respBytes, 30*time.Second)
+		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+		return
+	}
+
 	JSONSuccess(w, posts)
 }
 
@@ -674,7 +716,7 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Cache trending feed for 2 minutes (trending ranking is time-insensitive)
-	cacheKey := fmt.Sprintf("feed:trending:%d:%d", limit, offset)
+	cacheKey := fmt.Sprintf("%s%d:%d", config.CacheFeedTrending, limit, offset)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
@@ -683,7 +725,9 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trending = most engagement in last 24h
+	// Trending = posts that received engagement in the last 24 hours.
+	// Uses denormalized counters + last_engaged_at (bumped by the flusher)
+	// instead of expensive CTEs scanning engagement tables.
 	rows, err := postgress.GetRawDB().QueryContext(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
@@ -699,7 +743,7 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 		 LEFT JOIN post_bookmarks my_bm ON my_bm.post_id = p.id AND my_bm.user_id = $1
 		 LEFT JOIN posts my_repost ON my_repost.original_post_id = p.id AND my_repost.user_id = $1 AND my_repost.post_type = 'repost' AND my_repost.caption = ''
 		 WHERE p.visibility = 'public'
-		   AND p.created_at > NOW() - INTERVAL '24 hours'
+		   AND p.last_engaged_at > NOW() - INTERVAL '24 hours'
 		 ORDER BY (p.like_count + p.comment_count * 2 + p.repost_count * 3 + p.view_count / 10) DESC, p.created_at DESC
 		 LIMIT $2 OFFSET $3`,
 		userID, limit, offset,
@@ -1165,7 +1209,7 @@ func invalidatePostCache(postID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	rdb := redis.GetRawClient()
-	pattern := fmt.Sprintf("post:%d:*", postID)
+	pattern := fmt.Sprintf("%s%d:*", config.CachePost, postID)
 	var cursor uint64
 	for {
 		keys, next, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
