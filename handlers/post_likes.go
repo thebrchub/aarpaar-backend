@@ -40,6 +40,9 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 	// No direct Postgres write, no trigger storm on viral posts.
 	services.BufferLike(r.Context(), userID, postID)
 
+	// Invalidate single-post cache so stale hasLiked isn't served after flusher drains buffer.
+	redis.GetRawClient().Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
+
 	// Notify post owner (skip self-like)
 	chat.RunBackground(func() {
 		bgCtx := context.Background()
@@ -79,6 +82,9 @@ func UnlikePostHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Buffer in Redis — O(1) SADD, flushed to Postgres by arena flusher.
 	services.BufferUnlike(r.Context(), userID, postID)
+
+	// Invalidate single-post cache so stale hasLiked isn't served after flusher drains buffer.
+	redis.GetRawClient().Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
 
 	JSONMessage(w, "success", "Post unliked")
 }
