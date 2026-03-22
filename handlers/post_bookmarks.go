@@ -55,8 +55,13 @@ func BookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Invalidate bookmarks cache for this user (async to not block response)
-	chat.RunBackground(func() { invalidateBookmarksCache(userID) })
+	// Invalidate bookmarks cache + user's feed caches + single-post cache
+	// so hasBookmarked / bookmarkCount are fresh immediately.
+	chat.RunBackground(func() {
+		invalidateBookmarksCache(userID)
+		invalidatePostCache(postID)
+		invalidateUserFeedCaches(userID)
+	})
 
 	JSONMessage(w, "success", "Post bookmarked")
 }
@@ -92,8 +97,13 @@ func UnbookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Invalidate bookmarks cache for this user (async to not block response)
-	chat.RunBackground(func() { invalidateBookmarksCache(userID) })
+	// Invalidate bookmarks cache + user's feed caches + single-post cache
+	// so hasBookmarked / bookmarkCount are fresh immediately.
+	chat.RunBackground(func() {
+		invalidateBookmarksCache(userID)
+		invalidatePostCache(postID)
+		invalidateUserFeedCaches(userID)
+	})
 
 	JSONMessage(w, "success", "Bookmark removed")
 }

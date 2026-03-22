@@ -456,6 +456,12 @@ func PinPostHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		JSONMessage(w, "success", "Post unpinned")
 	}
+
+	// Invalidate post cache + user's feed caches so pin state is visible immediately.
+	chat.RunBackground(func() {
+		invalidatePostCache(postID)
+		InvalidateFeedCaches()
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -1280,6 +1286,56 @@ func InvalidateFeedCaches() {
 			if cursor == 0 {
 				break
 			}
+		}
+	}
+}
+
+// invalidateUserFeedCaches deletes the acting user's own feed caches
+// (global, network, user-posts, bookmarks) so they see updated counts/flags
+// immediately. Write-path only — acceptable at scale.
+func invalidateUserFeedCaches(userID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	rdb := redis.GetRawClient()
+	for _, pattern := range []string{
+		config.CacheFeedGlobal + userID + ":*",
+		config.CacheFeedNetwork + userID + ":*",
+		config.CacheFeedUser + userID + ":*",
+		config.CacheBookmarks + userID + ":*",
+	} {
+		scanDelCtx(ctx, rdb, pattern)
+	}
+	// Trending has no userId prefix — bust for everyone (write-path only)
+	scanDelCtx(ctx, rdb, config.CacheFeedTrending+"*")
+}
+
+// invalidateAllCommentCachesForUser busts all comment caches that may
+// embed the given user's profile info (author name, avatar, etc.).
+// Write-path only (profile update is rare).
+func invalidateAllCommentCachesForUser(userID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	rdb := redis.GetRawClient()
+	// Comment cache keys: comments:{postId}:{userId}:...
+	// We can't easily filter by author, so bust all comment caches.
+	// Profile updates are very rare — this is acceptable.
+	scanDelCtx(ctx, rdb, config.CacheComments+"*")
+}
+
+// scanDelCtx is a small helper that SCANs for keys matching a pattern and DELetes them.
+func scanDelCtx(ctx context.Context, rdb *goredis.Client, pattern string) {
+	var cursor uint64
+	for {
+		keys, next, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			break
+		}
+		if len(keys) > 0 {
+			rdb.Del(ctx, keys...)
+		}
+		cursor = next
+		if cursor == 0 {
+			break
 		}
 	}
 }

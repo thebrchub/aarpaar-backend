@@ -543,36 +543,8 @@ func invalidateCommentCache(rdb *goredis.Client, postID int64) {
 // and the acting user's own feed caches so they see the updated commentCount
 // immediately. Write-path only (comment create/delete) — acceptable at scale.
 func invalidatePostAndFeedCaches(rdb *goredis.Client, postID int64, userID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	// 1. Single-post cache: post:{postId}:* (all users see stale commentCount)
-	scanDel(ctx, rdb, fmt.Sprintf("%s%d:*", config.CachePost, postID))
-
-	// 2. Commenter's own feed caches (they should see updated count immediately)
-	scanDel(ctx, rdb, config.CacheFeedGlobal+userID+":*")
-	scanDel(ctx, rdb, config.CacheFeedNetwork+userID+":*")
-	scanDel(ctx, rdb, config.CacheFeedUser+userID+":*")
-	scanDel(ctx, rdb, config.CacheFeedTrending+"*") // trending has no userId prefix
-	scanDel(ctx, rdb, config.CacheBookmarks+userID+":*")
-}
-
-// scanDel is a small helper that SCANs for keys matching a pattern and DELetes them.
-func scanDel(ctx context.Context, rdb *goredis.Client, pattern string) {
-	var cursor uint64
-	for {
-		keys, next, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
-		if err != nil {
-			break
-		}
-		if len(keys) > 0 {
-			rdb.Del(ctx, keys...)
-		}
-		cursor = next
-		if cursor == 0 {
-			break
-		}
-	}
+	invalidatePostCache(postID)
+	invalidateUserFeedCaches(userID)
 }
 
 // overlayPendingCommentLikes checks the Redis comment like/unlike buffers

@@ -10,6 +10,7 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
+	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
 )
@@ -264,6 +265,13 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 
 	redis.GetRawClient().Del(r.Context(), config.CacheUserMe+userID)
 
+	// Profile fields (username, displayName, avatarUrl, bio) are embedded in
+	// PostResponse / CommentResponse caches. Bust them so stale author info isn't served.
+	chat.RunBackground(func() {
+		InvalidateFeedCaches()
+		invalidateAllCommentCachesForUser(userID)
+	})
+
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(rawJSON))
@@ -366,6 +374,12 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	redis.GetRawClient().Del(r.Context(), config.CacheUserMe+userID)
+
+	// Profile fields are embedded in feed/post/comment caches — bust them.
+	chat.RunBackground(func() {
+		InvalidateFeedCaches()
+		invalidateAllCommentCachesForUser(userID)
+	})
 
 	w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
