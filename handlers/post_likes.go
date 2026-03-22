@@ -40,8 +40,12 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 	// No direct Postgres write, no trigger storm on viral posts.
 	services.BufferLike(r.Context(), userID, postID)
 
+	// Mark user as having pending likes so overlayPendingLikes runs only for them.
+	rdb := redis.GetRawClient()
+	rdb.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.FlushInterval+2*time.Second)
+
 	// Invalidate single-post cache so stale hasLiked isn't served after flusher drains buffer.
-	redis.GetRawClient().Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
+	rdb.Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
 
 	// Notify post owner (skip self-like)
 	chat.RunBackground(func() {
@@ -83,8 +87,12 @@ func UnlikePostHandler(w http.ResponseWriter, r *http.Request) {
 	// Buffer in Redis — O(1) SADD, flushed to Postgres by arena flusher.
 	services.BufferUnlike(r.Context(), userID, postID)
 
+	// Mark user as having pending unlikes so overlayPendingLikes runs only for them.
+	rdb := redis.GetRawClient()
+	rdb.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.FlushInterval+2*time.Second)
+
 	// Invalidate single-post cache so stale hasLiked isn't served after flusher drains buffer.
-	redis.GetRawClient().Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
+	rdb.Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
 
 	JSONMessage(w, "success", "Post unliked")
 }

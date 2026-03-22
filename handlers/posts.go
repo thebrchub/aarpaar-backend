@@ -1316,6 +1316,13 @@ func overlayPendingLikes(ctx context.Context, rdb *goredis.Client, userID string
 		return
 	}
 
+	// Fast path: skip overlay entirely if this user has no pending likes/unlikes.
+	// Only users who liked/unliked in the last ~5s have this key. At 10L+ RPS
+	// this avoids 2N pipelined SISMEMBER + JSON round-trip for 99.99% of reads.
+	if rdb.Exists(ctx, config.ARENA_LIKES_DIRTY_PREFIX+userID).Val() == 0 {
+		return
+	}
+
 	pipe := rdb.Pipeline()
 	type check struct {
 		likeCmd   *goredis.BoolCmd
