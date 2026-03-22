@@ -819,10 +819,15 @@ function renderPost(p) {
       + ' onload="this.classList.add(\'loaded\')" /></div>';
   }).join('');
 
-  const likedClass = p.hasLiked ? ' liked' : '';
-  const likedIcon = p.hasLiked ? '❤️' : '🤍';
-  const repostedClass = p.hasReposted ? ' reposted' : '';
-  const repostIcon = p.hasReposted ? '🔁' : '🔄';
+  // Plain reposts (no caption) redirect all engagement to the original post.
+  // Show the original post's counts and liked/reposted state instead of the wrapper's zeros.
+  const isPlainRepost = p.postType === 'repost' && !p.caption && p.originalPost;
+  const eng = isPlainRepost ? p.originalPost : p;
+
+  const likedClass = eng.hasLiked ? ' liked' : '';
+  const likedIcon = eng.hasLiked ? '❤️' : '🤍';
+  const repostedClass = eng.hasReposted ? ' reposted' : '';
+  const repostIcon = eng.hasReposted ? '🔁' : '🔄';
 
   return `
     <div class="post-card" id="post-${p.id}">
@@ -838,12 +843,12 @@ function renderPost(p) {
       ${media ? '<div class="post-media-grid">' + media + '</div>' : ''}
       ${renderOriginalPostEmbed(p)}
       <div class="post-actions">
-        <button class="action-btn${likedClass}" id="like-btn-${p.id}" onclick="toggleLike(${p.id}, ${p.hasLiked ? 'true' : 'false'})">
+        <button class="action-btn${likedClass}" id="like-btn-${p.id}" onclick="toggleLike(${p.id}, ${eng.hasLiked ? 'true' : 'false'})">
           <span id="like-icon-${p.id}">${likedIcon}</span>
-          <span id="like-count-${p.id}">${p.likeCount || 0}</span>
+          <span id="like-count-${p.id}">${eng.likeCount || 0}</span>
         </button>
-        <button class="action-btn" onclick="toggleComments(${p.id})">💬 <span id="comment-count-${p.id}">${p.commentCount || 0}</span></button>
-        <button class="action-btn${repostedClass}" id="repost-btn-${p.id}" onclick="toggleRepostForm(${p.id})">${repostIcon} <span id="repost-count-${p.id}">${p.repostCount || 0}</span></button>
+        <button class="action-btn" onclick="toggleComments(${p.id})">💬 <span id="comment-count-${p.id}">${eng.commentCount || 0}</span></button>
+        <button class="action-btn${repostedClass}" id="repost-btn-${p.id}" onclick="toggleRepostForm(${p.id})">${repostIcon} <span id="repost-count-${p.id}">${eng.repostCount || 0}</span></button>
         <button class="action-btn" onclick="document.getElementById('reportPostId').value='${p.id}';document.getElementById('reportPostId').scrollIntoView({behavior:'smooth'})">🚩</button>
       </div>
       <div id="repost-form-${p.id}" style="display:none">
