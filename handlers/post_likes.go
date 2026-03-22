@@ -102,6 +102,9 @@ func GetPostLikersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plain reposts redirect to the original post (same as like/unlike).
+	postID = services.ResolveOriginalPostID(r.Context(), postID)
+
 	limit, offset := parsePagination(r)
 
 	ctx, cancel := pgCtx(r)

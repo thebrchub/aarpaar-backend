@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
@@ -126,6 +127,12 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[arena] set comment path failed comment=%d: %v", commentID, err)
 	}
 
+	// Invalidate comment cache for this post
+	rdb := redis.GetRawClient()
+	chat.RunBackground(func() {
+		invalidateCommentCache(rdb, postID)
+	})
+
 	// Notify post owner and parent comment author
 	chat.RunBackground(func() {
 		bgCtx := context.Background()
@@ -185,6 +192,9 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Invalid post ID", http.StatusBadRequest)
 		return
 	}
+
+	// Plain reposts redirect comments to the original post (same as create).
+	postID = services.ResolveOriginalPostID(r.Context(), postID)
 
 	limit, offset := parsePagination(r)
 
@@ -315,12 +325,13 @@ func DeleteCommentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch the comment's ltree path (also verifies ownership)
+	// Fetch the comment's ltree path and post_id (also verifies ownership)
 	var commentPath string
+	var commentPostID int64
 	err = postgress.GetRawDB().QueryRow(
-		`SELECT path::text FROM post_comments WHERE id = $1 AND user_id = $2`,
+		`SELECT path::text, post_id FROM post_comments WHERE id = $1 AND user_id = $2`,
 		commentID, userID,
-	).Scan(&commentPath)
+	).Scan(&commentPath, &commentPostID)
 	if err != nil || commentPath == "" {
 		JSONError(w, "Comment not found or not yours", http.StatusNotFound)
 		return
@@ -336,6 +347,12 @@ func DeleteCommentHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Failed to delete comment", http.StatusInternalServerError)
 		return
 	}
+
+	// Invalidate comment cache for this post
+	rdb := redis.GetRawClient()
+	chat.RunBackground(func() {
+		invalidateCommentCache(rdb, commentPostID)
+	})
 
 	JSONMessage(w, "success", "Comment deleted")
 }
@@ -456,4 +473,19 @@ func nilIfZero(v int) any {
 		return nil
 	}
 	return v
+}
+
+// invalidateCommentCache deletes the most-likely cached comment pages for a
+// post. Deterministic O(1) DEL — no SCAN, safe at 10L+ RPS.
+func invalidateCommentCache(rdb *goredis.Client, postID int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	keys := make([]string, 0, 12)
+	// Top-level (parentId="") + first 3 pages for both default and max limit
+	for _, lim := range []int{config.DefaultPageLimit, config.MaxPageLimit} {
+		for _, off := range []int{0, config.DefaultPageLimit, config.DefaultPageLimit * 2} {
+			keys = append(keys, fmt.Sprintf("%s%d::%d:%d", config.CacheComments, postID, lim, off))
+		}
+	}
+	rdb.Del(ctx, keys...)
 }

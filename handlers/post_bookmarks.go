@@ -14,6 +14,7 @@ import (
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/models"
+	"github.com/thebrchub/aarpaar/services"
 )
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,9 @@ func BookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Invalid post ID", http.StatusBadRequest)
 		return
 	}
+
+	// Plain reposts redirect bookmarks to the original post.
+	postID = services.ResolveOriginalPostID(r.Context(), postID)
 
 	// FK constraint will reject if post doesn't exist; ON CONFLICT handles dupes.
 	// No need for a separate EXISTS check — saves one round-trip.
@@ -74,6 +78,9 @@ func UnbookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Invalid post ID", http.StatusBadRequest)
 		return
 	}
+
+	// Plain reposts redirect unbookmarks to the original post.
+	postID = services.ResolveOriginalPostID(r.Context(), postID)
 
 	_, err = postgress.Exec(
 		`DELETE FROM post_bookmarks WHERE user_id = $1 AND post_id = $2`,

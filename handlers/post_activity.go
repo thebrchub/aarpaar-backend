@@ -99,6 +99,9 @@ func GetRepostsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Plain reposts redirect to the original post.
+	postID = services.ResolveOriginalPostID(r.Context(), postID)
+
 	limit, offset := parsePagination(r)
 
 	ctx, cancel := pgCtx(r)
@@ -192,6 +195,9 @@ func RecordProfileClickHandler(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, "Invalid post ID", http.StatusBadRequest)
 		return
 	}
+
+	// Plain reposts attribute clicks to the original post.
+	postID = services.ResolveOriginalPostID(r.Context(), postID)
 
 	// Buffer in Redis — flushed to Postgres by arena flusher
 	services.BufferProfileClick(r.Context(), userID, postID)
