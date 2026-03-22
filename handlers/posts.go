@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/shivanand-burli/go-starter-kit/storage"
@@ -462,6 +463,17 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 	cacheKey := fmt.Sprintf("%s%s:%d:%d", config.CacheFeedGlobal, userID, truncated, limit)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		// Overlay pending likes from Redis buffer for read-your-own-writes
+		var posts []models.PostResponse
+		if json.Unmarshal(cached, &posts) == nil {
+			overlayPendingLikes(ctx, rdb, userID, posts)
+			if patched, err := json.Marshal(posts); err == nil {
+				w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+				w.WriteHeader(http.StatusOK)
+				w.Write(patched)
+				return
+			}
+		}
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(cached)
@@ -509,9 +521,15 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	attachOriginalPosts(ctx, posts, userID)
 
-	// Cache the serialized response for 1 minute
+	// Cache the Postgres-truth response (without pending overlay)
 	if respBytes, err := json.Marshal(posts); err == nil {
 		rdb.Set(ctx, cacheKey, respBytes, 1*time.Minute)
+	}
+
+	// Overlay pending likes from Redis buffer for read-your-own-writes
+	overlayPendingLikes(ctx, rdb, userID, posts)
+
+	if respBytes, err := json.Marshal(posts); err == nil {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(respBytes)
@@ -545,6 +563,16 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 	cacheKey := fmt.Sprintf("%s%s:%s:%d:%d", config.CacheFeedNetwork, userID, gen, truncated, limit)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		var posts []models.PostResponse
+		if json.Unmarshal(cached, &posts) == nil {
+			overlayPendingLikes(ctx, rdb, userID, posts)
+			if patched, err := json.Marshal(posts); err == nil {
+				w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+				w.WriteHeader(http.StatusOK)
+				w.Write(patched)
+				return
+			}
+		}
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(cached)
@@ -599,6 +627,11 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 
 	if respBytes, err := json.Marshal(posts); err == nil {
 		rdb.Set(ctx, cacheKey, respBytes, 30*time.Second)
+	}
+
+	overlayPendingLikes(ctx, rdb, userID, posts)
+
+	if respBytes, err := json.Marshal(posts); err == nil {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(respBytes)
@@ -641,6 +674,16 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 	cacheKey := fmt.Sprintf("%s%s:%s:%d:%d", config.CacheFeedUser, viewerID, targetUserID, limit, offset)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		var posts []models.PostResponse
+		if json.Unmarshal(cached, &posts) == nil {
+			overlayPendingLikes(ctx, rdb, viewerID, posts)
+			if patched, err := json.Marshal(posts); err == nil {
+				w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+				w.WriteHeader(http.StatusOK)
+				w.Write(patched)
+				return
+			}
+		}
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(cached)
@@ -689,6 +732,11 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 
 	if respBytes, err := json.Marshal(posts); err == nil {
 		rdb.Set(ctx, cacheKey, respBytes, 30*time.Second)
+	}
+
+	overlayPendingLikes(ctx, rdb, viewerID, posts)
+
+	if respBytes, err := json.Marshal(posts); err == nil {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(respBytes)
@@ -719,6 +767,16 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 	cacheKey := fmt.Sprintf("%s%s:%d:%d", config.CacheFeedTrending, userID, limit, offset)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		var posts []models.PostResponse
+		if json.Unmarshal(cached, &posts) == nil {
+			overlayPendingLikes(ctx, rdb, userID, posts)
+			if patched, err := json.Marshal(posts); err == nil {
+				w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+				w.WriteHeader(http.StatusOK)
+				w.Write(patched)
+				return
+			}
+		}
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(cached)
@@ -769,9 +827,14 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	attachOriginalPosts(ctx, posts, userID)
 
-	// Cache the serialized response for 2 minutes
+	// Cache Postgres-truth (without pending overlay)
 	if respBytes, err := json.Marshal(posts); err == nil {
 		rdb.Set(ctx, cacheKey, respBytes, 2*time.Minute)
+	}
+
+	overlayPendingLikes(ctx, rdb, userID, posts)
+
+	if respBytes, err := json.Marshal(posts); err == nil {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(respBytes)
@@ -1222,6 +1285,49 @@ func invalidatePostCache(postID int64) {
 		cursor = next
 		if cursor == 0 {
 			break
+		}
+	}
+}
+
+// overlayPendingLikes checks the Redis like/unlike buffers for the current
+// user and patches hasLiked + likeCount on each post. This provides
+// read-your-own-writes consistency while likes are still buffered (not yet
+// flushed to Postgres). Uses a single pipelined round trip — O(1) per post.
+func overlayPendingLikes(ctx context.Context, rdb *goredis.Client, userID string, posts []models.PostResponse) {
+	if len(posts) == 0 {
+		return
+	}
+
+	pipe := rdb.Pipeline()
+	type check struct {
+		likeCmd   *goredis.BoolCmd
+		unlikeCmd *goredis.BoolCmd
+		postID    int64
+	}
+	checks := make([]check, len(posts))
+	for i, p := range posts {
+		entry := userID + ":" + strconv.FormatInt(p.ID, 10)
+		checks[i] = check{
+			likeCmd:   pipe.SIsMember(ctx, config.ARENA_LIKES_BUFFER, entry),
+			unlikeCmd: pipe.SIsMember(ctx, config.ARENA_UNLIKES_BUFFER, entry),
+			postID:    p.ID,
+		}
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return // on error, serve what we have
+	}
+
+	for i, c := range checks {
+		pendingLike, _ := c.likeCmd.Result()
+		pendingUnlike, _ := c.unlikeCmd.Result()
+		if pendingLike && !posts[i].HasLiked {
+			posts[i].HasLiked = true
+			posts[i].LikeCount++
+		} else if pendingUnlike && posts[i].HasLiked {
+			posts[i].HasLiked = false
+			if posts[i].LikeCount > 0 {
+				posts[i].LikeCount--
+			}
 		}
 	}
 }
