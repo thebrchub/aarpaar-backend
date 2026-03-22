@@ -2,12 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
@@ -128,6 +130,7 @@ func flushEngagementSet(redisKey, tableName, counterColumn string) {
 			values[j] = fmt.Sprintf("($%d::uuid, $%d::bigint)", j*2+1, j*2+2)
 		}
 
+		// Fast VALUES insert — no JOIN overhead. FK violations are silently dropped.
 		query := fmt.Sprintf(
 			`INSERT INTO %s (user_id, post_id) VALUES %s ON CONFLICT DO NOTHING RETURNING post_id`,
 			tableName, strings.Join(values, ", "),
@@ -136,14 +139,16 @@ func flushEngagementSet(redisKey, tableName, counterColumn string) {
 		rows, err := postgress.GetRawDB().QueryContext(ctx, query, params...)
 		if err != nil {
 			log.Printf("[arena-flusher] INSERT into %s failed: %v", tableName, err)
-			// Re-queue the entries so they aren't lost
-			reCtx, reCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			members := make([]any, len(chunk))
-			for k, p := range chunk {
-				members[k] = p.userID + ":" + strconv.FormatInt(p.postID, 10)
+			// Don't re-queue on FK violations — the post is gone
+			if !isFKViolation(err) {
+				reCtx, reCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				members := make([]any, len(chunk))
+				for k, p := range chunk {
+					members[k] = p.userID + ":" + strconv.FormatInt(p.postID, 10)
+				}
+				rdb.SAdd(reCtx, redisKey, members...)
+				reCancel()
 			}
-			rdb.SAdd(reCtx, redisKey, members...)
-			reCancel()
 			continue
 		}
 
@@ -300,13 +305,16 @@ func flushLikes() {
 			values[j] = fmt.Sprintf("($%d::uuid, $%d::bigint)", j*2+1, j*2+2)
 		}
 
+		// Fast VALUES insert — no JOIN overhead. FK violations are silently dropped.
 		rows, err := postgress.GetRawDB().QueryContext(ctx,
 			fmt.Sprintf(`INSERT INTO post_likes (user_id, post_id) VALUES %s ON CONFLICT DO NOTHING RETURNING post_id`,
 				strings.Join(values, ", ")),
 			params...)
 		if err != nil {
 			log.Printf("[arena-flusher] INSERT likes failed: %v", err)
-			requeue(rdb, config.ARENA_LIKES_BUFFER, rawEntries(chunk))
+			if !isFKViolation(err) {
+				requeue(rdb, config.ARENA_LIKES_BUFFER, rawEntries(chunk))
+			}
 			continue
 		}
 		for rows.Next() {
@@ -516,13 +524,16 @@ func flushCommentLikes() {
 			values[j] = fmt.Sprintf("($%d::uuid, $%d::bigint)", j*2+1, j*2+2)
 		}
 
+		// Fast VALUES insert — no JOIN overhead. FK violations are silently dropped.
 		_, err := postgress.GetRawDB().ExecContext(ctx,
 			fmt.Sprintf(`INSERT INTO comment_likes (user_id, comment_id) VALUES %s ON CONFLICT DO NOTHING`,
 				strings.Join(values, ", ")),
 			params...)
 		if err != nil {
 			log.Printf("[arena-flusher] INSERT comment likes failed: %v", err)
-			requeue(rdb, config.COMMENT_LIKES_BUFFER, rawEntries(chunk))
+			if !isFKViolation(err) {
+				requeue(rdb, config.COMMENT_LIKES_BUFFER, rawEntries(chunk))
+			}
 		}
 	}
 
@@ -547,7 +558,19 @@ func flushCommentLikes() {
 			params...)
 		if err != nil {
 			log.Printf("[arena-flusher] DELETE comment unlikes failed: %v", err)
-			requeue(rdb, config.COMMENT_UNLIKES_BUFFER, rawEntries(chunk))
+			if !isFKViolation(err) {
+				requeue(rdb, config.COMMENT_UNLIKES_BUFFER, rawEntries(chunk))
+			}
 		}
 	}
+}
+
+// isFKViolation returns true if the error is a Postgres foreign key violation
+// (SQLSTATE 23503). These should not be re-queued — the referenced row is gone.
+func isFKViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23503"
+	}
+	return false
 }
