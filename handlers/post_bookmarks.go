@@ -119,6 +119,16 @@ func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
 	cacheKey := fmt.Sprintf("%s%s:%d:%d", config.CacheBookmarks, userID, limit, offset)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		var posts []models.PostResponse
+		if json.Unmarshal(cached, &posts) == nil {
+			overlayPendingLikes(ctx, rdb, userID, posts)
+			if patched, err := json.Marshal(posts); err == nil {
+				w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+				w.WriteHeader(http.StatusOK)
+				w.Write(patched)
+				return
+			}
+		}
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(cached)
@@ -167,6 +177,11 @@ func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
 
 	if respBytes, err := json.Marshal(posts); err == nil {
 		rdb.Set(ctx, cacheKey, respBytes, 1*time.Minute)
+	}
+
+	overlayPendingLikes(ctx, rdb, userID, posts)
+
+	if respBytes, err := json.Marshal(posts); err == nil {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(respBytes)

@@ -174,6 +174,17 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 		chat.RunBackground(func() {
 			services.BufferDetailExpand(context.Background(), userID, postID)
 		})
+		var post models.PostResponse
+		if json.Unmarshal(cached, &post) == nil {
+			posts := []models.PostResponse{post}
+			overlayPendingLikes(ctx, rdb, userID, posts)
+			if patched, err := json.Marshal(posts[0]); err == nil {
+				w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+				w.WriteHeader(http.StatusOK)
+				w.Write(patched)
+				return
+			}
+		}
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(cached)
@@ -193,6 +204,13 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 
 	if respBytes, err := json.Marshal(post); err == nil {
 		rdb.Set(ctx, cacheKey, respBytes, 2*time.Minute)
+	}
+
+	posts := []models.PostResponse{post}
+	overlayPendingLikes(ctx, rdb, userID, posts)
+	post = posts[0]
+
+	if respBytes, err := json.Marshal(post); err == nil {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(respBytes)
