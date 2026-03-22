@@ -459,7 +459,7 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 	// Cache key truncates cursor to the minute so all requests in the same
 	// 60-second window share a single cached page.
 	truncated := cursor.Truncate(time.Minute).Unix()
-	cacheKey := fmt.Sprintf("%s%d:%d", config.CacheFeedGlobal, truncated, limit)
+	cacheKey := fmt.Sprintf("%s%s:%d:%d", config.CacheFeedGlobal, userID, truncated, limit)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
@@ -716,7 +716,7 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Cache trending feed for 2 minutes (trending ranking is time-insensitive)
-	cacheKey := fmt.Sprintf("%s%d:%d", config.CacheFeedTrending, limit, offset)
+	cacheKey := fmt.Sprintf("%s%s:%d:%d", config.CacheFeedTrending, userID, limit, offset)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
