@@ -1323,36 +1323,58 @@ func overlayPendingLikes(ctx context.Context, rdb *goredis.Client, userID string
 		return
 	}
 
-	pipe := rdb.Pipeline()
-	type check struct {
+	// Collect all post IDs to check: top-level + embedded originalPost.
+	type target struct {
 		likeCmd   *goredis.BoolCmd
 		unlikeCmd *goredis.BoolCmd
-		postID    int64
 	}
-	checks := make([]check, len(posts))
-	for i, p := range posts {
-		entry := userID + ":" + strconv.FormatInt(p.ID, 10)
-		checks[i] = check{
+	targets := make(map[int64]*target)
+
+	pipe := rdb.Pipeline()
+	addTarget := func(id int64) {
+		if _, exists := targets[id]; exists {
+			return
+		}
+		entry := userID + ":" + strconv.FormatInt(id, 10)
+		targets[id] = &target{
 			likeCmd:   pipe.SIsMember(ctx, config.ARENA_LIKES_BUFFER, entry),
 			unlikeCmd: pipe.SIsMember(ctx, config.ARENA_UNLIKES_BUFFER, entry),
-			postID:    p.ID,
 		}
 	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		return // on error, serve what we have
+
+	for i := range posts {
+		addTarget(posts[i].ID)
+		if posts[i].OriginalPost != nil {
+			addTarget(posts[i].OriginalPost.ID)
+		}
 	}
 
-	for i, c := range checks {
-		pendingLike, _ := c.likeCmd.Result()
-		pendingUnlike, _ := c.unlikeCmd.Result()
-		if pendingLike && !posts[i].HasLiked {
-			posts[i].HasLiked = true
-			posts[i].LikeCount++
-		} else if pendingUnlike && posts[i].HasLiked {
-			posts[i].HasLiked = false
-			if posts[i].LikeCount > 0 {
-				posts[i].LikeCount--
+	if _, err := pipe.Exec(ctx); err != nil {
+		return
+	}
+
+	applyOverlay := func(id int64, hasLiked *bool, likeCount *int) {
+		t := targets[id]
+		if t == nil {
+			return
+		}
+		pendingLike, _ := t.likeCmd.Result()
+		pendingUnlike, _ := t.unlikeCmd.Result()
+		if pendingLike && !*hasLiked {
+			*hasLiked = true
+			*likeCount++
+		} else if pendingUnlike && *hasLiked {
+			*hasLiked = false
+			if *likeCount > 0 {
+				*likeCount--
 			}
+		}
+	}
+
+	for i := range posts {
+		applyOverlay(posts[i].ID, &posts[i].HasLiked, &posts[i].LikeCount)
+		if posts[i].OriginalPost != nil {
+			applyOverlay(posts[i].OriginalPost.ID, &posts[i].OriginalPost.HasLiked, &posts[i].OriginalPost.LikeCount)
 		}
 	}
 }
