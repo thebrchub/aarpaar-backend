@@ -393,8 +393,16 @@ func LikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 
 	services.BufferCommentLike(r.Context(), userID, commentID)
 
-	// Mark user as having pending comment likes so overlay runs only for them.
-	redis.GetRawClient().Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
+	// Write per-user comment overlay set (survives flusher drain) + dirty flag.
+	rdb := redis.GetRawClient()
+	cidStr := strconv.FormatInt(commentID, 10)
+	pipe := rdb.Pipeline()
+	pipe.SAdd(r.Context(), config.COMMENT_PENDING_LIKES+userID, cidStr)
+	pipe.SRem(r.Context(), config.COMMENT_PENDING_UNLIKES+userID, cidStr)
+	pipe.Expire(r.Context(), config.COMMENT_PENDING_LIKES+userID, config.DirtyFlagTTL)
+	pipe.Expire(r.Context(), config.COMMENT_PENDING_UNLIKES+userID, config.DirtyFlagTTL)
+	pipe.Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
+	pipe.Exec(r.Context())
 
 	JSONMessage(w, "success", "Comment liked")
 }
@@ -414,8 +422,16 @@ func UnlikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 
 	services.BufferCommentUnlike(r.Context(), userID, commentID)
 
-	// Mark user as having pending comment unlikes so overlay runs only for them.
-	redis.GetRawClient().Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
+	// Write per-user comment overlay set (survives flusher drain) + dirty flag.
+	rdb := redis.GetRawClient()
+	cidStr := strconv.FormatInt(commentID, 10)
+	pipe := rdb.Pipeline()
+	pipe.SAdd(r.Context(), config.COMMENT_PENDING_UNLIKES+userID, cidStr)
+	pipe.SRem(r.Context(), config.COMMENT_PENDING_LIKES+userID, cidStr)
+	pipe.Expire(r.Context(), config.COMMENT_PENDING_LIKES+userID, config.DirtyFlagTTL)
+	pipe.Expire(r.Context(), config.COMMENT_PENDING_UNLIKES+userID, config.DirtyFlagTTL)
+	pipe.Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
+	pipe.Exec(r.Context())
 
 	JSONMessage(w, "success", "Comment unliked")
 }
@@ -538,10 +554,10 @@ func overlayPendingCommentLikes(ctx context.Context, rdb *goredis.Client, userID
 	}
 	checks := make([]check, len(comments))
 	for i, c := range comments {
-		entry := userID + ":" + strconv.FormatInt(c.ID, 10)
+		idStr := strconv.FormatInt(c.ID, 10)
 		checks[i] = check{
-			likeCmd:   pipe.SIsMember(ctx, config.COMMENT_LIKES_BUFFER, entry),
-			unlikeCmd: pipe.SIsMember(ctx, config.COMMENT_UNLIKES_BUFFER, entry),
+			likeCmd:   pipe.SIsMember(ctx, config.COMMENT_PENDING_LIKES+userID, idStr),
+			unlikeCmd: pipe.SIsMember(ctx, config.COMMENT_PENDING_UNLIKES+userID, idStr),
 		}
 	}
 	if _, err := pipe.Exec(ctx); err != nil {

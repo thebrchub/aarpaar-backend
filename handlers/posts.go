@@ -1335,10 +1335,10 @@ func overlayPendingLikes(ctx context.Context, rdb *goredis.Client, userID string
 		if _, exists := targets[id]; exists {
 			return
 		}
-		entry := userID + ":" + strconv.FormatInt(id, 10)
+		idStr := strconv.FormatInt(id, 10)
 		targets[id] = &target{
-			likeCmd:   pipe.SIsMember(ctx, config.ARENA_LIKES_BUFFER, entry),
-			unlikeCmd: pipe.SIsMember(ctx, config.ARENA_UNLIKES_BUFFER, entry),
+			likeCmd:   pipe.SIsMember(ctx, config.ARENA_PENDING_LIKES+userID, idStr),
+			unlikeCmd: pipe.SIsMember(ctx, config.ARENA_PENDING_UNLIKES+userID, idStr),
 		}
 	}
 

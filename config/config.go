@@ -136,12 +136,20 @@ const (
 	ARENA_PROFILE_CLICKS_BUF = "arena:profile_clicks" // Set of "userId:postId" profile-click pairs
 	ARENA_LIKES_BUFFER       = "arena:likes"          // Set of "userId:postId" pending like inserts
 	ARENA_UNLIKES_BUFFER     = "arena:unlikes"        // Set of "userId:postId" pending like deletes
-	ARENA_LIKES_DIRTY_PREFIX = "arena:dirty:"         // Per-user flag set on like/unlike, TTL ~5s
+	ARENA_LIKES_DIRTY_PREFIX = "arena:dirty:"         // Per-user flag set on like/unlike, TTL = DirtyFlagTTL
+
+	// Per-user overlay sets (NOT touched by flusher — survive buffer drain)
+	ARENA_PENDING_LIKES   = "arena:plike:"   // arena:plike:{userId} -> SET of postId strings (overlay reads this)
+	ARENA_PENDING_UNLIKES = "arena:punlike:" // arena:punlike:{userId} -> SET of postId strings (overlay reads this)
 
 	// Comment like buffering (same pattern as post likes)
 	COMMENT_LIKES_BUFFER       = "arena:comment_likes"   // Set of "userId:commentId" pending comment like inserts
 	COMMENT_UNLIKES_BUFFER     = "arena:comment_unlikes" // Set of "userId:commentId" pending comment like deletes
-	COMMENT_LIKES_DIRTY_PREFIX = "arena:cdirty:"         // Per-user flag set on comment like/unlike, TTL ~5s
+	COMMENT_LIKES_DIRTY_PREFIX = "arena:cdirty:"         // Per-user flag set on comment like/unlike, TTL = DirtyFlagTTL
+
+	// Per-user comment overlay sets (NOT touched by flusher)
+	COMMENT_PENDING_LIKES   = "arena:cplike:"   // arena:cplike:{userId} -> SET of commentId strings
+	COMMENT_PENDING_UNLIKES = "arena:cpunlike:" // arena:cpunlike:{userId} -> SET of commentId strings
 )
 
 // ---------------------------------------------------------------------------

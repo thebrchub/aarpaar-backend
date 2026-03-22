@@ -40,12 +40,17 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 	// No direct Postgres write, no trigger storm on viral posts.
 	services.BufferLike(r.Context(), userID, postID)
 
-	// Mark user as having pending likes so overlayPendingLikes runs only for them.
+	// Write per-user overlay set (survives flusher drain) + dirty flag.
 	rdb := redis.GetRawClient()
-	rdb.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
-
-	// Invalidate single-post cache so stale hasLiked isn't served after flusher drains buffer.
-	rdb.Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
+	postIDStr := strconv.FormatInt(postID, 10)
+	pipe := rdb.Pipeline()
+	pipe.SAdd(r.Context(), config.ARENA_PENDING_LIKES+userID, postIDStr)
+	pipe.SRem(r.Context(), config.ARENA_PENDING_UNLIKES+userID, postIDStr)
+	pipe.Expire(r.Context(), config.ARENA_PENDING_LIKES+userID, config.DirtyFlagTTL)
+	pipe.Expire(r.Context(), config.ARENA_PENDING_UNLIKES+userID, config.DirtyFlagTTL)
+	pipe.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
+	pipe.Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
+	pipe.Exec(r.Context())
 
 	// Notify post owner (skip self-like)
 	chat.RunBackground(func() {
@@ -87,12 +92,17 @@ func UnlikePostHandler(w http.ResponseWriter, r *http.Request) {
 	// Buffer in Redis — O(1) SADD, flushed to Postgres by arena flusher.
 	services.BufferUnlike(r.Context(), userID, postID)
 
-	// Mark user as having pending unlikes so overlayPendingLikes runs only for them.
+	// Write per-user overlay set (survives flusher drain) + dirty flag.
 	rdb := redis.GetRawClient()
-	rdb.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
-
-	// Invalidate single-post cache so stale hasLiked isn't served after flusher drains buffer.
-	rdb.Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
+	postIDStr := strconv.FormatInt(postID, 10)
+	pipe := rdb.Pipeline()
+	pipe.SAdd(r.Context(), config.ARENA_PENDING_UNLIKES+userID, postIDStr)
+	pipe.SRem(r.Context(), config.ARENA_PENDING_LIKES+userID, postIDStr)
+	pipe.Expire(r.Context(), config.ARENA_PENDING_LIKES+userID, config.DirtyFlagTTL)
+	pipe.Expire(r.Context(), config.ARENA_PENDING_UNLIKES+userID, config.DirtyFlagTTL)
+	pipe.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
+	pipe.Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
+	pipe.Exec(r.Context())
 
 	JSONMessage(w, "success", "Post unliked")
 }
