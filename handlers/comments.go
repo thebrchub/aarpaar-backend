@@ -203,9 +203,19 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Cache comments per post+parent+page for 30s
 	parentIDParam := r.URL.Query().Get("parentId")
-	cacheKey := fmt.Sprintf("%s%d:%s:%d:%d", config.CacheComments, postID, parentIDParam, limit, offset)
+	cacheKey := fmt.Sprintf("%s%d:%s:%s:%d:%d", config.CacheComments, postID, userID, parentIDParam, limit, offset)
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
+		var comments []models.CommentResponse
+		if json.Unmarshal(cached, &comments) == nil {
+			overlayPendingCommentLikes(ctx, rdb, userID, comments)
+			if patched, err := json.Marshal(comments); err == nil {
+				w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
+				w.WriteHeader(http.StatusOK)
+				w.Write(patched)
+				return
+			}
+		}
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(cached)
@@ -298,6 +308,11 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 
 	if respBytes, err := json.Marshal(comments); err == nil {
 		rdb.Set(ctx, cacheKey, respBytes, config.CacheTTLMedium)
+	}
+
+	overlayPendingCommentLikes(ctx, rdb, userID, comments)
+
+	if respBytes, err := json.Marshal(comments); err == nil {
 		w.Header().Set(config.HeaderContentType, config.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		w.Write(respBytes)
@@ -378,6 +393,9 @@ func LikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 
 	services.BufferCommentLike(r.Context(), userID, commentID)
 
+	// Mark user as having pending comment likes so overlay runs only for them.
+	redis.GetRawClient().Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.FlushInterval+2*time.Second)
+
 	JSONMessage(w, "success", "Comment liked")
 }
 
@@ -395,6 +413,9 @@ func UnlikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	services.BufferCommentUnlike(r.Context(), userID, commentID)
+
+	// Mark user as having pending comment unlikes so overlay runs only for them.
+	redis.GetRawClient().Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.FlushInterval+2*time.Second)
 
 	JSONMessage(w, "success", "Comment unliked")
 }
@@ -475,17 +496,69 @@ func nilIfZero(v int) any {
 	return v
 }
 
-// invalidateCommentCache deletes the most-likely cached comment pages for a
-// post. Deterministic O(1) DEL — no SCAN, safe at 10L+ RPS.
+// invalidateCommentCache deletes all cached comment pages for a post.
+// Uses SCAN — write-path only (comment create/delete), acceptable at scale.
 func invalidateCommentCache(rdb *goredis.Client, postID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	keys := make([]string, 0, 12)
-	// Top-level (parentId="") + first 3 pages for both default and max limit
-	for _, lim := range []int{config.DefaultPageLimit, config.MaxPageLimit} {
-		for _, off := range []int{0, config.DefaultPageLimit, config.DefaultPageLimit * 2} {
-			keys = append(keys, fmt.Sprintf("%s%d::%d:%d", config.CacheComments, postID, lim, off))
+	// Cache keys now include userId — use SCAN to match all users.
+	// Write-path only (comment create/delete), acceptable at scale.
+	pattern := fmt.Sprintf("%s%d:*", config.CacheComments, postID)
+	var cursor uint64
+	for {
+		keys, next, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			break
+		}
+		if len(keys) > 0 {
+			rdb.Del(ctx, keys...)
+		}
+		cursor = next
+		if cursor == 0 {
+			break
 		}
 	}
-	rdb.Del(ctx, keys...)
+}
+
+// overlayPendingCommentLikes checks the Redis comment like/unlike buffers
+// and patches hasLiked + likeCount. Same pattern as overlayPendingLikes
+// for posts. Gated by dirty flag — only runs for users who just liked/unliked.
+func overlayPendingCommentLikes(ctx context.Context, rdb *goredis.Client, userID string, comments []models.CommentResponse) {
+	if len(comments) == 0 {
+		return
+	}
+	if rdb.Exists(ctx, config.COMMENT_LIKES_DIRTY_PREFIX+userID).Val() == 0 {
+		return
+	}
+
+	pipe := rdb.Pipeline()
+	type check struct {
+		likeCmd   *goredis.BoolCmd
+		unlikeCmd *goredis.BoolCmd
+	}
+	checks := make([]check, len(comments))
+	for i, c := range comments {
+		entry := userID + ":" + strconv.FormatInt(c.ID, 10)
+		checks[i] = check{
+			likeCmd:   pipe.SIsMember(ctx, config.COMMENT_LIKES_BUFFER, entry),
+			unlikeCmd: pipe.SIsMember(ctx, config.COMMENT_UNLIKES_BUFFER, entry),
+		}
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return
+	}
+
+	for i, c := range checks {
+		pendingLike, _ := c.likeCmd.Result()
+		pendingUnlike, _ := c.unlikeCmd.Result()
+		if pendingLike && !comments[i].HasLiked {
+			comments[i].HasLiked = true
+			comments[i].LikeCount++
+		} else if pendingUnlike && comments[i].HasLiked {
+			comments[i].HasLiked = false
+			if comments[i].LikeCount > 0 {
+				comments[i].LikeCount--
+			}
+		}
+	}
 }

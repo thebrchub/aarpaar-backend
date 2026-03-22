@@ -139,8 +139,9 @@ const (
 	ARENA_LIKES_DIRTY_PREFIX = "arena:dirty:"          // Per-user flag set on like/unlike, TTL ~5s
 
 	// Comment like buffering (same pattern as post likes)
-	COMMENT_LIKES_BUFFER   = "arena:comment_likes"   // Set of "userId:commentId" pending comment like inserts
-	COMMENT_UNLIKES_BUFFER = "arena:comment_unlikes" // Set of "userId:commentId" pending comment like deletes
+	COMMENT_LIKES_BUFFER       = "arena:comment_likes"   // Set of "userId:commentId" pending comment like inserts
+	COMMENT_UNLIKES_BUFFER     = "arena:comment_unlikes" // Set of "userId:commentId" pending comment like deletes
+	COMMENT_LIKES_DIRTY_PREFIX = "arena:cdirty:"          // Per-user flag set on comment like/unlike, TTL ~5s
 )
 
 // ---------------------------------------------------------------------------
