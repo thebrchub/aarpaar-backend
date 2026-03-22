@@ -127,10 +127,12 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[arena] set comment path failed comment=%d: %v", commentID, err)
 	}
 
-	// Invalidate comment cache for this post
+	// Invalidate comment cache + single-post cache + commenter's feed caches
+	// so the commenter sees up-to-date commentCount immediately.
 	rdb := redis.GetRawClient()
 	chat.RunBackground(func() {
 		invalidateCommentCache(rdb, postID)
+		invalidatePostAndFeedCaches(rdb, postID, userID)
 	})
 
 	// Notify post owner and parent comment author
@@ -363,10 +365,11 @@ func DeleteCommentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Invalidate comment cache for this post
+	// Invalidate comment cache + single-post cache + user's feed caches
 	rdb := redis.GetRawClient()
 	chat.RunBackground(func() {
 		invalidateCommentCache(rdb, commentPostID)
+		invalidatePostAndFeedCaches(rdb, commentPostID, userID)
 	})
 
 	JSONMessage(w, "success", "Comment deleted")
@@ -520,6 +523,42 @@ func invalidateCommentCache(rdb *goredis.Client, postID int64) {
 	// Cache keys now include userId — use SCAN to match all users.
 	// Write-path only (comment create/delete), acceptable at scale.
 	pattern := fmt.Sprintf("%s%d:*", config.CacheComments, postID)
+	var cursor uint64
+	for {
+		keys, next, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			break
+		}
+		if len(keys) > 0 {
+			rdb.Del(ctx, keys...)
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+}
+
+// invalidatePostAndFeedCaches busts the single-post cache for a post (all users)
+// and the acting user's own feed caches so they see the updated commentCount
+// immediately. Write-path only (comment create/delete) — acceptable at scale.
+func invalidatePostAndFeedCaches(rdb *goredis.Client, postID int64, userID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// 1. Single-post cache: post:{postId}:* (all users see stale commentCount)
+	scanDel(ctx, rdb, fmt.Sprintf("%s%d:*", config.CachePost, postID))
+
+	// 2. Commenter's own feed caches (they should see updated count immediately)
+	scanDel(ctx, rdb, config.CacheFeedGlobal+userID+":*")
+	scanDel(ctx, rdb, config.CacheFeedNetwork+userID+":*")
+	scanDel(ctx, rdb, config.CacheFeedUser+userID+":*")
+	scanDel(ctx, rdb, config.CacheFeedTrending+"*") // trending has no userId prefix
+	scanDel(ctx, rdb, config.CacheBookmarks+userID+":*")
+}
+
+// scanDel is a small helper that SCANs for keys matching a pattern and DELetes them.
+func scanDel(ctx context.Context, rdb *goredis.Client, pattern string) {
 	var cursor uint64
 	for {
 		keys, next, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
