@@ -42,7 +42,7 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Mark user as having pending likes so overlayPendingLikes runs only for them.
 	rdb := redis.GetRawClient()
-	rdb.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.FlushInterval+2*time.Second)
+	rdb.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
 
 	// Invalidate single-post cache so stale hasLiked isn't served after flusher drains buffer.
 	rdb.Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
@@ -89,7 +89,7 @@ func UnlikePostHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Mark user as having pending unlikes so overlayPendingLikes runs only for them.
 	rdb := redis.GetRawClient()
-	rdb.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.FlushInterval+2*time.Second)
+	rdb.Set(r.Context(), config.ARENA_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
 
 	// Invalidate single-post cache so stale hasLiked isn't served after flusher drains buffer.
 	rdb.Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))

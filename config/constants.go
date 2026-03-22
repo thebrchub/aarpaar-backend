@@ -390,6 +390,11 @@ const (
 	// FlushInterval is how often the flusher checks for dirty rooms
 	FlushInterval = 3 * time.Second
 
+	// DirtyFlagTTL controls how long the per-user dirty flag lives.
+	// Must outlive the longest feed cache TTL (CacheTTLLong = 2min) so the
+	// overlay continues patching cached responses until the stale cache expires.
+	DirtyFlagTTL = CacheTTLLong + FlushInterval + 2*time.Second // ~2m5s
+
 	// FlushWorkerCount is the number of parallel flush goroutines
 	FlushWorkerCount = 10
 

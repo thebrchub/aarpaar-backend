@@ -394,7 +394,7 @@ func LikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 	services.BufferCommentLike(r.Context(), userID, commentID)
 
 	// Mark user as having pending comment likes so overlay runs only for them.
-	redis.GetRawClient().Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.FlushInterval+2*time.Second)
+	redis.GetRawClient().Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
 
 	JSONMessage(w, "success", "Comment liked")
 }
@@ -415,7 +415,7 @@ func UnlikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 	services.BufferCommentUnlike(r.Context(), userID, commentID)
 
 	// Mark user as having pending comment unlikes so overlay runs only for them.
-	redis.GetRawClient().Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.FlushInterval+2*time.Second)
+	redis.GetRawClient().Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
 
 	JSONMessage(w, "success", "Comment unliked")
 }
