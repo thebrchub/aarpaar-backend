@@ -1,3 +1,6 @@
+CREATE SCHEMA IF NOT EXISTS zquab;
+SET search_path TO zquab, public;
+
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
