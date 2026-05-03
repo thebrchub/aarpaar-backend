@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/shivanand-burli/go-starter-kit/helper"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
@@ -21,15 +23,15 @@ import (
 // ---------------------------------------------------------------------------
 
 func LikePostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -53,7 +55,7 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 	pipe.Exec(r.Context())
 
 	// Notify post owner (skip self-like)
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		bgCtx := context.Background()
 		ownerID := services.GetPostOwnerCached(bgCtx, postID)
 		if ownerID != "" && ownerID != userID && services.ShouldNotify(bgCtx, ownerID, services.NotifPrefLikes) {
@@ -65,7 +67,7 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 
-	JSONMessage(w, "success", "Post liked")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Post liked"})
 }
 
 // ---------------------------------------------------------------------------
@@ -74,15 +76,15 @@ func LikePostHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func UnlikePostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -104,7 +106,7 @@ func UnlikePostHandler(w http.ResponseWriter, r *http.Request) {
 	pipe.Del(r.Context(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
 	pipe.Exec(r.Context())
 
-	JSONMessage(w, "success", "Post unliked")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Post unliked"})
 }
 
 // ---------------------------------------------------------------------------
@@ -113,16 +115,16 @@ func UnlikePostHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func GetPostLikersHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	_ = userID // authenticated but not filtered
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -144,7 +146,7 @@ func GetPostLikersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT u.id, u.username, u.name, u.avatar_url
 		 FROM post_likes pl
 		 JOIN users u ON u.id = pl.user_id
@@ -154,7 +156,7 @@ func GetPostLikersHandler(w http.ResponseWriter, r *http.Request) {
 		postID, limit, offset,
 	)
 	if err != nil {
-		JSONError(w, "Failed to load likers", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load likers")
 		return
 	}
 	defer rows.Close()
@@ -181,5 +183,5 @@ func GetPostLikersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSONSuccess(w, likers)
+	helper.JSON(w, http.StatusOK, likers)
 }

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/shivanand-burli/go-starter-kit/helper"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
@@ -17,9 +19,10 @@ import (
 
 // GetMeHandler returns the authenticated user's own profile.
 func GetMeHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -46,14 +49,14 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	var rawJSON string
-	err := postgress.GetRawDB().QueryRow(query, userID).Scan(&rawJSON)
+	err := postgress.GetPool().QueryRow(ctx, query, userID).Scan(&rawJSON)
 	if err != nil {
 		log.Printf("[users] GetMe query failed user=%s: %v", userID, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	if rawJSON == "" {
-		JSONError(w, "User not found or banned", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "User not found or banned")
 		return
 	}
 
@@ -70,15 +73,15 @@ func GetMeHandler(w http.ResponseWriter, r *http.Request) {
 
 // SearchUsersHandler searches for users by username or name.
 func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
-	_, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	if middleware.Subject(ctx) == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	q := r.URL.Query().Get("query")
 	if q == "" || len(q) > 30 {
-		JSONError(w, "Query parameter is required and must be <= 30 characters", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Query parameter is required and must be <= 30 characters")
 		return
 	}
 
@@ -99,10 +102,10 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	var rawJSONBytes []byte
-	err := postgress.GetRawDB().QueryRow(query, q, limit, offset).Scan(&rawJSONBytes)
+	err := postgress.GetPool().QueryRow(ctx, query, q, limit, offset).Scan(&rawJSONBytes)
 	if err != nil {
 		log.Printf("[users] SearchUsers query failed q=%s: %v", q, err)
-		JSONError(w, "Search failed", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Search failed")
 		return
 	}
 
@@ -113,41 +116,42 @@ func SearchUsersHandler(w http.ResponseWriter, r *http.Request) {
 
 // CheckUsernameHandler checks if a username is available.
 func CheckUsernameHandler(w http.ResponseWriter, r *http.Request) {
-	_, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	if middleware.Subject(ctx) == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	username := r.URL.Query().Get("username")
 	if username == "" || len(username) > 30 {
-		JSONError(w, "Username is required and must be <= 30 characters", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Username is required and must be <= 30 characters")
 		return
 	}
 
 	var exists bool
-	err := postgress.GetRawDB().QueryRow(
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, username,
 	).Scan(&exists)
 	if err != nil {
 		log.Printf("[users] CheckUsername query failed username=%s: %v", username, err)
-		JSONError(w, "Check failed", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Check failed")
 		return
 	}
 
 	if exists {
-		JSONMessage(w, "taken", "Username is already taken")
+		helper.JSON(w, http.StatusOK, map[string]string{"status": "taken", "message": "Username is already taken"})
 	} else {
-		JSONMessage(w, "available", "Username is available")
+		helper.JSON(w, http.StatusOK, map[string]string{"status": "available", "message": "Username is available"})
 	}
 }
 
 // UpdateMeHandler partially updates the authenticated user's profile.
 // Only the fields provided in the body are updated (PATCH semantics).
 func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -161,28 +165,28 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 		ShowLastSeen *bool   `json:"show_last_seen"`
 		Bio          *string `json:"bio"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &body); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	if body.Username == nil && body.Name == nil && body.Mobile == nil && body.Gender == nil && body.AvatarURL == nil && body.IsPrivate == nil && body.ShowLastSeen == nil && body.Bio == nil {
-		JSONError(w, "Nothing to update", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Nothing to update")
 		return
 	}
 
 	// Username is immutable once set — reject attempts to change it
 	if body.Username != nil {
 		var existingUsername *string
-		err := postgress.GetRawDB().QueryRow(
+		err := postgress.GetPool().QueryRow(ctx,
 			`SELECT username FROM users WHERE id = $1`, userID,
 		).Scan(&existingUsername)
 		if err != nil {
-			JSONError(w, "Failed to verify username", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Failed to verify username")
 			return
 		}
 		if existingUsername != nil && *existingUsername != "" {
-			JSONError(w, "Username cannot be changed once set", http.StatusConflict)
+			helper.Error(w, http.StatusConflict, "Username cannot be changed once set")
 			return
 		}
 	}
@@ -234,7 +238,7 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 			maxBio = limits.MaxBioLength
 		}
 		if len(*body.Bio) > maxBio {
-			JSONError(w, fmt.Sprintf("Bio too long (max %d chars)", maxBio), http.StatusBadRequest)
+			helper.Error(w, http.StatusBadRequest, fmt.Sprintf("Bio too long (max %d chars)", maxBio))
 			return
 		}
 		sets = append(sets, fmt.Sprintf("bio = $%d", i))
@@ -256,10 +260,10 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 	`, strings.Join(sets, ", "), i)
 
 	var rawJSON string
-	err := postgress.GetRawDB().QueryRow(query, args...).Scan(&rawJSON)
+	err := postgress.GetPool().QueryRow(ctx, query, args...).Scan(&rawJSON)
 	if err != nil || rawJSON == "" {
 		log.Printf("[UpdateMe] DB error: %v", err)
-		JSONError(w, "Update failed", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Update failed")
 		return
 	}
 
@@ -267,7 +271,7 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Profile fields (username, displayName, avatarUrl, bio) are embedded in
 	// PostResponse / CommentResponse caches. Bust them so stale author info isn't served.
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		InvalidateFeedCaches()
 		invalidateAllCommentCachesForUser(userID)
 	})
@@ -280,9 +284,10 @@ func UpdateMeHandler(w http.ResponseWriter, r *http.Request) {
 // PutMeHandler replaces the authenticated user's profile fields entirely.
 // Both username and name are required in the body (PUT semantics).
 func PutMeHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -295,27 +300,27 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 		ShowLastSeen *bool   `json:"show_last_seen"`
 		Bio          *string `json:"bio"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &body); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	if body.Username == "" || body.Name == "" {
-		JSONError(w, "Both username and name are required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Both username and name are required")
 		return
 	}
 
 	// Username is immutable once set — reject attempts to change it
 	var existingUsername *string
-	err := postgress.GetRawDB().QueryRow(
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT username FROM users WHERE id = $1`, userID,
 	).Scan(&existingUsername)
 	if err != nil {
-		JSONError(w, "Failed to verify username", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to verify username")
 		return
 	}
 	if existingUsername != nil && *existingUsername != "" && *existingUsername != body.Username {
-		JSONError(w, "Username cannot be changed once set", http.StatusConflict)
+		helper.Error(w, http.StatusConflict, "Username cannot be changed once set")
 		return
 	}
 
@@ -347,7 +352,7 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 			maxBio = limits.MaxBioLength
 		}
 		if len(*body.Bio) > maxBio {
-			JSONError(w, fmt.Sprintf("Bio too long (max %d chars)", maxBio), http.StatusBadRequest)
+			helper.Error(w, http.StatusBadRequest, fmt.Sprintf("Bio too long (max %d chars)", maxBio))
 			return
 		}
 		bio = *body.Bio
@@ -366,17 +371,17 @@ func PutMeHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	var rawJSON string
-	err = postgress.GetRawDB().QueryRow(query, body.Username, body.Name, isPrivate, mobile, gender, showLastSeen, bio, userID).Scan(&rawJSON)
+	err = postgress.GetPool().QueryRow(ctx, query, body.Username, body.Name, isPrivate, mobile, gender, showLastSeen, bio, userID).Scan(&rawJSON)
 	if err != nil || rawJSON == "" {
 		log.Printf("[PutMe] DB error: %v", err)
-		JSONError(w, "Update failed", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Update failed")
 		return
 	}
 
 	redis.GetRawClient().Del(r.Context(), config.CacheUserMe+userID)
 
 	// Profile fields are embedded in feed/post/comment caches — bust them.
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		InvalidateFeedCaches()
 		invalidateAllCommentCachesForUser(userID)
 	})
@@ -419,9 +424,10 @@ func enrichWithBadge(rawJSON string, userID string) string {
 // ---------------------------------------------------------------------------
 
 func GetNotificationPreferencesHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -436,12 +442,12 @@ func GetNotificationPreferencesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var prefsJSON []byte
-	err := postgress.GetRawDB().QueryRow(
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT notification_prefs FROM users WHERE id = $1`, userID,
 	).Scan(&prefsJSON)
 	if err != nil {
 		log.Printf("[users] GetNotificationPreferences failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to load preferences", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load preferences")
 		return
 	}
 
@@ -458,15 +464,16 @@ func GetNotificationPreferencesHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func UpdateNotificationPreferencesHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	var incoming map[string]bool
-	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &incoming); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -477,7 +484,7 @@ func UpdateNotificationPreferencesHandler(w http.ResponseWriter, r *http.Request
 	}
 	for k := range incoming {
 		if !allowed[k] {
-			JSONError(w, "Unknown preference key: "+k, http.StatusBadRequest)
+			helper.Error(w, http.StatusBadRequest, "Unknown preference key: "+k)
 			return
 		}
 	}
@@ -485,19 +492,19 @@ func UpdateNotificationPreferencesHandler(w http.ResponseWriter, r *http.Request
 	// Merge with jsonb_set is fragile for multiple keys; instead use || merge
 	patchJSON, err := json.Marshal(incoming)
 	if err != nil {
-		JSONError(w, "Invalid preferences", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid preferences")
 		return
 	}
 
 	var updatedPrefs []byte
-	err = postgress.GetRawDB().QueryRow(
+	err = postgress.GetPool().QueryRow(ctx,
 		`UPDATE users SET notification_prefs = notification_prefs || $1::jsonb
 		 WHERE id = $2 RETURNING notification_prefs`,
 		patchJSON, userID,
 	).Scan(&updatedPrefs)
 	if err != nil {
 		log.Printf("[users] UpdateNotificationPreferences failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to update preferences", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to update preferences")
 		return
 	}
 

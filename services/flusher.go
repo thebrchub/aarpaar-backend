@@ -35,12 +35,6 @@ import (
 // parallel instead of one-at-a-time.
 // ---------------------------------------------------------------------------
 
-// flusherDone is used to signal the flusher to stop gracefully.
-var flusherDone = make(chan struct{})
-
-// flusherWg tracks the flusher goroutine for clean shutdown.
-var flusherWg sync.WaitGroup
-
 // consecutiveFlushFailures tracks how many flush cycles in a row had at least
 // one room fail. Used for exponential backoff when Postgres is unavailable.
 var consecutiveFlushFailures atomic.Int32
@@ -68,36 +62,12 @@ end
 return data
 `)
 
-// StartFlusher kicks off the background flush loop.
-// Call this once during application startup.
-func StartFlusher() {
-	ticker := time.NewTicker(config.FlushInterval)
-	flusherWg.Add(1)
-	go func() {
-		defer flusherWg.Done()
-		for {
-			select {
-			case <-flusherDone:
-				ticker.Stop()
-				// Final flush to persist any remaining buffered data
-				log.Println("[flusher] Final flush before shutdown...")
-				FlushAllDirtyRooms()
-				flushReceipts()
-				flushArenaEngagement()
-				return
-			case <-ticker.C:
-				FlushAllDirtyRooms()
-				flushReceipts()
-				flushArenaEngagement()
-			}
-		}
-	}()
-}
-
-// StopFlusher signals the flusher to stop and waits for the final flush to complete.
-func StopFlusher() {
-	close(flusherDone)
-	flusherWg.Wait()
+// FlushTick runs a single flush cycle (messages + receipts + arena engagement).
+// Exported for use by the cron scheduler.
+func FlushTick(_ context.Context) {
+	FlushAllDirtyRooms()
+	flushReceipts()
+	flushArenaEngagement()
 }
 
 // FlushAllDirtyRooms grabs every dirty room ID and processes them concurrently.
@@ -229,22 +199,35 @@ func flushOneRoom(targetID string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// bulkInsertToPostgres builds INSERT statements for messages, chunked to
-// avoid exceeding Postgres max query size on busy rooms.
-// Uses strconv.Itoa instead of fmt.Sprintf for performance in the hot path.
+// bulkInsertToPostgres uses postgress.InsertBatch to flush messages in one
+// pgx.Batch round-trip per chunk.
 // ---------------------------------------------------------------------------
 
+type messageRow struct {
+	RoomID   string `db:"room_id"`
+	SenderID string `db:"sender_id"`
+	Content  string `db:"content"`
+}
+
 func bulkInsertToPostgres(roomID string, rawMessages []string) error {
-	// Process in chunks to avoid giant SQL statements.
-	// Continue on individual chunk failures to avoid losing the remaining chunks.
+	rows := make([]messageRow, 0, len(rawMessages))
+	for _, rawMsg := range rawMessages {
+		senderID := gjson.Get(rawMsg, config.FieldFrom).String()
+		content := gjson.Get(rawMsg, config.FieldText).String()
+		if senderID == "" || content == "" {
+			continue
+		}
+		rows = append(rows, messageRow{RoomID: roomID, SenderID: senderID, Content: content})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
 	const chunkSize = 500
 	var firstErr error
-	for i := 0; i < len(rawMessages); i += chunkSize {
-		end := i + chunkSize
-		if end > len(rawMessages) {
-			end = len(rawMessages)
-		}
-		if err := insertMessageChunk(roomID, rawMessages[i:end]); err != nil {
+	for i := 0; i < len(rows); i += chunkSize {
+		end := min(i+chunkSize, len(rows))
+		if _, err := postgress.InsertBatch(context.Background(), "messages", rows[i:end]); err != nil {
 			log.Printf("[flusher] Chunk insert failed for room=%s offset=%d: %v", roomID, i, err)
 			if firstErr == nil {
 				firstErr = err
@@ -252,50 +235,6 @@ func bulkInsertToPostgres(roomID string, rawMessages []string) error {
 		}
 	}
 	return firstErr
-}
-
-func insertMessageChunk(roomID string, chunk []string) error {
-	var b strings.Builder
-	var valueArgs []interface{}
-	argID := 1
-	first := true
-
-	for _, rawMsg := range chunk {
-		// Extract sender and content from the raw JSON
-		senderID := gjson.Get(rawMsg, config.FieldFrom).String()
-		content := gjson.Get(rawMsg, config.FieldText).String()
-
-		// Skip malformed messages that are missing required fields
-		if senderID == "" || content == "" {
-			continue
-		}
-
-		if !first {
-			b.WriteByte(',')
-		}
-		first = false
-
-		// strconv.Itoa is significantly faster than fmt.Sprintf for int→string
-		b.WriteString("($")
-		b.WriteString(strconv.Itoa(argID))
-		b.WriteString(",$")
-		b.WriteString(strconv.Itoa(argID + 1))
-		b.WriteString(",$")
-		b.WriteString(strconv.Itoa(argID + 2))
-		b.WriteByte(')')
-		valueArgs = append(valueArgs, roomID, senderID, content)
-		argID += 3
-	}
-
-	// Nothing valid to insert
-	if len(valueArgs) == 0 {
-		return nil
-	}
-
-	query := "INSERT INTO messages (room_id, sender_id, content) VALUES " + b.String()
-
-	_, err := postgress.Exec(query, valueArgs...)
-	return err
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +342,7 @@ func flushReceiptHash(redisKey string, column string) {
 			"FROM (VALUES " + b.String() + ") AS v(room_id, user_id, ts) " +
 			"WHERE room_members.room_id = v.room_id AND room_members.user_id = v.user_id"
 
-		if _, err := postgress.Exec(query, args...); err != nil {
+		if _, err := postgress.Exec(context.Background(), query, args...); err != nil {
 			log.Printf("[flusher] Receipt flush failed for %s: %v", column, err)
 		}
 	}

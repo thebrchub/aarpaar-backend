@@ -86,7 +86,7 @@ func (c *Client) getFromName() string {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		var name string
-		err := postgress.GetRawDB().QueryRowContext(ctx,
+		err := postgress.GetPool().QueryRow(ctx,
 			`SELECT COALESCE(name, '') FROM users WHERE id = $1`, c.UserID,
 		).Scan(&name)
 		if err != nil {

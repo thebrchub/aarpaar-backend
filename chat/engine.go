@@ -99,31 +99,19 @@ func NewEngine() *Engine {
 	// Start orphan call state scanner (cleans up after server crashes)
 	startOrphanCallScanner(e.done)
 
-	// Log connection metrics only when usage is critically high (>80% capacity)
-	// or when messages/tasks are being dropped.
-	go func() {
-		ticker := time.NewTicker(120 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-e.done:
-				return
-			case <-ticker.C:
-				conns := activeConns.Load()
-				if conns > maxConnections*80/100 {
-					log.Printf("[engine] ⚠ High connection usage: %d / %d (%.0f%%)", conns, maxConnections, float64(conns)/float64(maxConnections)*100)
-				}
-				if n := droppedMessages.Swap(0); n > 0 {
-					log.Printf("[engine] Dropped %d messages (client buffers full) in last 30s", n)
-				}
-				if n := droppedBackgroundTasks.Swap(0); n > 0 {
-					log.Printf("[engine] Dropped %d background tasks (pool exhausted) in last 30s", n)
-				}
-			}
-		}
-	}()
-
 	return e
+}
+
+// EngineMetricsTick logs warnings for high connection usage and dropped messages.
+// Exported for use by the cron scheduler.
+func EngineMetricsTick(_ context.Context) {
+	conns := activeConns.Load()
+	if conns > maxConnections*80/100 {
+		log.Printf("[engine] ⚠ High connection usage: %d / %d (%.0f%%)", conns, maxConnections, float64(conns)/float64(maxConnections)*100)
+	}
+	if n := droppedMessages.Swap(0); n > 0 {
+		log.Printf("[engine] Dropped %d messages (client buffers full) in last 30s", n)
+	}
 }
 
 // Shutdown stops the Redis Pub/Sub listener and closes all client connections.
@@ -181,11 +169,11 @@ func (e *Engine) Register(c *Client) {
 
 	// If this is the user's first device, broadcast "online" to friends
 	if firstDevice {
-		RunBackground(func() { e.broadcastPresence(c.UserID, true) })
+		Pool.Submit(func() { e.broadcastPresence(c.UserID, true) })
 	}
 
 	// Deliver pending incoming call if user has an unanswered call as callee
-	RunBackground(func() { e.deliverPendingCall(c) })
+	Pool.Submit(func() { e.deliverPendingCall(c) })
 }
 
 // Unregister removes a client when they disconnect (close tab / app).
@@ -225,13 +213,13 @@ func (e *Engine) Unregister(c *Client) {
 	// auto-end any active call, and remove from matchmaking queue.
 	// Split into separate background tasks for better parallelism during mass-disconnect.
 	if lastDevice {
-		RunBackground(func() {
+		Pool.Submit(func() {
 			e.handleCallDisconnect(c.UserID)
 		})
-		RunBackground(func() {
+		Pool.Submit(func() {
 			e.handleUserWentOffline(c.UserID)
 		})
-		RunBackground(func() {
+		Pool.Submit(func() {
 			// Clean up match queue so offline users don't get matched
 			ctx, cancel := context.WithTimeout(context.Background(), config.RedisOpTimeout)
 			redis.GetRawClient().SRem(ctx, config.DefaultMatchQueue, c.UserID)
@@ -239,7 +227,7 @@ func (e *Engine) Unregister(c *Client) {
 		})
 		// Notify bot service to cancel any pending bot match timer
 		if e.OnUserOffline != nil {
-			RunBackground(func() { e.OnUserOffline(c.UserID) })
+			Pool.Submit(func() { e.OnUserOffline(c.UserID) })
 		}
 	}
 }
@@ -330,7 +318,7 @@ func (e *Engine) LeaveRoomForUser(userID string, roomID string) {
 func getUserActiveRoomIDs(userID string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT room_id FROM room_members WHERE user_id = $1 AND status = 'active'`,
 		userID,
 	)
@@ -559,7 +547,7 @@ func (e *Engine) subscribeAndListen() {
 						}
 						capturedRoom := roomID
 						capturedSender := senderID
-						RunBackground(func() {
+						Pool.Submit(func() {
 							e.sendMessagePush(capturedRoom, capturedSender, senderName, preview)
 						})
 					}
@@ -687,25 +675,25 @@ func isBlockedInRoom(senderID, roomID string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	rdb := redis.GetRawClient()
-
-	// Resolve the other user in the DM room. Cached in Redis to avoid a
-	// Postgres hit on every single DM message.
+	// Resolve the other user in the DM room via redis.FetchRaw (singleflight dedup).
 	dmKey := config.CacheDMOther + roomID + ":" + senderID
-	otherID, err := rdb.Get(ctx, dmKey).Result()
-	if err != nil {
-		// Cache miss — hit Postgres once and cache for 5 minutes
-		err = postgress.GetRawDB().QueryRowContext(ctx,
+	otherRaw, err := redis.FetchRaw(ctx, dmKey, config.CacheTTLDMOther, func(ctx context.Context) ([]byte, error) {
+		var otherID string
+		err := postgress.GetPool().QueryRow(ctx,
 			`SELECT rm.user_id FROM room_members rm
 			 JOIN rooms r ON r.id = rm.room_id AND r.type = 'DM'
 			 WHERE rm.room_id = $1 AND rm.user_id != $2 AND rm.status = 'active'
 			 LIMIT 1`, roomID, senderID,
 		).Scan(&otherID)
 		if err != nil {
-			return false // not a DM room or no other member
+			return nil, err
 		}
-		rdb.Set(ctx, dmKey, otherID, config.CacheTTLDMOther)
+		return []byte(otherID), nil
+	})
+	if err != nil || len(otherRaw) == 0 {
+		return false
 	}
+	otherID := string(otherRaw)
 
 	return isBlockedPairCached(ctx, senderID, otherID)
 }
@@ -725,7 +713,7 @@ func isBlockedPairCached(ctx context.Context, userA, userB string) bool {
 	}
 
 	var blocked bool
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT EXISTS (
 			SELECT 1 FROM blocked_users
 			WHERE (blocker_id = $1 AND blocked_id = $2)
@@ -787,7 +775,7 @@ func (e *Engine) sendMessagePush(roomID, senderID, senderName, preview string) {
 	memberIDs, cacheErr := rdb.SMembers(ctx, memberCacheKey).Result()
 	if cacheErr != nil || len(memberIDs) == 0 {
 		// Cache miss — query Postgres and populate cache
-		rows, err := postgress.GetRawDB().QueryContext(ctx,
+		rows, err := postgress.GetPool().Query(ctx,
 			`SELECT user_id FROM room_members WHERE room_id = $1 AND status = 'active' LIMIT 200`,
 			roomID,
 		)
@@ -926,7 +914,7 @@ func (e *Engine) DisconnectUser(userID string) {
 func getFriendIDs(userID string) []string {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
 		 UNION ALL
 		 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`,
@@ -955,7 +943,7 @@ func getFriendIDs(userID string) []string {
 func getBlockedSet(userID string) map[string]bool {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT blocked_id FROM blocked_users WHERE blocker_id = $1
 		 UNION ALL
 		 SELECT blocker_id FROM blocked_users WHERE blocked_id = $1`,
@@ -983,7 +971,7 @@ func (e *Engine) broadcastPresence(userID string, online bool) {
 	var showLastSeen, isPrivate bool
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT show_last_seen, is_private FROM users WHERE id = $1`, userID,
 	).Scan(&showLastSeen, &isPrivate)
 	if err != nil {
@@ -1056,7 +1044,7 @@ func (e *Engine) handleUserWentOffline(userID string) {
 	// Update last_seen_at in the database
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	_, err := postgress.GetRawDB().ExecContext(ctx,
+	_, err := postgress.GetPool().Exec(ctx,
 		`UPDATE users SET last_seen_at = NOW() WHERE id = $1`, userID,
 	)
 	if err != nil {

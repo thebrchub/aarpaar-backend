@@ -15,6 +15,7 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/google/uuid"
 	"github.com/shivanand-burli/go-starter-kit/bot"
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
 	"github.com/thebrchub/aarpaar/config"
@@ -215,7 +216,6 @@ func InitBot() {
 
 	log.Printf("[bot] Bot service initialized (retrieval engine, %d personas)", len(personaNames))
 	go botRedisListener()
-	go staleBotSessionSweeper()
 
 	// Schedule bot matches for users already waiting in the queue.
 	go scheduleForQueuedUsers()
@@ -224,28 +224,20 @@ func InitBot() {
 // staleBotSessionSweeper periodically checks for stale bot sessions where
 // the done channel is already closed (session ended) but the map entry
 // wasn't cleaned up. This acts as a safety net against leaks.
-func staleBotSessionSweeper() {
-	ticker := time.NewTicker(60 * time.Second)
-	defer ticker.Stop()
-	for {
+// SweepStaleBotSessions removes ended sessions from the map.
+// Exported for use by the cron scheduler.
+func SweepStaleBotSessions(_ context.Context) {
+	sessions.Range(func(key, value any) bool {
+		session := value.(*BotSession)
 		select {
-		case <-botDone:
-			return
-		case <-ticker.C:
-			sessions.Range(func(key, value any) bool {
-				session := value.(*BotSession)
-				select {
-				case <-session.done:
-					// Session already ended but still in map — clean up
-					sessions.Delete(key)
-					sessionCount.Add(-1)
-					botUserIDs.Delete(session.BotUserID)
-				default:
-				}
-				return true
-			})
+		case <-session.done:
+			sessions.Delete(key)
+			sessionCount.Add(-1)
+			botUserIDs.Delete(session.BotUserID)
+		default:
 		}
-	}
+		return true
+	})
 }
 
 // extractPersonaNames parses the corpus TSV and extracts unique persona tags,
@@ -393,7 +385,7 @@ func matchWithBot(userID string) {
 	botName := persona
 
 	// Create stranger room
-	roomID := config.STRANGER_PREFIX + uuid.New().String()
+	roomID := config.STRANGER_PREFIX + helper.RandomUUID()
 
 	// Store both participants in Redis (same as human match)
 	if err := rdb.SAdd(ctx, config.STRANGER_MEMBERS_COLON+roomID, userID, botUserID).Err(); err != nil {

@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
-	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/shivanand-burli/go-starter-kit/rtc"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/models"
 )
@@ -52,7 +53,7 @@ func GetCallConfigHandler(w http.ResponseWriter, r *http.Request) {
 		resp.LiveKit = &LKConfig{URL: RTC.GetURL()}
 	}
 
-	JSONSuccess(w, resp)
+	helper.JSON(w, http.StatusOK, resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -64,13 +65,13 @@ func GetCallConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetCallHistoryHandler returns the user's call history.
 func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value(config.UserIDKey).(string)
+	userID := middleware.Subject(r.Context())
 
 	limit, offset := parsePagination(r)
 
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`WITH my_calls AS (
 			SELECT call_id, call_type, tier, started_at, ended_at,
 			       duration_seconds, initiated_by, peer_id
@@ -104,7 +105,7 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("[calls] GetCallHistory query failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to fetch call history", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to fetch call history")
 		return
 	}
 	defer rows.Close()
@@ -142,7 +143,7 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		calls = []callEntry{}
 	}
 
-	JSONSuccess(w, calls)
+	helper.JSON(w, http.StatusOK, calls)
 }
 
 // ---------------------------------------------------------------------------
@@ -151,25 +152,25 @@ func GetCallHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 // StartGroupCallHandler creates a new group call.
 func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	groupID := r.PathValue("groupId")
 	if groupID == "" {
-		JSONError(w, "Missing group ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing group ID")
 		return
 	}
 
 	if !config.GroupCallsEnabled {
-		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Group calls are disabled")
 		return
 	}
 
 	if RTC == nil || !RTC.IsConfigured() {
-		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
+		helper.Error(w, http.StatusServiceUnavailable, "Group calls are not available")
 		return
 	}
 
@@ -178,13 +179,13 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verify requester is an active member
 	if !isGroupMember(ctx, groupID, userID) {
-		JSONError(w, "Not a member of this group", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Not a member of this group")
 		return
 	}
 
 	// Parse request body
 	var req models.StartGroupCallRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := helper.ReadJSON(r, &req); err != nil {
 		req.CallType = config.CallTypeVideo // default
 	}
 	if req.CallType != config.CallTypeAudio && req.CallType != config.CallTypeVideo {
@@ -192,12 +193,12 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate a unique call ID
-	callID := uuid.New().String()
+	callID := helper.RandomUUID()
 	lkRoomName := fmt.Sprintf("group_%s_%s", groupID, callID)
 
 	// Create LiveKit room (single shared client — no per-request allocation)
 	var maxMembers int
-	if err := postgress.GetRawDB().QueryRowContext(ctx,
+	if err := postgress.GetPool().QueryRow(ctx,
 		`SELECT max_members FROM rooms WHERE id = $1`, groupID,
 	).Scan(&maxMembers); err != nil {
 		log.Printf("[calls] maxMembers query failed group=%s: %v", groupID, err)
@@ -209,13 +210,13 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	_, err := RTC.CreateRoom(ctx, lkRoomName, maxMembers)
 	if err != nil {
 		log.Printf("[calls] RTC.CreateRoom failed group=%s: %v", groupID, err)
-		JSONError(w, "Failed to create call room", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to create call room")
 		return
 	}
 
 	// Get initiator's name for token
 	var userName string
-	if err := postgress.GetRawDB().QueryRowContext(ctx,
+	if err := postgress.GetPool().QueryRow(ctx,
 		`SELECT COALESCE(name, '') FROM users WHERE id = $1`, userID,
 	).Scan(&userName); err != nil {
 		log.Printf("[calls] userName query failed user=%s: %v", userID, err)
@@ -225,7 +226,7 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	token, err := RTC.GenerateToken(lkRoomName, userID, userName, true, true)
 	if err != nil {
 		log.Printf("[calls] RTC.GenerateToken failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to create call room", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to create call room")
 		return
 	}
 
@@ -244,14 +245,14 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	callState, err := json.Marshal(state)
 	if err != nil {
 		log.Printf("[calls] Marshal call state failed group=%s: %v", groupID, err)
-		JSONError(w, "Internal error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 	rdb := redisClient()
 	acquired, err := rdb.SetNX(ctx, config.GROUP_CALL_COLON+groupID, callState, 24*time.Hour).Result()
 	if err != nil {
 		log.Printf("[calls] Redis SetNX failed group=%s: %v", groupID, err)
-		JSONError(w, "Internal error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 	if !acquired {
@@ -259,12 +260,12 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		if delErr := RTC.DeleteRoom(ctx, lkRoomName); delErr != nil {
 			log.Printf("[calls] RTC.DeleteRoom cleanup failed group=%s room=%s: %v", groupID, lkRoomName, delErr)
 		}
-		JSONError(w, "A call is already active in this group", http.StatusConflict)
+		helper.Error(w, http.StatusConflict, "A call is already active in this group")
 		return
 	}
 
 	// Log the call to Postgres — clean up Redis + LiveKit on failure
-	if _, dbErr := postgress.GetRawDB().ExecContext(ctx,
+	if _, dbErr := postgress.GetPool().Exec(ctx,
 		`INSERT INTO call_logs (call_id, room_id, initiated_by, call_type, tier, max_participants, participants)
 		 VALUES ($1, $2, $3, $4, 'sfu', $5, ARRAY[$3])`,
 		callID, groupID, userID, req.CallType, maxMembers,
@@ -274,7 +275,7 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		if delErr := RTC.DeleteRoom(ctx, lkRoomName); delErr != nil {
 			log.Printf("[calls] RTC.DeleteRoom cleanup failed group=%s room=%s: %v", groupID, lkRoomName, delErr)
 		}
-		JSONError(w, "Failed to start group call", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to start group call")
 		return
 	}
 
@@ -287,7 +288,7 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		config.FieldCallType:    req.CallType,
 	}, memberIDs)
 
-	JSONSuccess(w, models.StartGroupCallResponse{
+	helper.JSON(w, http.StatusOK, models.StartGroupCallResponse{
 		CallID:     callID,
 		Token:      token,
 		LiveKitURL: RTC.GetURL(),
@@ -296,26 +297,26 @@ func StartGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 
 // JoinGroupCallHandler joins an ongoing group call.
 func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	groupID := r.PathValue("groupId")
 	callID := r.PathValue("callId")
 	if groupID == "" || callID == "" {
-		JSONError(w, "Missing group or call ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing group or call ID")
 		return
 	}
 
 	if !config.GroupCallsEnabled {
-		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Group calls are disabled")
 		return
 	}
 
 	if RTC == nil || !RTC.IsConfigured() {
-		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
+		helper.Error(w, http.StatusServiceUnavailable, "Group calls are not available")
 		return
 	}
 
@@ -324,7 +325,7 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verify membership
 	if !isGroupMember(ctx, groupID, userID) {
-		JSONError(w, "Not a member of this group", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Not a member of this group")
 		return
 	}
 
@@ -332,13 +333,13 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	rdb := redisClient()
 	state, err := loadGroupCallState(ctx, rdb, groupID)
 	if err != nil {
-		JSONError(w, "No active call in this group", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "No active call in this group")
 		return
 	}
 
 	// Verify callId matches
 	if state.CallID != callID {
-		JSONError(w, "Call ID mismatch", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Call ID mismatch")
 		return
 	}
 
@@ -349,7 +350,7 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get user's name for token
 	var userName string
-	if err := postgress.GetRawDB().QueryRowContext(ctx,
+	if err := postgress.GetPool().QueryRow(ctx,
 		`SELECT COALESCE(name, '') FROM users WHERE id = $1`, userID,
 	).Scan(&userName); err != nil {
 		log.Printf("[calls] userName query failed user=%s: %v", userID, err)
@@ -359,7 +360,7 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	token, err := RTC.GenerateToken(lkRoomName, userID, userName, true, true)
 	if err != nil {
 		log.Printf("[calls] RTC.GenerateToken failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to generate call token", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to generate call token")
 		return
 	}
 
@@ -377,7 +378,7 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	saveGroupCallState(ctx, rdb, groupID, state)
 
 	// Update participants array in call_logs
-	if _, err := postgress.GetRawDB().ExecContext(ctx,
+	if _, err := postgress.GetPool().Exec(ctx,
 		`UPDATE call_logs SET participants = array_append(
 			CASE WHEN $2 = ANY(participants) THEN participants
 			     ELSE participants END, $2)
@@ -395,7 +396,7 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		config.FieldUserID: userID,
 	}, memberIDs)
 
-	JSONSuccess(w, models.LiveKitTokenResponse{
+	helper.JSON(w, http.StatusOK, models.LiveKitTokenResponse{
 		Token:      token,
 		LiveKitURL: RTC.GetURL(),
 	})
@@ -403,21 +404,21 @@ func JoinGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 
 // LeaveGroupCallHandler leaves a group call.
 func LeaveGroupCallHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	groupID := r.PathValue("groupId")
 	callID := r.PathValue("callId")
 	if groupID == "" || callID == "" {
-		JSONError(w, "Missing group or call ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing group or call ID")
 		return
 	}
 
 	if !config.GroupCallsEnabled {
-		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Group calls are disabled")
 		return
 	}
 
@@ -427,12 +428,12 @@ func LeaveGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 	rdb := redisClient()
 	state, err := loadGroupCallState(ctx, rdb, groupID)
 	if err != nil {
-		JSONError(w, "No active call in this group", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "No active call in this group")
 		return
 	}
 
 	if state.CallID != callID {
-		JSONError(w, "Call ID mismatch", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Call ID mismatch")
 		return
 	}
 
@@ -481,7 +482,7 @@ func LeaveGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		duration := int(time.Since(state.StartedAt).Seconds())
 
 		// Update call log
-		if _, err := postgress.GetRawDB().ExecContext(ctx,
+		if _, err := postgress.GetPool().Exec(ctx,
 			`UPDATE call_logs SET ended_at = NOW(), duration_seconds = $2
 			 WHERE call_id = $1`, callID, duration,
 		); err != nil {
@@ -500,26 +501,26 @@ func LeaveGroupCallHandler(w http.ResponseWriter, r *http.Request) {
 		saveGroupCallState(ctx, rdb, groupID, state)
 	}
 
-	JSONMessage(w, "ok", "Left the call")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "Left the call"})
 }
 
 // GetGroupCallStatusHandler returns the status of an active group call.
 func GetGroupCallStatusHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	groupID := r.PathValue("groupId")
 	callID := r.PathValue("callId")
 	if groupID == "" || callID == "" {
-		JSONError(w, "Missing group or call ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing group or call ID")
 		return
 	}
 
 	if !config.GroupCallsEnabled {
-		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Group calls are disabled")
 		return
 	}
 
@@ -528,19 +529,19 @@ func GetGroupCallStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verify membership
 	if !isGroupMember(ctx, groupID, userID) {
-		JSONError(w, "Not a member of this group", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Not a member of this group")
 		return
 	}
 
 	rdb := redisClient()
 	state, err := loadGroupCallState(ctx, rdb, groupID)
 	if err != nil {
-		JSONError(w, "No active call in this group", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "No active call in this group")
 		return
 	}
 
 	if state.CallID != callID {
-		JSONError(w, "Call ID mismatch", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Call ID mismatch")
 		return
 	}
 
@@ -597,7 +598,7 @@ func GetGroupCallStatusHandler(w http.ResponseWriter, r *http.Request) {
 		admins = []string{}
 	}
 
-	JSONSuccess(w, models.GroupCallStatusResponse{
+	helper.JSON(w, http.StatusOK, models.GroupCallStatusResponse{
 		CallID:       state.CallID,
 		InitiatedBy:  state.InitiatedBy,
 		CallType:     state.CallType,
@@ -608,7 +609,7 @@ func GetGroupCallStatusHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // redisClient is a convenience helper to get the Redis client.
-func redisClient() *goredis.Client {
+func redisClient() goredis.UniversalClient {
 	return redis.GetRawClient()
 }
 
@@ -617,7 +618,7 @@ func redisClient() *goredis.Client {
 // ---------------------------------------------------------------------------
 
 // loadGroupCallState loads and unmarshals a GroupCallState from Redis.
-func loadGroupCallState(ctx context.Context, rdb *goredis.Client, groupID string) (*models.GroupCallState, error) {
+func loadGroupCallState(ctx context.Context, rdb goredis.UniversalClient, groupID string) (*models.GroupCallState, error) {
 	data, err := rdb.Get(ctx, config.GROUP_CALL_COLON+groupID).Result()
 	if err != nil {
 		return nil, err
@@ -630,7 +631,7 @@ func loadGroupCallState(ctx context.Context, rdb *goredis.Client, groupID string
 }
 
 // saveGroupCallState marshals and saves a GroupCallState to Redis with 24h TTL.
-func saveGroupCallState(ctx context.Context, rdb *goredis.Client, groupID string, state *models.GroupCallState) {
+func saveGroupCallState(ctx context.Context, rdb goredis.UniversalClient, groupID string, state *models.GroupCallState) {
 	data, err := json.Marshal(state)
 	if err != nil {
 		log.Printf("[calls] Marshal call state failed group=%s: %v", groupID, err)
@@ -675,40 +676,40 @@ func removeString(slice []string, s string) []string {
 
 // MuteParticipantHandler mutes or unmutes a participant's track.
 func MuteParticipantHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	groupID := r.PathValue("groupId")
 	callID := r.PathValue("callId")
 	if groupID == "" || callID == "" {
-		JSONError(w, "Missing group or call ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing group or call ID")
 		return
 	}
 
 	var req models.MuteParticipantRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 	if req.UserID == "" {
-		JSONError(w, "userId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "userId is required")
 		return
 	}
 	if req.TrackType != config.TrackTypeAudio && req.TrackType != config.TrackTypeVideo && req.TrackType != config.TrackTypeScreen {
-		JSONError(w, "trackType must be one of: audio, video, screen", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "trackType must be one of: audio, video, screen")
 		return
 	}
 
 	if !config.GroupCallsEnabled {
-		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Group calls are disabled")
 		return
 	}
 
 	if RTC == nil || !RTC.IsConfigured() {
-		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
+		helper.Error(w, http.StatusServiceUnavailable, "Group calls are not available")
 		return
 	}
 
@@ -716,34 +717,34 @@ func MuteParticipantHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if !isGroupMember(ctx, groupID, userID) {
-		JSONError(w, "Not a member of this group", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Not a member of this group")
 		return
 	}
 
 	rdb := redisClient()
 	state, err := loadGroupCallState(ctx, rdb, groupID)
 	if err != nil {
-		JSONError(w, "No active call in this group", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "No active call in this group")
 		return
 	}
 
 	if state.CallID != callID {
-		JSONError(w, "Call ID mismatch", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Call ID mismatch")
 		return
 	}
 
 	if !isCallAdmin(state, userID, ctx, groupID) {
-		JSONError(w, "Only call admins can mute participants", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Only call admins can mute participants")
 		return
 	}
 
 	if !containsString(state.Participants, req.UserID) {
-		JSONError(w, "Target user is not in the call", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Target user is not in the call")
 		return
 	}
 
 	if req.UserID == userID {
-		JSONError(w, "Cannot mute yourself via this endpoint, use client-side toggle", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Cannot mute yourself via this endpoint, use client-side toggle")
 		return
 	}
 
@@ -796,41 +797,41 @@ func MuteParticipantHandler(w http.ResponseWriter, r *http.Request) {
 		config.FieldMuted:     req.Muted,
 	}, memberIDs)
 
-	JSONMessage(w, "ok", "Participant muted")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "Participant muted"})
 }
 
 // KickParticipantHandler kicks a participant from the call.
 func KickParticipantHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	groupID := r.PathValue("groupId")
 	callID := r.PathValue("callId")
 	if groupID == "" || callID == "" {
-		JSONError(w, "Missing group or call ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing group or call ID")
 		return
 	}
 
 	var req models.KickParticipantRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 	if req.UserID == "" {
-		JSONError(w, "userId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "userId is required")
 		return
 	}
 
 	if !config.GroupCallsEnabled {
-		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Group calls are disabled")
 		return
 	}
 
 	if RTC == nil || !RTC.IsConfigured() {
-		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
+		helper.Error(w, http.StatusServiceUnavailable, "Group calls are not available")
 		return
 	}
 
@@ -838,34 +839,34 @@ func KickParticipantHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if !isGroupMember(ctx, groupID, userID) {
-		JSONError(w, "Not a member of this group", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Not a member of this group")
 		return
 	}
 
 	rdb := redisClient()
 	state, err := loadGroupCallState(ctx, rdb, groupID)
 	if err != nil {
-		JSONError(w, "No active call in this group", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "No active call in this group")
 		return
 	}
 
 	if state.CallID != callID {
-		JSONError(w, "Call ID mismatch", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Call ID mismatch")
 		return
 	}
 
 	if !isCallAdmin(state, userID, ctx, groupID) {
-		JSONError(w, "Only call admins can kick participants", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Only call admins can kick participants")
 		return
 	}
 
 	if !containsString(state.Participants, req.UserID) {
-		JSONError(w, "Target user is not in the call", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Target user is not in the call")
 		return
 	}
 
 	if req.UserID == userID {
-		JSONError(w, "Cannot kick yourself, use the leave endpoint", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Cannot kick yourself, use the leave endpoint")
 		return
 	}
 
@@ -893,7 +894,7 @@ func KickParticipantHandler(w http.ResponseWriter, r *http.Request) {
 		rdb.Del(ctx, config.GROUP_CALL_COLON+groupID)
 
 		duration := int(time.Since(state.StartedAt).Seconds())
-		if _, err := postgress.GetRawDB().ExecContext(ctx,
+		if _, err := postgress.GetPool().Exec(ctx,
 			`UPDATE call_logs SET ended_at = NOW(), duration_seconds = $2
 			 WHERE call_id = $1`, callID, duration,
 		); err != nil {
@@ -908,41 +909,41 @@ func KickParticipantHandler(w http.ResponseWriter, r *http.Request) {
 		saveGroupCallState(ctx, rdb, groupID, state)
 	}
 
-	JSONMessage(w, "ok", "Participant removed from call")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "Participant removed from call"})
 }
 
 // PromoteCallAdminHandler promotes a call participant to call admin.
 func PromoteCallAdminHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	groupID := r.PathValue("groupId")
 	callID := r.PathValue("callId")
 	if groupID == "" || callID == "" {
-		JSONError(w, "Missing group or call ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing group or call ID")
 		return
 	}
 
 	var req models.CallAdminRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 	if req.UserID == "" {
-		JSONError(w, "userId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "userId is required")
 		return
 	}
 
 	if !config.GroupCallsEnabled {
-		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Group calls are disabled")
 		return
 	}
 
 	if RTC == nil || !RTC.IsConfigured() {
-		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
+		helper.Error(w, http.StatusServiceUnavailable, "Group calls are not available")
 		return
 	}
 
@@ -950,34 +951,34 @@ func PromoteCallAdminHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if !isGroupMember(ctx, groupID, userID) {
-		JSONError(w, "Not a member of this group", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Not a member of this group")
 		return
 	}
 
 	rdb := redisClient()
 	state, err := loadGroupCallState(ctx, rdb, groupID)
 	if err != nil {
-		JSONError(w, "No active call in this group", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "No active call in this group")
 		return
 	}
 
 	if state.CallID != callID {
-		JSONError(w, "Call ID mismatch", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Call ID mismatch")
 		return
 	}
 
 	if !isCallAdmin(state, userID, ctx, groupID) {
-		JSONError(w, "Only call admins can promote participants", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Only call admins can promote participants")
 		return
 	}
 
 	if !containsString(state.Participants, req.UserID) {
-		JSONError(w, "Target user is not in the call", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Target user is not in the call")
 		return
 	}
 
 	if containsString(state.Admins, req.UserID) {
-		JSONError(w, "User is already a call admin", http.StatusConflict)
+		helper.Error(w, http.StatusConflict, "User is already a call admin")
 		return
 	}
 
@@ -999,31 +1000,31 @@ func PromoteCallAdminHandler(w http.ResponseWriter, r *http.Request) {
 		config.FieldRole:      config.RoleAdmin,
 	}, memberIDs)
 
-	JSONMessage(w, "ok", "Participant promoted to call admin")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "Participant promoted to call admin"})
 }
 
 // ForceEndCallHandler force-ends a group call.
 func ForceEndCallHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	groupID := r.PathValue("groupId")
 	callID := r.PathValue("callId")
 	if groupID == "" || callID == "" {
-		JSONError(w, "Missing group or call ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing group or call ID")
 		return
 	}
 
 	if !config.GroupCallsEnabled {
-		JSONError(w, "Group calls are disabled", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Group calls are disabled")
 		return
 	}
 
 	if RTC == nil || !RTC.IsConfigured() {
-		JSONError(w, "Group calls are not available", http.StatusServiceUnavailable)
+		helper.Error(w, http.StatusServiceUnavailable, "Group calls are not available")
 		return
 	}
 
@@ -1031,24 +1032,24 @@ func ForceEndCallHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if !isGroupMember(ctx, groupID, userID) {
-		JSONError(w, "Not a member of this group", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Not a member of this group")
 		return
 	}
 
 	rdb := redisClient()
 	state, err := loadGroupCallState(ctx, rdb, groupID)
 	if err != nil {
-		JSONError(w, "No active call in this group", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "No active call in this group")
 		return
 	}
 
 	if state.CallID != callID {
-		JSONError(w, "Call ID mismatch", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Call ID mismatch")
 		return
 	}
 
 	if !isCallAdmin(state, userID, ctx, groupID) {
-		JSONError(w, "Only call admins can force-end a call", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Only call admins can force-end a call")
 		return
 	}
 
@@ -1066,7 +1067,7 @@ func ForceEndCallHandler(w http.ResponseWriter, r *http.Request) {
 	duration := int(time.Since(state.StartedAt).Seconds())
 
 	// Update call_logs
-	if _, err := postgress.GetRawDB().ExecContext(ctx,
+	if _, err := postgress.GetPool().Exec(ctx,
 		`UPDATE call_logs SET ended_at = NOW(), duration_seconds = $2
 		 WHERE call_id = $1`, callID, duration,
 	); err != nil {
@@ -1081,5 +1082,5 @@ func ForceEndCallHandler(w http.ResponseWriter, r *http.Request) {
 		config.FieldEndedBy: userID,
 	}, memberIDs)
 
-	JSONMessage(w, "ok", "Call ended")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "Call ended"})
 }

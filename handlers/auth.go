@@ -2,20 +2,25 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/goccy/go-json"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/shivanand-burli/go-starter-kit/jwt"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
 	"google.golang.org/api/idtoken"
 )
+
+// IDTokenValidator is set at startup with a tuned HTTP client.
+var IDTokenValidator *idtoken.Validator
 
 // ---------------------------------------------------------------------------
 // Request / Response Types
@@ -35,16 +40,16 @@ type LoginResponse struct {
 // user in Postgres, and returns JWT access + refresh tokens.
 func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	// 1. Verify the Google ID token (checks signature + expiry)
-	payload, err := idtoken.Validate(context.Background(), req.GoogleIDToken, config.GoogleClientID)
+	payload, err := IDTokenValidator.Validate(context.Background(), req.GoogleIDToken, config.GoogleClientID)
 	if err != nil {
 		log.Printf("[auth] Google token validation failed: %v", err)
-		JSONError(w, "Invalid Google Token", http.StatusUnauthorized)
+		helper.Error(w, http.StatusUnauthorized, "Invalid Google Token")
 		return
 	}
 
@@ -53,7 +58,7 @@ func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	email, ok := payload.Claims["email"].(string)
 	if !ok || email == "" {
-		JSONError(w, "Google token missing email claim", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Google token missing email claim")
 		return
 	}
 
@@ -71,13 +76,13 @@ func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 	userID, isBanned, err := upsertUser(googleID, email, name, picture)
 	if err != nil {
 		log.Printf("[auth] upsertUser failed email=%s: %v", email, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	// 3.5. Check if the user is banned
 	if isBanned {
-		JSONError(w, "Account is banned", http.StatusForbidden)
+		helper.Error(w, http.StatusForbidden, "Account is banned")
 		return
 	}
 
@@ -85,49 +90,19 @@ func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 	accessToken, refreshToken, err := jwt.GenerateToken(userID, nil)
 	if err != nil {
 		log.Printf("[auth] GenerateToken failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to generate tokens", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to generate tokens")
 		return
 	}
 
-	// 5. Return the tokens to the client
-	JSONSuccess(w, LoginResponse{
+	// 5. Set auth cookies (mobile ignores these, web uses them)
+	middleware.SetAuthCookies(w, "", accessToken, refreshToken)
+
+	// 6. Return the tokens to the client
+	helper.JSON(w, http.StatusOK, LoginResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		UserID:       userID,
 	})
-}
-
-// ValidateTokenHandler is an internal endpoint for microservices to validate
-// a JWT and get the associated user ID. Protected by X-API-Key, not JWT auth.
-func ValidateTokenHandler(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Token  string `json:"token"`
-		UserID string `json:"user_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
-		JSONError(w, "token is required", http.StatusBadRequest)
-		return
-	}
-
-	claims, err := jwt.VerifyToken("Bearer " + req.Token)
-	if err != nil {
-		JSONError(w, "Invalid token", http.StatusUnauthorized)
-		return
-	}
-
-	tokenUserID, ok := claims["sub"].(string)
-	if !ok || tokenUserID == "" {
-		JSONError(w, "Invalid token", http.StatusUnauthorized)
-		return
-	}
-
-	// If a user_id was provided, verify it matches the token's subject
-	if req.UserID != "" && req.UserID != tokenUserID {
-		JSONError(w, "Permission denied", http.StatusForbidden)
-		return
-	}
-
-	JSONSuccess(w, map[string]string{"user_id": tokenUserID})
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +111,7 @@ func ValidateTokenHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func upsertUser(googleID, email, name, avatar string) (string, bool, error) {
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	var userID string
 	var isBanned bool
 
@@ -155,8 +130,8 @@ func upsertUser(googleID, email, name, avatar string) (string, bool, error) {
 	`
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	err := db.QueryRowContext(ctx, query, googleID, email, name, avatar).Scan(&userID, &isBanned)
-	if err != nil && err != sql.ErrNoRows {
+	err := db.QueryRow(ctx, query, googleID, email, name, avatar).Scan(&userID, &isBanned)
+	if err != nil && err != pgx.ErrNoRows {
 		return "", false, err
 	}
 	return userID, isBanned, nil
@@ -165,35 +140,6 @@ func upsertUser(googleID, email, name, avatar string) (string, bool, error) {
 // ---------------------------------------------------------------------------
 // Refresh Token
 // ---------------------------------------------------------------------------
-
-type RefreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
-}
-
-type RefreshResponse struct {
-	AccessToken string `json:"access_token"`
-}
-
-// RefreshTokenHandler exchanges a valid refresh token for a new access token.
-func RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
-	var req RefreshRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Validate the refresh token and get a new access token
-	accessToken, _, err := jwt.RefreshToken(req.RefreshToken)
-	if err != nil {
-		log.Printf("[auth] RefreshToken failed: %v", err)
-		JSONError(w, "Invalid or expired refresh token", http.StatusUnauthorized)
-		return
-	}
-
-	JSONSuccess(w, RefreshResponse{
-		AccessToken: accessToken,
-	})
-}
 
 // ---------------------------------------------------------------------------
 // Device Registration (Push Notifications)
@@ -208,22 +154,23 @@ type DeviceRegisterRequest struct {
 // If the same token already exists (e.g. phone handed to a new person),
 // it re-assigns the token to the current user.
 func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	// 1. Get the authenticated user ID from context (set by auth middleware)
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	// 2. Parse the request body
 	var req DeviceRegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	if req.Token == "" || req.DeviceType == "" {
-		JSONError(w, "token and device_type are required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "token and device_type are required")
 		return
 	}
 
@@ -236,10 +183,10 @@ func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
 		    device_type = EXCLUDED.device_type, 
 		    updated_at = NOW();
 	`
-	_, err := postgress.Exec(query, userID, req.Token, req.DeviceType)
+	_, err := postgress.Exec(ctx, query, userID, req.Token, req.DeviceType)
 	if err != nil {
 		log.Printf("[auth] RegisterDevice failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to save device token", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to save device token")
 		return
 	}
 
@@ -249,7 +196,7 @@ func RegisterDeviceHandler(w http.ResponseWriter, r *http.Request) {
 	cacheCancel()
 
 	// 4. Confirm success
-	JSONMessage(w, "success", "Device registered for push notifications")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Device registered for push notifications"})
 }
 
 // GetFirebaseConfigHandler returns the public Firebase web SDK configuration.

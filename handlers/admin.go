@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
@@ -30,7 +31,7 @@ func GetAdminStatsHandler(w http.ResponseWriter, r *http.Request) {
 	var totalDonations, totalDonors float64
 
 	// Fast approximate counts from Postgres stats (updated by autovacuum/ANALYZE)
-	_ = postgress.GetRawDB().QueryRowContext(ctx, `
+	_ = postgress.GetPool().QueryRow(ctx, `
 		SELECT
 			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'users'), 0),
 			GREATEST((SELECT reltuples FROM pg_class WHERE relname = 'users') *
@@ -64,7 +65,7 @@ func GetAdminStatsHandler(w http.ResponseWriter, r *http.Request) {
 		stats["active_connections"] = chat.ActiveConnectionCount()
 	}
 
-	JSONSuccess(w, stats)
+	helper.JSON(w, http.StatusOK, stats)
 }
 
 // ---------------------------------------------------------------------------
@@ -115,10 +116,10 @@ func GetAdminUsersHandler(w http.ResponseWriter, r *http.Request) {
 	query += fmt.Sprintf(` LIMIT $%d OFFSET $%d`, argIdx, argIdx+1)
 	args = append(args, limit, offset)
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx, query, args...)
+	rows, err := postgress.GetPool().Query(ctx, query, args...)
 	if err != nil {
 		log.Printf("[admin] users query failed: %v", err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	defer rows.Close()
@@ -150,14 +151,14 @@ func GetAdminUsersHandler(w http.ResponseWriter, r *http.Request) {
 		users = append(users, u)
 	}
 
-	JSONSuccess(w, users)
+	helper.JSON(w, http.StatusOK, users)
 }
 
 // BanUserHandler bans a user and force-disconnects them.
 func BanUserHandler(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("userId")
 	if targetID == "" {
-		JSONError(w, "userId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "userId is required")
 		return
 	}
 
@@ -165,14 +166,14 @@ func BanUserHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Set is_banned = true
-	rows, err := postgress.Exec(`UPDATE users SET is_banned = true WHERE id = $1 AND is_banned = false`, targetID)
+	rows, err := postgress.Exec(ctx, `UPDATE users SET is_banned = true WHERE id = $1 AND is_banned = false`, targetID)
 	if err != nil {
 		log.Printf("[admin] Ban user DB error user=%s: %v", targetID, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	if rows == 0 {
-		JSONError(w, "User not found or already banned", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "User not found or already banned")
 		return
 	}
 
@@ -189,28 +190,28 @@ func BanUserHandler(w http.ResponseWriter, r *http.Request) {
 	rdb.SRem(ctx, config.DefaultMatchQueue, targetID)
 
 	log.Printf("[admin] User %s banned by BENKI_ADMIN", targetID)
-	JSONMessage(w, "success", "User banned successfully")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "User banned successfully"})
 }
 
 // UnbanUserHandler unbans a user.
 func UnbanUserHandler(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("userId")
 	if targetID == "" {
-		JSONError(w, "userId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "userId is required")
 		return
 	}
 
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
-	rows, err := postgress.Exec(`UPDATE users SET is_banned = false WHERE id = $1 AND is_banned = true`, targetID)
+	rows, err := postgress.Exec(ctx, `UPDATE users SET is_banned = false WHERE id = $1 AND is_banned = true`, targetID)
 	if err != nil {
 		log.Printf("[admin] Unban user DB error user=%s: %v", targetID, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	if rows == 0 {
-		JSONError(w, "User not found or not banned", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "User not found or not banned")
 		return
 	}
 
@@ -218,7 +219,7 @@ func UnbanUserHandler(w http.ResponseWriter, r *http.Request) {
 	redis.GetRawClient().Del(ctx, config.CacheBan+targetID)
 
 	log.Printf("[admin] User %s unbanned by BENKI_ADMIN", targetID)
-	JSONMessage(w, "success", "User unbanned successfully")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "User unbanned successfully"})
 }
 
 // ---------------------------------------------------------------------------
@@ -256,9 +257,9 @@ func GetAdminReportsHandler(w http.ResponseWriter, r *http.Request) {
 	args = append(args, limit, offset)
 
 	var raw []byte
-	if err := postgress.GetRawDB().QueryRowContext(ctx, query, args...).Scan(&raw); err != nil {
+	if err := postgress.GetPool().QueryRow(ctx, query, args...).Scan(&raw); err != nil {
 		log.Printf("[admin] reports query failed reported_id=%s: %v", reportedID, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
@@ -271,7 +272,7 @@ func GetAdminReportsHandler(w http.ResponseWriter, r *http.Request) {
 func GetAdminUserReportsHandler(w http.ResponseWriter, r *http.Request) {
 	targetID := r.PathValue("userId")
 	if targetID == "" {
-		JSONError(w, "userId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "userId is required")
 		return
 	}
 
@@ -288,9 +289,9 @@ func GetAdminUserReportsHandler(w http.ResponseWriter, r *http.Request) {
 	) t`
 
 	var raw []byte
-	if err := postgress.GetRawDB().QueryRowContext(ctx, query, targetID).Scan(&raw); err != nil {
+	if err := postgress.GetPool().QueryRow(ctx, query, targetID).Scan(&raw); err != nil {
 		log.Printf("[admin] user reports query failed user=%s: %v", targetID, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
@@ -311,8 +312,8 @@ func CreateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 		Icon         string  `json:"icon"`
 		DisplayOrder int     `json:"display_order"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.MinAmount <= 0 {
-		JSONError(w, "name and min_amount (> 0) are required", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil || req.Name == "" || req.MinAmount <= 0 {
+		helper.Error(w, http.StatusBadRequest, "name and min_amount (> 0) are required")
 		return
 	}
 
@@ -320,14 +321,14 @@ func CreateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var id int
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`INSERT INTO badge_tiers (name, min_amount, icon, display_order)
 		 VALUES ($1, $2, $3, $4) RETURNING id`,
 		req.Name, req.MinAmount, req.Icon, req.DisplayOrder,
 	).Scan(&id)
 	if err != nil {
 		log.Printf("[admin] create badge tier failed: %v", err)
-		JSONError(w, "Failed to create badge tier", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to create badge tier")
 		return
 	}
 
@@ -341,9 +342,10 @@ func CreateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateBadgeTierHandler updates a badge tier.
 func UpdateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	tierID := r.PathValue("badgeId")
 	if tierID == "" {
-		JSONError(w, "tierId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "tierId is required")
 		return
 	}
 
@@ -353,8 +355,8 @@ func UpdateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 		Icon         *string  `json:"icon"`
 		DisplayOrder *int     `json:"display_order"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -388,7 +390,7 @@ func UpdateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(sets) == 0 {
-		JSONError(w, "No fields to update", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "No fields to update")
 		return
 	}
 
@@ -396,44 +398,45 @@ func UpdateBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
 		joinStrings(sets, ", "), argIdx)
 	args = append(args, tierID)
 
-	rows, err := postgress.Exec(query, args...)
+	rows, err := postgress.Exec(ctx, query, args...)
 	if err != nil {
 		log.Printf("[admin] update badge tier failed id=%s: %v", tierID, err)
-		JSONError(w, "Failed to update badge tier", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to update badge tier")
 		return
 	}
 	if rows == 0 {
-		JSONError(w, "Badge tier not found", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Badge tier not found")
 		return
 	}
 
 	invalidateBadgeTiersCache()
 
-	JSONMessage(w, "success", "Badge tier updated")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Badge tier updated"})
 }
 
 // DeleteBadgeTierHandler deletes a badge tier.
 func DeleteBadgeTierHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	tierID := r.PathValue("badgeId")
 	if tierID == "" {
-		JSONError(w, "tierId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "tierId is required")
 		return
 	}
 
-	rows, err := postgress.Exec(`DELETE FROM badge_tiers WHERE id = $1`, tierID)
+	rows, err := postgress.Exec(ctx, `DELETE FROM badge_tiers WHERE id = $1`, tierID)
 	if err != nil {
 		log.Printf("[admin] delete badge tier failed id=%s: %v", tierID, err)
-		JSONError(w, "Failed to delete badge tier", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to delete badge tier")
 		return
 	}
 	if rows == 0 {
-		JSONError(w, "Badge tier not found", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Badge tier not found")
 		return
 	}
 
 	invalidateBadgeTiersCache()
 
-	JSONMessage(w, "success", "Badge tier deleted")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Badge tier deleted"})
 }
 
 // invalidateBadgeTiersCache removes the cached badge tiers from Redis.
@@ -451,7 +454,7 @@ func invalidateBadgeTiersCache() {
 func GetAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
-		JSONError(w, "key is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "key is required")
 		return
 	}
 
@@ -459,12 +462,12 @@ func GetAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var value []byte
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT value FROM app_settings WHERE key = $1`, key,
 	).Scan(&value)
 	if err != nil {
 		log.Printf("[admin] get setting failed key=%s: %v", key, err)
-		JSONError(w, "Setting not found", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Setting not found")
 		return
 	}
 
@@ -477,42 +480,42 @@ func GetAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 func UpdateAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
-		JSONError(w, "key is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "key is required")
 		return
 	}
 
 	// Read the raw JSON body as the new value
 	var value json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&value); err != nil {
-		JSONError(w, "Invalid JSON body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &value); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid JSON body")
 		return
 	}
 
-	_, cancel := pgCtx(r)
+	ctx, cancel := pgCtx(r)
 	defer cancel()
 
-	rows, err := postgress.Exec(
+	rows, err := postgress.Exec(ctx,
 		`UPDATE app_settings SET value = $1, updated_at = NOW() WHERE key = $2`,
 		value, key,
 	)
 	if err != nil {
 		log.Printf("[admin] update setting failed key=%s: %v", key, err)
-		JSONError(w, "Failed to update setting", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to update setting")
 		return
 	}
 	if rows == 0 {
 		// Insert if not exists
-		_, err = postgress.Exec(
+		_, err = postgress.Exec(ctx,
 			`INSERT INTO app_settings (key, value) VALUES ($1, $2)`, key, value,
 		)
 		if err != nil {
 			log.Printf("[admin] insert setting failed key=%s: %v", key, err)
-			JSONError(w, "Failed to create setting", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Failed to create setting")
 			return
 		}
 	}
 
-	JSONMessage(w, "success", "Setting updated")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Setting updated"})
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +524,7 @@ func UpdateAppSettingHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetBotStatusHandler returns the current bot enabled/disabled state.
 func GetBotStatusHandler(w http.ResponseWriter, r *http.Request) {
-	JSONSuccess(w, map[string]bool{"enabled": services.IsBotEnabled()})
+	helper.JSON(w, http.StatusOK, map[string]bool{"enabled": services.IsBotEnabled()})
 }
 
 // ToggleBotHandler enables or disables bot matchmaking at runtime.
@@ -529,14 +532,14 @@ func ToggleBotHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	services.SetBotEnabled(req.Enabled)
 	log.Printf("[admin] Bot matching set to %v by BENKI_ADMIN", req.Enabled)
-	JSONSuccess(w, map[string]bool{"enabled": services.IsBotEnabled()})
+	helper.JSON(w, http.StatusOK, map[string]bool{"enabled": services.IsBotEnabled()})
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +554,7 @@ func GetOnlineCountHandler(w http.ResponseWriter, r *http.Request) {
 	if e := chat.GetEngine(); e != nil {
 		stats["online_users"] = e.OnlineUserCount()
 	}
-	JSONSuccess(w, stats)
+	helper.JSON(w, http.StatusOK, stats)
 }
 
 // ---------------------------------------------------------------------------
@@ -596,7 +599,7 @@ func GetAppSetting(ctx context.Context, key string, dest interface{}) error {
 	}
 	// Fallback to Postgres (first boot before cache is warm)
 	var raw []byte
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT value FROM app_settings WHERE key = $1`, key,
 	).Scan(&raw)
 	if err != nil {
@@ -607,17 +610,16 @@ func GetAppSetting(ctx context.Context, key string, dest interface{}) error {
 
 // GetUserTotalDonation returns the total donation amount for a user.
 // Uses the materialized total_donated column (maintained by trigger).
-// Cached in Redis for 2 minutes to avoid per-request PG hits.
+// Cached in Redis for 2 minutes via redis.Fetch (singleflight dedup).
 func GetUserTotalDonation(ctx context.Context, userID string) float64 {
 	cacheKey := config.CacheUserDonated + userID
-	var total float64
-	if found, _ := redis.Get(ctx, cacheKey, &total); found {
-		return total
-	}
-	postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT total_donated FROM users WHERE id = $1`, userID,
-	).Scan(&total)
-	_ = redis.PutWithTTL(ctx, cacheKey, total, config.CacheTTLLong)
+	total, _ := redis.Fetch(ctx, cacheKey, config.CacheTTLLong, func(ctx context.Context) (float64, error) {
+		var t float64
+		postgress.GetPool().QueryRow(ctx,
+			`SELECT total_donated FROM users WHERE id = $1`, userID,
+		).Scan(&t)
+		return t, nil
+	})
 	return total
 }
 

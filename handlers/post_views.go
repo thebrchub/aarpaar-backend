@@ -3,9 +3,9 @@ package handlers
 import (
 	"net/http"
 	"strconv"
-
-	"github.com/goccy/go-json"
 	"github.com/shivanand-burli/go-starter-kit/redis"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/thebrchub/aarpaar/config"
 )
 
@@ -21,17 +21,17 @@ import (
 const maxViewBatchSize = 50
 
 func RecordViewsHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	var req struct {
 		PostIDs []int64 `json:"postIds"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.PostIDs) == 0 {
-		JSONError(w, "postIds array is required", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil || len(req.PostIDs) == 0 {
+		helper.Error(w, http.StatusBadRequest, "postIds array is required")
 		return
 	}
 
@@ -46,7 +46,7 @@ func RecordViewsHandler(w http.ResponseWriter, r *http.Request) {
 		pipe.SAdd(ctx, config.ARENA_VIEWS_BUFFER, userID+":"+strconv.FormatInt(pid, 10))
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
-		JSONError(w, "Failed to record views", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to record views")
 		return
 	}
 

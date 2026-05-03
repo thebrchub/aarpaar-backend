@@ -256,7 +256,7 @@ func TestBioLimitAdminConfigurable(t *testing.T) {
 
 	t.Run("admin can increase bio limit at runtime", func(t *testing.T) {
 		// Update arena_limits to increase free_bio_length to 500
-		db := postgress.GetRawDB()
+		db := postgress.GetPool()
 		_, err := db.Exec(`UPDATE app_settings SET value = value || '{"free_bio_length": 500}'::jsonb WHERE key = 'arena_limits'`)
 		require.NoError(t, err)
 

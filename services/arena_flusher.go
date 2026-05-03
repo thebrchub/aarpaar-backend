@@ -136,7 +136,7 @@ func flushEngagementSet(redisKey, tableName, counterColumn string) {
 			tableName, strings.Join(values, ", "),
 		)
 
-		rows, err := postgress.GetRawDB().QueryContext(ctx, query, params...)
+		rows, err := postgress.GetPool().Query(ctx, query, params...)
 		if err != nil {
 			log.Printf("[arena-flusher] INSERT into %s failed: %v", tableName, err)
 			// Don't re-queue on FK violations — the post is gone
@@ -184,7 +184,7 @@ func flushEngagementSet(redisKey, tableName, counterColumn string) {
 		counterColumn, counterColumn, strings.Join(updateValues, ", "),
 	)
 
-	if _, err := postgress.GetRawDB().ExecContext(ctx, updateQuery, updateParams...); err != nil {
+	if _, err := postgress.GetPool().Exec(ctx, updateQuery, updateParams...); err != nil {
 		log.Printf("[arena-flusher] UPDATE %s failed: %v", counterColumn, err)
 	}
 }
@@ -306,7 +306,7 @@ func flushLikes() {
 		}
 
 		// Fast VALUES insert — no JOIN overhead. FK violations are silently dropped.
-		rows, err := postgress.GetRawDB().QueryContext(ctx,
+		rows, err := postgress.GetPool().Query(ctx,
 			fmt.Sprintf(`INSERT INTO post_likes (user_id, post_id) VALUES %s ON CONFLICT DO NOTHING RETURNING post_id`,
 				strings.Join(values, ", ")),
 			params...)
@@ -342,7 +342,7 @@ func flushLikes() {
 			values[j] = fmt.Sprintf("($%d::uuid, $%d::bigint)", j*2+1, j*2+2)
 		}
 
-		rows, err := postgress.GetRawDB().QueryContext(ctx,
+		rows, err := postgress.GetPool().Query(ctx,
 			fmt.Sprintf(`WITH del AS (
 				DELETE FROM post_likes WHERE (user_id, post_id) IN (VALUES %s) RETURNING post_id
 			) SELECT post_id FROM del`, strings.Join(values, ", ")),
@@ -387,7 +387,7 @@ func flushLikes() {
 	}
 
 	if len(updateValues) > 0 {
-		_, err := postgress.GetRawDB().ExecContext(ctx,
+		_, err := postgress.GetPool().Exec(ctx,
 			fmt.Sprintf(`UPDATE posts SET like_count = GREATEST(like_count + v.delta, 0), last_engaged_at = NOW()
 				FROM (VALUES %s) AS v(id, delta)
 				WHERE posts.id = v.id`, strings.Join(updateValues, ", ")),
@@ -525,7 +525,7 @@ func flushCommentLikes() {
 		}
 
 		// Fast VALUES insert — no JOIN overhead. FK violations are silently dropped.
-		_, err := postgress.GetRawDB().ExecContext(ctx,
+		_, err := postgress.GetPool().Exec(ctx,
 			fmt.Sprintf(`INSERT INTO comment_likes (user_id, comment_id) VALUES %s ON CONFLICT DO NOTHING`,
 				strings.Join(values, ", ")),
 			params...)
@@ -552,7 +552,7 @@ func flushCommentLikes() {
 			values[j] = fmt.Sprintf("($%d::uuid, $%d::bigint)", j*2+1, j*2+2)
 		}
 
-		_, err := postgress.GetRawDB().ExecContext(ctx,
+		_, err := postgress.GetPool().Exec(ctx,
 			fmt.Sprintf(`DELETE FROM comment_likes WHERE (user_id, comment_id) IN (VALUES %s)`,
 				strings.Join(values, ", ")),
 			params...)

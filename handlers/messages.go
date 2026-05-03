@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/shivanand-burli/go-starter-kit/helper"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
@@ -16,9 +18,9 @@ import (
 // GetRoomMessagesHandler returns paginated messages for a room.
 func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Authenticate — make sure the caller is logged in
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -26,7 +28,7 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	//    Route is registered as: GET /api/v1/rooms/{roomId}/messages
 	roomID := r.PathValue("roomId")
 	if roomID == "" {
-		JSONError(w, "Missing room ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing room ID")
 		return
 	}
 
@@ -38,25 +40,25 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, memberKey).Result(); err == nil {
 		if cached != "1" {
-			JSONError(w, "Not a member of this room", http.StatusForbidden)
+			helper.Error(w, http.StatusForbidden, "Not a member of this room")
 			return
 		}
 	} else {
 		var isMember bool
-		err := postgress.GetRawDB().QueryRowContext(ctx,
+		err := postgress.GetPool().QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2 AND status = 'active')`,
 			roomID, userID,
 		).Scan(&isMember)
 		if err != nil {
 			log.Printf("[messages] membership check failed room=%s user=%s: %v", roomID, userID, err)
-			JSONError(w, "Database error", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Database error")
 			return
 		}
 		if isMember {
 			rdb.Set(ctx, memberKey, "1", 2*time.Minute)
 		} else {
 			rdb.Set(ctx, memberKey, "0", 30*time.Second)
-			JSONError(w, "Not a member of this room", http.StatusForbidden)
+			helper.Error(w, http.StatusForbidden, "Not a member of this room")
 			return
 		}
 	}
@@ -112,10 +114,10 @@ func GetRoomMessagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 7. Execute and pipe the raw JSON bytes to the response
 	var rawJSONBytes []byte
-	err := postgress.GetRawDB().QueryRowContext(ctx, query, roomID, cursor, limit, userID).Scan(&rawJSONBytes)
+	err := postgress.GetPool().QueryRow(ctx, query, roomID, cursor, limit, userID).Scan(&rawJSONBytes)
 	if err != nil {
 		log.Printf("[messages] GetRoomMessages query failed room=%s: %v", roomID, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 

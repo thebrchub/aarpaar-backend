@@ -1,23 +1,31 @@
 package handlers
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/goccy/go-json"
+	"github.com/shivanand-burli/go-starter-kit/jwt"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/models"
 	"github.com/thebrchub/aarpaar/services"
 )
 
-// setTestUserID injects a user ID into the request context for handler tests.
+// setTestUserID wraps the handler with the kit's Auth middleware and sets
+// a valid JWT Bearer token so that middleware.Subject(ctx) returns userID.
 func setTestUserID(r *http.Request, userID string) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), config.UserIDKey, userID))
+	token, _ := jwt.GenerateAccessToken(userID)
+	r.Header.Set("Authorization", "Bearer "+token)
+	return r
+}
+
+// callWithAuth wraps a handler with Auth middleware so tests can call it with a token.
+func callWithAuth(h http.HandlerFunc) http.HandlerFunc {
+	return middleware.Auth("")(h)
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +140,7 @@ func TestUpdateNotifPrefsRejectsNoAuth(t *testing.T) {
 		strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	UpdateNotificationPreferencesHandler(w, req)
+	callWithAuth(UpdateNotificationPreferencesHandler)(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
@@ -143,7 +151,7 @@ func TestUpdateNotifPrefsRejectsInvalidJSON(t *testing.T) {
 	req = setTestUserID(req, "test-user-id")
 	w := httptest.NewRecorder()
 
-	UpdateNotificationPreferencesHandler(w, req)
+	callWithAuth(UpdateNotificationPreferencesHandler)(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -154,11 +162,13 @@ func TestUpdateNotifPrefsRejectsUnknownKeys(t *testing.T) {
 	req = setTestUserID(req, "test-user-id")
 	w := httptest.NewRecorder()
 
-	UpdateNotificationPreferencesHandler(w, req)
+	callWithAuth(UpdateNotificationPreferencesHandler)(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
-	var resp StatusMessage
+	var resp struct {
+		Message string `json:"message"`
+	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Contains(t, resp.Message, "Unknown preference key")
 }

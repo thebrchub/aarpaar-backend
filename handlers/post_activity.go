@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/shivanand-burli/go-starter-kit/helper"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
@@ -20,15 +22,15 @@ import (
 // ---------------------------------------------------------------------------
 
 func GetPostActivityHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -49,7 +51,7 @@ func GetPostActivityHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Use materialized repost_count and quote_count columns — no correlated subqueries.
-	err = postgress.GetRawDB().QueryRowContext(ctx,
+	err = postgress.GetPool().QueryRow(ctx,
 		`SELECT p.id,
 		        p.view_count,
 		        p.like_count + p.comment_count + p.repost_count + p.bookmark_count,
@@ -69,11 +71,11 @@ func GetPostActivityHandler(w http.ResponseWriter, r *http.Request) {
 		&a.LikeCount, &a.CommentCount, &a.RepostCount, &a.QuoteCount, &a.BookmarkCount,
 	)
 	if err != nil {
-		JSONError(w, "Post not found or not yours", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Post not found or not yours")
 		return
 	}
 
-	JSONSuccess(w, a)
+	helper.JSON(w, http.StatusOK, a)
 }
 
 // ---------------------------------------------------------------------------
@@ -86,16 +88,16 @@ func GetPostActivityHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func GetRepostsHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	_ = userID
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -120,13 +122,13 @@ func GetRepostsHandler(w http.ResponseWriter, r *http.Request) {
 	// Use materialized quote_count: plain reposts = repost_count - quote_count
 	var plainCount int
 	var quoteTotal int
-	_ = postgress.GetRawDB().QueryRowContext(ctx,
+	_ = postgress.GetPool().QueryRow(ctx,
 		`SELECT repost_count - quote_count, quote_count FROM posts WHERE id = $1`,
 		postID,
 	).Scan(&plainCount, &quoteTotal)
 
 	// Fetch quote reposts (with caption) — paginated
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url, p.caption, p.created_at
 		 FROM posts p
 		 JOIN users u ON u.id = p.user_id
@@ -137,7 +139,7 @@ func GetRepostsHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("[arena] get reposts query failed: %v", err)
-		JSONError(w, "Failed to load reposts", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load reposts")
 		return
 	}
 	defer rows.Close()
@@ -173,7 +175,7 @@ func GetRepostsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSONSuccess(w, resp)
+	helper.JSON(w, http.StatusOK, resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -184,15 +186,15 @@ func GetRepostsHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func RecordProfileClickHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 

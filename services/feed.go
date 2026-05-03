@@ -24,7 +24,6 @@ import (
 // ---------------------------------------------------------------------------
 
 const arenaLimitsCacheKey = config.CacheArenaLimits
-const arenaLimitsRefresh = 60 * time.Second
 
 var (
 	arenaLimitsMu sync.RWMutex
@@ -32,28 +31,13 @@ var (
 	arenaLimitsOK bool
 )
 
-// StartArenaLimitsRefresher loads arena limits from Postgres and starts a
-// background goroutine that refreshes them every 60s.
-func StartArenaLimitsRefresher(ctx context.Context) {
+// RefreshArenaLimits reloads arena limits, VIP tier, app settings, and badge tiers.
+// Exported for use by the cron scheduler.
+func RefreshArenaLimits(_ context.Context) {
 	loadArenaLimits()
 	loadVIPMinTier()
 	loadAppSettings()
 	loadBadgeTiers()
-	go func() {
-		ticker := time.NewTicker(arenaLimitsRefresh)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				loadArenaLimits()
-				loadVIPMinTier()
-				loadAppSettings()
-				loadBadgeTiers()
-			}
-		}
-	}()
 }
 
 func loadArenaLimits() {
@@ -62,8 +46,8 @@ func loadArenaLimits() {
 
 	// Try Redis cache first
 	var limits models.ArenaLimits
-	found, err := redis.Get(ctx, arenaLimitsCacheKey, &limits)
-	if err == nil && found {
+	found, _ := redis.Get(ctx, arenaLimitsCacheKey, &limits)
+	if found {
 		backfillArenaDefaults(&limits)
 		arenaLimitsMu.Lock()
 		arenaLimits = limits
@@ -74,7 +58,7 @@ func loadArenaLimits() {
 
 	// Fall back to Postgres
 	var raw []byte
-	err = postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT value FROM app_settings WHERE key = $1`, config.ArenaLimitsKey,
 	).Scan(&raw)
 	if err != nil {
@@ -203,7 +187,7 @@ func loadVIPMinTier() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var minTier float64
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT COALESCE(MIN(min_amount), 0) FROM badge_tiers`,
 	).Scan(&minTier)
 	if err != nil {
@@ -238,7 +222,7 @@ var (
 func loadAppSettings() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT key, value FROM app_settings`,
 	)
 	if err != nil {
@@ -290,7 +274,7 @@ var (
 func loadBadgeTiers() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT name, icon, display_order, min_amount FROM badge_tiers ORDER BY min_amount DESC`,
 	)
 	if err != nil {
@@ -334,20 +318,16 @@ func GetCachedBadge(totalDonated float64) (string, string, int, float64, bool) {
 
 const postOwnerTTL = 5 * time.Minute
 
-// GetPostOwnerCached returns the owner user ID for a post, using Redis cache.
+// GetPostOwnerCached returns the owner user ID for a post, using redis.Fetch.
 func GetPostOwnerCached(ctx context.Context, postID int64) string {
 	key := config.CachePostOwner + strconv.FormatInt(postID, 10)
-	var ownerID string
-	found, _ := redis.Get(ctx, key, &ownerID)
-	if found {
-		return ownerID
-	}
-	_ = postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT user_id FROM posts WHERE id = $1`, postID,
-	).Scan(&ownerID)
-	if ownerID != "" {
-		_ = redis.PutWithTTL(ctx, key, ownerID, postOwnerTTL)
-	}
+	ownerID, _ := redis.Fetch(ctx, key, postOwnerTTL, func(ctx context.Context) (string, error) {
+		var id string
+		_ = postgress.GetPool().QueryRow(ctx,
+			`SELECT user_id FROM posts WHERE id = $1`, postID,
+		).Scan(&id)
+		return id, nil
+	})
 	return ownerID
 }
 
@@ -397,36 +377,27 @@ func GetRoomsGen(ctx context.Context, userID string) string {
 
 // ResolveOriginalPostID returns the original post ID if the given post is a
 // plain repost (no caption). For original posts or quote reposts, it returns
-// the same postID unchanged. Uses Redis cache to avoid Postgres lookups on
-// every like/unlike/comment at scale.
+// the same postID unchanged. Uses redis.Fetch with singleflight dedup.
 func ResolveOriginalPostID(ctx context.Context, postID int64) int64 {
 	key := config.CachePostResolve + strconv.FormatInt(postID, 10)
 
-	// Check Redis cache first
-	var cached int64
-	found, _ := redis.Get(ctx, key, &cached)
-	if found {
-		if cached == 0 {
-			return postID // cached as "not a plain repost"
+	// Cache stores the resolved original ID. 0 = sentinel meaning "not a plain repost".
+	cached, _ := redis.Fetch(ctx, key, resolveOriginalTTL, func(ctx context.Context) (int64, error) {
+		var originalID sql.NullInt64
+		err := postgress.GetPool().QueryRow(ctx,
+			`SELECT original_post_id FROM posts
+			 WHERE id = $1 AND post_type = 'repost' AND caption = ''
+			   AND original_post_id IS NOT NULL`,
+			postID,
+		).Scan(&originalID)
+		if err != nil || !originalID.Valid {
+			return 0, nil // sentinel: not a plain repost
 		}
-		return cached
-	}
+		return originalID.Int64, nil
+	})
 
-	// Cache miss — query Postgres once
-	var originalID sql.NullInt64
-	err := postgress.GetRawDB().QueryRowContext(ctx,
-		`SELECT original_post_id FROM posts
-		 WHERE id = $1 AND post_type = 'repost' AND caption = ''
-		   AND original_post_id IS NOT NULL`,
-		postID,
-	).Scan(&originalID)
-
-	if err != nil || !originalID.Valid {
-		// Not a plain repost — cache 0 as sentinel to avoid repeated DB lookups
-		_ = redis.PutWithTTL(ctx, key, int64(0), resolveOriginalTTL)
+	if cached == 0 {
 		return postID
 	}
-
-	_ = redis.PutWithTTL(ctx, key, originalID.Int64, resolveOriginalTTL)
-	return originalID.Int64
+	return cached
 }

@@ -198,7 +198,7 @@ func (e *Engine) startRingTimeout(callID, callerID, calleeID string, hasVideo bo
 			pubCancel()
 
 			logCall(callID, "", callerID, calleeID, hasVideo, config.CallStatusMissed, 0)
-			RunBackground(func() { sendMissedCallPush(calleeID, callerID, callID) })
+			Pool.Submit(func() { sendMissedCallPush(calleeID, callerID, callID) })
 		}
 	})
 }
@@ -224,7 +224,7 @@ func canUserCall(callerID, targetID string) bool {
 	var exists bool
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT EXISTS(
 			SELECT 1 FROM friendships
 			WHERE (user_id_1 = $1 AND user_id_2 = $2)
@@ -242,7 +242,7 @@ func isUserBlocked(callerID, targetID string) bool {
 	var exists bool
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT EXISTS(
 			SELECT 1 FROM blocked_users
 			WHERE (blocker_id = $1 AND blocked_id = $2)
@@ -291,7 +291,7 @@ func logCall(callID, roomID, initiatedBy, peerID string, hasVideo bool, status s
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
-	_, err := postgress.GetRawDB().ExecContext(ctx,
+	_, err := postgress.GetPool().Exec(ctx,
 		`INSERT INTO call_logs (call_id, room_id, initiated_by, peer_id, call_type, tier, max_participants, ended_at, duration_seconds)
 		 VALUES ($1, $2, $3::uuid, $4, $5, 'p2p', 2, $6, $7)
 		 ON CONFLICT (call_id) DO UPDATE SET
@@ -323,7 +323,7 @@ func sendCallPushNotification(calleeID, callerID, callID string, hasVideo bool) 
 
 	// Get caller's name for the notification
 	var callerName string
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT COALESCE(name, 'Unknown') FROM users WHERE id = $1`, callerID,
 	).Scan(&callerName)
 	if err != nil {
@@ -360,7 +360,7 @@ func sendMissedCallPush(calleeID, callerID, callID string) {
 	defer cancel()
 
 	var callerName string
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT COALESCE(name, 'Unknown') FROM users WHERE id = $1`, callerID,
 	).Scan(&callerName)
 	if err != nil {
@@ -480,7 +480,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 			default:
 				droppedMessages.Add(1)
 			}
-			RunBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, config.CallStatusMissed, 0) })
+			Pool.Submit(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, config.CallStatusMissed, 0) })
 			return true
 		}
 
@@ -490,11 +490,11 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		// --- Send push notification only when callee is offline ---
 		// When online, call_ring is delivered via WebSocket (no push needed).
 		if !calleeOnline {
-			RunBackground(func() { sendCallPushNotification(targetUser, c.UserID, callID, hasVideo) })
+			Pool.Submit(func() { sendCallPushNotification(targetUser, c.UserID, callID, hasVideo) })
 		}
 
 		// --- Log call initiation ---
-		RunBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, "ringing", 0) })
+		Pool.Submit(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, "ringing", 0) })
 
 	case config.MsgTypeCallAccept:
 		// Cancel the ring timeout
@@ -508,10 +508,10 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		markCallAnswered(targetUser)
 
 		// Update call log
-		RunBackground(func() {
+		Pool.Submit(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 			defer cancel()
-			_, err := postgress.GetRawDB().ExecContext(ctx,
+			_, err := postgress.GetPool().Exec(ctx,
 				`UPDATE call_logs SET started_at = NOW() WHERE call_id = $1`, callID,
 			)
 			if err != nil {
@@ -531,7 +531,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		clearActiveCall(targetUser)
 
 		// Log rejected call
-		RunBackground(func() { logCall(callID, "", targetUser, c.UserID, hasVideo, config.CallStatusRejected, 0) })
+		Pool.Submit(func() { logCall(callID, "", targetUser, c.UserID, hasVideo, config.CallStatusRejected, 0) })
 
 	case config.MsgTypeCallEnd:
 		// Cancel any pending ring timeout
@@ -556,7 +556,7 @@ func (e *Engine) processCallSignaling(c *Client, msgType string, payload []byte)
 		if callerCall != nil && !callerCall.Answered {
 			status = config.CallStatusCancelled
 		}
-		RunBackground(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, status, duration) })
+		Pool.Submit(func() { logCall(callID, "", c.UserID, targetUser, hasVideo, status, duration) })
 
 	case config.MsgTypeCallLeave:
 		// For future group calls — treat like call_end for 1:1

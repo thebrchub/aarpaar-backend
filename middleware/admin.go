@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	kitMW "github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/thebrchub/aarpaar/config"
 )
@@ -29,8 +30,8 @@ func BenkiAdminOnly(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		userID, ok := r.Context().Value(config.UserIDKey).(string)
-		if !ok || userID == "" {
+		userID := kitMW.Subject(r.Context())
+		if userID == "" {
 			http.Error(w, `{"status":"error","message":"Unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
@@ -39,7 +40,7 @@ func BenkiAdminOnly(next http.HandlerFunc) http.HandlerFunc {
 		var email string
 		adminCtx, adminCancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer adminCancel()
-		err := postgress.GetRawDB().QueryRowContext(adminCtx,
+		err := postgress.GetPool().QueryRow(adminCtx,
 			`SELECT email FROM users WHERE id = $1`, userID,
 		).Scan(&email)
 		if err != nil || email == "" {

@@ -2,17 +2,18 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/goccy/go-json"
 
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
 )
@@ -24,9 +25,9 @@ import (
 // EnterMatchQueueHandler tries to find an instant stranger match.
 // If no match is found, the user is placed in a Redis queue to wait.
 func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -34,7 +35,7 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Location *json.RawMessage `json:"location,omitempty"` // opaque JSON object from frontend
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body) // best-effort; body may be empty
+	_ = helper.ReadJSON(r, &body) // best-effort; body may be empty
 
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
@@ -52,11 +53,11 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	alreadyQueued, err := rdb.SIsMember(ctx, queue, userID).Result()
 	if err != nil {
 		log.Printf("[match] SIsMember failed user=%s: %v", userID, err)
-		JSONError(w, "Queue check failed", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Queue check failed")
 		return
 	}
 	if alreadyQueued {
-		JSONMessage(w, "already_queued", "You are already in the queue")
+		helper.JSON(w, http.StatusOK, map[string]string{"status": "already_queued", "message": "You are already in the queue"})
 		return
 	}
 
@@ -99,7 +100,7 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	// Route the result
 	if matchedPartner != "" {
 		// Create a unique stranger room and notify both users
-		roomID := config.STRANGER_PREFIX + uuid.New().String()
+		roomID := config.STRANGER_PREFIX + helper.RandomUUID()
 
 		// Store both participants in Redis so MatchActionHandler can resolve
 		// the partner server-side without requiring partner_username from the client
@@ -126,7 +127,7 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 			e.JoinRoomForUser(matchedPartner, roomID)
 		}
 
-		JSONSuccess(w, map[string]string{
+		helper.JSON(w, http.StatusOK, map[string]string{
 			"status":  "matched",
 			"message": "Match found instantly",
 			"room_id": roomID,
@@ -140,7 +141,7 @@ func EnterMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	// Schedule a bot match fallback after BotMatchDelay
 	services.ScheduleBotMatch(userID)
 
-	JSONMessage(w, "queued", "Waiting for a match...")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "queued", "message": "Waiting for a match..."})
 }
 
 // notifyMatch sends a "match_found" event to a specific user via Redis Pub/Sub.
@@ -186,9 +187,9 @@ func notifyMatchWithLocation(ctx context.Context, targetUser, partnerID, roomID,
 
 // LeaveMatchQueueHandler removes the user from the matchmaking queue.
 func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -208,7 +209,7 @@ func LeaveMatchQueueHandler(w http.ResponseWriter, r *http.Request) {
 	// Cancel any pending bot match timer
 	services.CancelBotMatch(userID)
 
-	JSONMessage(w, "success", "Removed from queue")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Removed from queue"})
 }
 
 // ---------------------------------------------------------------------------
@@ -223,15 +224,15 @@ type MatchActionRequest struct {
 
 // MatchActionHandler processes skip/block/friend actions during a stranger chat.
 func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	var req MatchActionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
@@ -253,7 +254,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Fallback: resolve from partner_username if Redis lookup didn't find it
 	if partnerID == "" && req.PartnerUsername != "" {
-		err := postgress.GetRawDB().QueryRow(
+		err := postgress.GetPool().QueryRow(ctx,
 			`SELECT id FROM users WHERE username = $1`, req.PartnerUsername,
 		).Scan(&partnerID)
 		if err != nil {
@@ -267,7 +268,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 	// ---- Friend request (mutual opt-in) ----
 	if req.Action == config.ActionFriend {
 		if partnerID == "" || req.RoomID == "" {
-			JSONError(w, "room_id is required", http.StatusBadRequest)
+			helper.Error(w, http.StatusBadRequest, "room_id is required")
 			return
 		}
 
@@ -288,7 +289,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[match] Marshal closedEvent failed: %v", err)
 			}
 			redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent)
-			JSONMessage(w, "disconnected", "Stranger has left the chat")
+			helper.JSON(w, http.StatusOK, map[string]string{"status": "disconnected", "message": "Stranger has left the chat"})
 			return
 		}
 
@@ -299,7 +300,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		rdb.Set(ctx, myKey, "1", 1*time.Hour)
 
 		// Also persist to Postgres so it survives logout/restart
-		if _, err := postgress.Exec(
+		if _, err := postgress.Exec(ctx, 
 			`INSERT INTO friend_requests (sender_id, receiver_id, status, stranger_room_id)
 			 VALUES ($1, $2, $3, $4)
 			 ON CONFLICT (sender_id, receiver_id) DO UPDATE SET status = $3, stranger_room_id = $4, updated_at = NOW()`,
@@ -314,7 +315,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		// If not in Redis, also check Postgres (they may have logged out)
 		if exists == 0 {
 			var pgExists bool
-			postgress.GetRawDB().QueryRow(
+			postgress.GetPool().QueryRow(ctx,
 				`SELECT EXISTS (SELECT 1 FROM friend_requests
 				 WHERE sender_id = $1 AND receiver_id = $2 AND status = $3)`,
 				partnerID, userID, config.FriendReqPending,
@@ -331,7 +332,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 				config.FieldRoomID: req.RoomID,
 				config.FieldFrom:   userID,
 			})
-			JSONMessage(w, "pending", "Friend request sent, waiting for partner")
+			helper.JSON(w, http.StatusOK, map[string]string{"status": "pending", "message": "Friend request sent, waiting for partner"})
 			return
 		}
 
@@ -339,7 +340,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		rdb.Del(ctx, myKey, partnerKey)
 
 		// Update both friend_requests to accepted
-		if _, err := postgress.Exec(
+		if _, err := postgress.Exec(ctx, 
 			`UPDATE friend_requests SET status = $1, updated_at = NOW()
 			 WHERE (sender_id = $2 AND receiver_id = $3) OR (sender_id = $3 AND receiver_id = $2)`,
 			config.FriendReqAccepted, userID, partnerID,
@@ -349,7 +350,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Create friendship
 		uid1, uid2 := sortUUIDs(userID, partnerID)
-		if _, err := postgress.Exec(
+		if _, err := postgress.Exec(ctx, 
 			`INSERT INTO friendships (user_id_1, user_id_2) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 			uid1, uid2,
 		); err != nil {
@@ -357,35 +358,35 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Create a permanent DM room in Postgres
-		tx, err := postgress.GetRawDB().Begin()
+		tx, err := postgress.GetPool().Begin(ctx)
 		if err != nil {
 			log.Printf("[match] begin tx failed: %v", err)
-			JSONError(w, "Database error", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Database error")
 			return
 		}
-		defer tx.Rollback()
+		defer tx.Rollback(ctx)
 
 		var dmRoomID string
-		err = tx.QueryRow(`INSERT INTO rooms (type) VALUES ('DM') RETURNING id`).Scan(&dmRoomID)
+		err = tx.QueryRow(ctx, `INSERT INTO rooms (type) VALUES ('DM') RETURNING id`).Scan(&dmRoomID)
 		if err != nil {
 			log.Printf("[match] insert DM room failed: %v", err)
-			JSONError(w, "Failed to create room", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Failed to create room")
 			return
 		}
 
-		_, err = tx.Exec(
+		_, err = tx.Exec(ctx, 
 			`INSERT INTO room_members (room_id, user_id) VALUES ($1, $2), ($1, $3)`,
 			dmRoomID, userID, partnerID,
 		)
 		if err != nil {
 			log.Printf("[match] insert room members failed room=%s: %v", dmRoomID, err)
-			JSONError(w, "Failed to add members", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Failed to add members")
 			return
 		}
 
-		if err := tx.Commit(); err != nil {
+		if err := tx.Commit(ctx); err != nil {
 			log.Printf("[match] commit failed: %v", err)
-			JSONError(w, "Failed to commit", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Failed to commit")
 			return
 		}
 		// Auto-subscribe both users to the new permanent DM room
@@ -414,7 +415,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		redis.Publish(ctx, config.CHAT_GLOBAL_CHANNEL, closedEvent)
 
-		JSONSuccess(w, map[string]string{
+		helper.JSON(w, http.StatusOK, map[string]string{
 			"status":     "friends",
 			"message":    "You are now friends!",
 			"dm_room_id": dmRoomID,
@@ -435,7 +436,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 			INSERT INTO blocked_users (blocker_id, blocked_id) 
 			VALUES ($1, $2) ON CONFLICT DO NOTHING;
 		`
-		if _, err := postgress.Exec(query, userID, partnerID); err != nil {
+		if _, err := postgress.Exec(ctx, query, userID, partnerID); err != nil {
 			log.Printf("[match] block user insert failed user=%s partner=%s: %v", userID, partnerID, err)
 		}
 	}
@@ -472,7 +473,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		)
 		// Also clean up Postgres friend requests for this stranger room
 		if partnerID != "" {
-			if _, err := postgress.Exec(
+			if _, err := postgress.Exec(ctx, 
 				`DELETE FROM friend_requests WHERE stranger_room_id = $1
 				 AND ((sender_id = $2 AND receiver_id = $3) OR (sender_id = $3 AND receiver_id = $2))`,
 				req.RoomID, userID, partnerID,
@@ -482,7 +483,7 @@ func MatchActionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	JSONMessage(w, "success", "Action processed")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Action processed"})
 }
 
 // notifyUser sends a private system event to a user via Redis Pub/Sub.
@@ -512,40 +513,41 @@ type ReportRequest struct {
 
 // ReportUserHandler saves a user report to Postgres for moderation review.
 func ReportUserHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	var req ReportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ReportedUsername == "" || req.Reason == "" {
-		JSONError(w, "Invalid request or missing fields", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil || req.ReportedUsername == "" || req.Reason == "" {
+		helper.Error(w, http.StatusBadRequest, "Invalid request or missing fields")
 		return
 	}
 
 	// Resolve username to UUID
 	var reportedID string
-	err := postgress.GetRawDB().QueryRow(
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT id FROM users WHERE username = $1`, req.ReportedUsername,
 	).Scan(&reportedID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			JSONError(w, "Reported user not found", http.StatusNotFound)
+		if err == pgx.ErrNoRows {
+			helper.Error(w, http.StatusNotFound, "Reported user not found")
 		} else {
 			log.Printf("[match] ReportUser username lookup failed username=%s: %v", req.ReportedUsername, err)
-			JSONError(w, "Database error", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Database error")
 		}
 		return
 	}
 
 	query := `INSERT INTO user_reports (reporter_id, reported_id, reason) VALUES ($1, $2, $3)`
-	_, err = postgress.Exec(query, userID, reportedID, req.Reason)
+	_, err = postgress.Exec(ctx, query, userID, reportedID, req.Reason)
 	if err != nil {
 		log.Printf("[match] ReportUser insert failed reporter=%s reported=%s: %v", userID, reportedID, err)
-		JSONError(w, "Failed to submit report", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to submit report")
 		return
 	}
 
-	JSONMessage(w, "success", "User reported successfully")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "User reported successfully"})
 }

@@ -6,13 +6,12 @@ import (
 	"log"
 	"net/http"
 	"time"
-
-	"github.com/goccy/go-json"
-	"github.com/google/uuid"
 	sdkmodels "github.com/shivanand-burli/go-starter-kit/models"
 	sdkpay "github.com/shivanand-burli/go-starter-kit/payment"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
 )
@@ -26,9 +25,9 @@ var PaymentSvc sdkpay.PaymentService
 
 // GetDonationHistoryHandler returns the authenticated user's donation history.
 func GetDonationHistoryHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -45,9 +44,9 @@ func GetDonationHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	) t`
 
 	var raw []byte
-	if err := postgress.GetRawDB().QueryRowContext(ctx, query, userID, limit, offset).Scan(&raw); err != nil {
+	if err := postgress.GetPool().QueryRow(ctx, query, userID, limit, offset).Scan(&raw); err != nil {
 		log.Printf("[donations] GetDonationHistory query failed user=%s: %v", userID, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
@@ -76,7 +75,7 @@ func GetBadgeTiersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var raw []byte
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT COALESCE(json_agg(t), '[]')::text FROM (
 			SELECT id, name, min_amount, icon, display_order
 			FROM badge_tiers ORDER BY display_order ASC
@@ -84,7 +83,7 @@ func GetBadgeTiersHandler(w http.ResponseWriter, r *http.Request) {
 	).Scan(&raw)
 	if err != nil {
 		log.Printf("[donations] GetBadgeTiers query failed: %v", err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
@@ -127,15 +126,15 @@ type CreateOrderRequest struct {
 }
 
 func CreateDonationOrderHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	var req CreateOrderRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Amount <= 0 {
-		JSONError(w, "amount must be a positive number", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil || req.Amount <= 0 {
+		helper.Error(w, http.StatusBadRequest, "amount must be a positive number")
 		return
 	}
 	if req.Currency == "" {
@@ -143,14 +142,14 @@ func CreateDonationOrderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if PaymentSvc == nil {
-		JSONError(w, "Payment provider not configured", http.StatusServiceUnavailable)
+		helper.Error(w, http.StatusServiceUnavailable, "Payment provider not configured")
 		return
 	}
 
 	// Convert to smallest unit (paise/cents)
 	amountSmallest := int64(req.Amount * 100)
 
-	internalOrderID := uuid.New().String()
+	internalOrderID := helper.RandomUUID()
 
 	order := &sdkmodels.BaseOrder{
 		ID:         internalOrderID,
@@ -171,7 +170,7 @@ func CreateDonationOrderHandler(w http.ResponseWriter, r *http.Request) {
 	resp, err := PaymentSvc.CheckoutSession(order)
 	if err != nil {
 		log.Printf("[donations] create order failed for user=%s: %v", userID, err)
-		JSONError(w, "Failed to create payment order", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to create payment order")
 		return
 	}
 
@@ -179,19 +178,19 @@ func CreateDonationOrderHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Save pending order for webhook mapping
-	_, err = postgress.Exec(
+	_, err = postgress.Exec(ctx, 
 		`INSERT INTO pending_orders (order_id, razorpay_order_id, user_id, amount, currency, status)
 		 VALUES ($1, $2, $3, $4, $5, 'pending')`,
 		internalOrderID, resp.SessionId, userID, amountSmallest, req.Currency,
 	)
 	if err != nil {
 		log.Printf("[donations] failed to save pending order: %v", err)
-		JSONError(w, "Failed to save order", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to save order")
 		return
 	}
 	_ = ctx
 
-	JSONSuccess(w, map[string]interface{}{
+	helper.JSON(w, http.StatusOK, map[string]interface{}{
 		"order_id":          internalOrderID,
 		"razorpay_order_id": resp.SessionId,
 		"key_id":            config.RazorpayKeyID,
@@ -206,26 +205,26 @@ func CreateDonationOrderHandler(w http.ResponseWriter, r *http.Request) {
 
 func RazorpayWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	if PaymentSvc == nil {
-		JSONError(w, "Payment provider not configured", http.StatusServiceUnavailable)
+		helper.Error(w, http.StatusServiceUnavailable, "Payment provider not configured")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		JSONError(w, "Failed to read body", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Failed to read body")
 		return
 	}
 
 	signature := r.Header.Get("X-Razorpay-Signature")
 	if signature == "" {
-		JSONError(w, "Missing signature", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Missing signature")
 		return
 	}
 
 	resp, err := PaymentSvc.VerifyPayment(body, signature)
 	if err != nil {
 		log.Printf("[webhook] verification failed: %v", err)
-		JSONError(w, "Verification failed", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Verification failed")
 		return
 	}
 
@@ -238,7 +237,7 @@ func RazorpayWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		var userID string
 		var amount int64
 		var currency string
-		err := postgress.GetRawDB().QueryRowContext(ctx,
+		err := postgress.GetPool().QueryRow(ctx,
 			`SELECT user_id, amount, currency FROM pending_orders WHERE order_id = $1 AND status = $2`,
 			resp.OrderId, config.OrderStatusPending,
 		).Scan(&userID, &amount, &currency)
@@ -250,7 +249,7 @@ func RazorpayWebhookHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Record donation
 		amountFloat := float64(amount) / 100.0
-		_, err = postgress.Exec(
+		_, err = postgress.Exec(ctx, 
 			`INSERT INTO donations (user_id, amount, currency, payment_id, payment_provider, razorpay_order_id)
 			 VALUES ($1, $2, $3, $4, 'razorpay', $5)`,
 			userID, amountFloat, currency, resp.SessionId, resp.OrderId,
@@ -260,7 +259,7 @@ func RazorpayWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Update pending order status
-		if _, err := postgress.Exec(
+		if _, err := postgress.Exec(ctx, 
 			`UPDATE pending_orders SET status = $1 WHERE order_id = $2`,
 			config.OrderStatusCompleted, resp.OrderId,
 		); err != nil {
@@ -268,7 +267,7 @@ func RazorpayWebhookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case sdkpay.PaymentStatusFailed:
-		if _, err := postgress.Exec(
+		if _, err := postgress.Exec(ctx, 
 			`UPDATE pending_orders SET status = $1 WHERE order_id = $2`,
 			config.OrderStatusFailed, resp.OrderId,
 		); err != nil {
@@ -284,15 +283,15 @@ func RazorpayWebhookHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func GetDonationStatusHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	orderID := r.PathValue("orderId")
 	if orderID == "" {
-		JSONError(w, "orderId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "orderId is required")
 		return
 	}
 
@@ -300,17 +299,17 @@ func GetDonationStatusHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var status string
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT status FROM pending_orders WHERE order_id = $1 AND user_id = $2`,
 		orderID, userID,
 	).Scan(&status)
 	if err != nil {
 		log.Printf("[donations] GetDonationStatus query failed order=%s user=%s: %v", orderID, userID, err)
-		JSONError(w, "Order not found", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Order not found")
 		return
 	}
 
-	JSONSuccess(w, map[string]interface{}{
+	helper.JSON(w, http.StatusOK, map[string]interface{}{
 		"order_id": orderID,
 		"status":   status,
 	})

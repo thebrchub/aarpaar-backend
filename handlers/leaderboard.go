@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/config"
@@ -70,9 +71,9 @@ func GetLeaderboardHandler(w http.ResponseWriter, r *http.Request) {
 	) t`, dateFilter)
 
 	var raw []byte
-	if err := postgress.GetRawDB().QueryRowContext(ctx, query, limit, offset).Scan(&raw); err != nil {
+	if err := postgress.GetPool().QueryRow(ctx, query, limit, offset).Scan(&raw); err != nil {
 		log.Printf("[leaderboard] query failed scope=%s: %v", scope, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 

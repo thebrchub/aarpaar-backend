@@ -89,7 +89,7 @@ func ShouldNotify(ctx context.Context, userID string, prefKey string) bool {
 
 	// Cache miss — load from Postgres and populate full hash
 	var prefsJSON []byte
-	err = postgress.GetRawDB().QueryRowContext(ctx,
+	err = postgress.GetPool().QueryRow(ctx,
 		`SELECT notification_prefs FROM users WHERE id = $1`, userID,
 	).Scan(&prefsJSON)
 	if err != nil {
@@ -305,7 +305,7 @@ func getDeviceTokens(ctx context.Context, userID string) []string {
 		return strings.Split(cached, ",")
 	}
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT token FROM device_tokens WHERE user_id = $1`, userID,
 	)
 	if err != nil {
@@ -361,7 +361,7 @@ func getDeviceTokensMulti(ctx context.Context, userIDs []string) []string {
 
 	// Fallback: DB query only for cache misses
 	query := `SELECT user_id, token FROM device_tokens WHERE user_id = ANY($1)`
-	rows, err := postgress.GetRawDB().QueryContext(ctx, query, pgStringArray(missingIDs))
+	rows, err := postgress.GetPool().Query(ctx, query, pgStringArray(missingIDs))
 	if err != nil {
 		log.Printf("[push] query tokens multi failed: %v", err)
 		return tokens
@@ -422,7 +422,7 @@ func cleanStaleTokens(ctx context.Context, failed []push.FailedToken) {
 		return
 	}
 
-	_, err := postgress.GetRawDB().ExecContext(ctx,
+	_, err := postgress.GetPool().Exec(ctx,
 		`DELETE FROM device_tokens WHERE token = ANY($1)`, pgStringArray(stale))
 	if err != nil {
 		log.Printf("[push] stale token cleanup failed: %v", err)

@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,9 +9,12 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/jackc/pgx/v5"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/services"
 )
@@ -26,9 +28,9 @@ func pgCtx(r *http.Request) (context.Context, context.CancelFunc) {
 // GetRoomsHandler returns paginated chat rooms for the authenticated user.
 func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Get the authenticated user ID from context
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -131,10 +133,10 @@ func GetRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(config.PGTimeout)*time.Second)
 	defer cancel()
 	var roomsJSON, usersJSON []byte
-	err := postgress.GetRawDB().QueryRowContext(ctx, roomsQuery, userID, cursor, limit).Scan(&roomsJSON, &usersJSON)
+	err := postgress.GetPool().QueryRow(ctx, roomsQuery, userID, cursor, limit).Scan(&roomsJSON, &usersJSON)
 	if err != nil {
 		log.Printf("[rooms] GetRooms query failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to fetch rooms", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to fetch rooms")
 		return
 	}
 
@@ -174,20 +176,21 @@ type CreateDMResponse struct {
 }
 
 func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	var req CreateDMRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	if req.Username == "" {
-		JSONError(w, "username is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "username is required")
 		return
 	}
 
@@ -195,37 +198,37 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 	var targetUserID string
 	var targetIsPrivate bool
 	var targetName, targetAvatar string
-	err := postgress.GetRawDB().QueryRow(
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT id, is_private, COALESCE(name,''), COALESCE(avatar_url,'') FROM users WHERE username = $1 AND is_banned = false`, req.Username,
 	).Scan(&targetUserID, &targetIsPrivate, &targetName, &targetAvatar)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			JSONError(w, "User not found", http.StatusNotFound)
+		if err == pgx.ErrNoRows {
+			helper.Error(w, http.StatusNotFound, "User not found")
 		} else {
 			log.Printf("[rooms] CreateDM user lookup failed username=%s: %v", req.Username, err)
-			JSONError(w, "Database error", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Database error")
 		}
 		return
 	}
 
 	if targetUserID == userID {
-		JSONError(w, "Cannot create a DM with yourself", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Cannot create a DM with yourself")
 		return
 	}
 
 	// Check if blocked
 	var blocked bool
-	if err := postgress.GetRawDB().QueryRow(
+	if err := postgress.GetPool().QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM blocked_users WHERE
 			(blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1))`,
 		userID, targetUserID,
 	).Scan(&blocked); err != nil {
 		log.Printf("[rooms] CreateDM blocked check failed user=%s target=%s: %v", userID, targetUserID, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 	if blocked {
-		JSONError(w, "User not found", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "User not found")
 		return
 	}
 
@@ -240,9 +243,9 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	var existingRoomID string
-	err = postgress.GetRawDB().QueryRow(existingQuery, userID, targetUserID).Scan(&existingRoomID)
+	err = postgress.GetPool().QueryRow(ctx,existingQuery, userID, targetUserID).Scan(&existingRoomID)
 	if err == nil && existingRoomID != "" {
-		JSONSuccess(w, CreateDMResponse{
+		helper.JSON(w, http.StatusOK, CreateDMResponse{
 			RoomID:         existingRoomID,
 			Existing:       true,
 			TargetName:     targetName,
@@ -251,40 +254,40 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err != nil && err != sql.ErrNoRows {
-		JSONError(w, "Database error", http.StatusInternalServerError)
+	if err != nil && err != pgx.ErrNoRows {
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	// Use a transaction with FOR UPDATE on the target user row to prevent
 	// race conditions where is_private toggles between the check and room creation.
-	tx, err := postgress.GetRawDB().Begin()
+	tx, err := postgress.GetPool().Begin(ctx)
 	if err != nil {
 		log.Printf("[rooms] CreateDM begin tx failed: %v", err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
-	defer tx.Rollback()
+	defer tx.Rollback(ctx)
 
 	// Re-read is_private under FOR UPDATE lock to prevent TOCTOU race
-	err = tx.QueryRow(
+	err = tx.QueryRow(ctx, 
 		`SELECT is_private FROM users WHERE id = $1 FOR UPDATE`, targetUserID,
 	).Scan(&targetIsPrivate)
 	if err != nil {
 		log.Printf("[rooms] CreateDM re-read is_private failed target=%s: %v", targetUserID, err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
 	// Check friendship
 	uid1, uid2 := sortUUIDs(userID, targetUserID)
 	var areFriends bool
-	if err := tx.QueryRow(
+	if err := tx.QueryRow(ctx, 
 		`SELECT EXISTS (SELECT 1 FROM friendships WHERE user_id_1 = $1 AND user_id_2 = $2)`,
 		uid1, uid2,
 	).Scan(&areFriends); err != nil {
 		log.Printf("[rooms] CreateDM friendship check failed: %v", err)
-		JSONError(w, "Database error", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Database error")
 		return
 	}
 
@@ -307,7 +310,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 			_ = GetAppSetting(ctx2, "premium_connect", &cfg)
 			totalDonated := GetUserTotalDonation(ctx2, userID)
 			if totalDonated < cfg.MinDonation {
-				JSONError(w, "This user has a private account. Send a friend request first.", http.StatusForbidden)
+				helper.Error(w, http.StatusForbidden, "This user has a private account. Send a friend request first.")
 				return
 			}
 		}
@@ -317,29 +320,29 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create room + members within the same transaction
 	var roomID string
-	err = tx.QueryRow(
+	err = tx.QueryRow(ctx, 
 		`INSERT INTO rooms (type) VALUES ('DM') RETURNING id`,
 	).Scan(&roomID)
 	if err != nil {
 		log.Printf("[rooms] CreateDM insert room failed: %v", err)
-		JSONError(w, "Failed to create room", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to create room")
 		return
 	}
 
 	// Sender is always active; target may be pending
-	_, err = tx.Exec(
+	_, err = tx.Exec(ctx, 
 		`INSERT INTO room_members (room_id, user_id, status) VALUES ($1, $2, $3), ($1, $4, $5)`,
 		roomID, userID, config.RoomMemberActive, targetUserID, targetStatus,
 	)
 	if err != nil {
 		log.Printf("[rooms] CreateDM insert members failed room=%s: %v", roomID, err)
-		JSONError(w, "Failed to add room members", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to add room members")
 		return
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		log.Printf("[rooms] CreateDM commit failed: %v", err)
-		JSONError(w, "Failed to create DM room", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to create DM room")
 		return
 	}
 
@@ -363,14 +366,14 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Push notification for offline target
-		chat.RunBackground(func() {
+		chat.Pool.Submit(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(config.PGTimeout)*time.Second)
 			defer cancel()
 			if !services.ShouldNotify(ctx, targetUserID, services.NotifPrefDMRequests) {
 				return
 			}
 			var senderName string
-			if err := postgress.GetRawDB().QueryRowContext(ctx,
+			if err := postgress.GetPool().QueryRow(ctx,
 				`SELECT COALESCE(name, 'Someone') FROM users WHERE id = $1`, userID,
 			).Scan(&senderName); err != nil {
 				log.Printf("[rooms] CreateDM sender name lookup failed user=%s: %v", userID, err)
@@ -387,7 +390,7 @@ func CreateDMHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	JSONSuccess(w, CreateDMResponse{
+	helper.JSON(w, http.StatusOK, CreateDMResponse{
 		RoomID:         roomID,
 		Existing:       false,
 		Pending:        isPending,
@@ -473,7 +476,7 @@ func getCachedFriendSet(ctx context.Context, userID string) map[string]bool {
 	}
 
 	friendSet := make(map[string]bool)
-	friendRows, err := postgress.GetRawDB().QueryContext(ctx,
+	friendRows, err := postgress.GetPool().Query(ctx,
 		`SELECT user_id_2 FROM friendships WHERE user_id_1 = $1
 		 UNION ALL
 		 SELECT user_id_1 FROM friendships WHERE user_id_2 = $1`, userID,
@@ -512,7 +515,7 @@ func getCachedBlockedSet(ctx context.Context, userID string) map[string]bool {
 	}
 
 	blockedSet := make(map[string]bool)
-	blockedRows, err := postgress.GetRawDB().QueryContext(ctx,
+	blockedRows, err := postgress.GetPool().Query(ctx,
 		`SELECT blocked_id FROM blocked_users WHERE blocker_id = $1
 		 UNION ALL
 		 SELECT blocker_id FROM blocked_users WHERE blocked_id = $1`, userID,
@@ -598,7 +601,7 @@ func enrichRoomsWithOnlineStatus(raw []byte, currentUserID string) []byte {
 			ids = append(ids, id)
 		}
 		ph, phArgs := buildINClause(ids, 1)
-		privRows, pErr := postgress.GetRawDB().QueryContext(ctx,
+		privRows, pErr := postgress.GetPool().Query(ctx,
 			fmt.Sprintf(`SELECT id FROM users WHERE id IN (%s) AND is_private = true`, ph), phArgs...)
 		if pErr == nil {
 			for privRows.Next() {

@@ -18,8 +18,6 @@ var (
 	ServerPort     string        // HTTP server listen port (e.g. ":8080")
 	PostgresConn   string        // Postgres connection string
 	PGTimeout      int           // Postgres query timeout in seconds
-	RedisHost      string        // Redis hostname
-	RedisPort      int           // Redis port number
 	RedisCacheName string        // Prefix for all Redis cache keys
 	CORSOrigin     string        // Allowed CORS origin (e.g. "https://yourdomain.com")
 	RedisOpTimeout time.Duration // Timeout for individual Redis operations
@@ -53,17 +51,11 @@ var (
 	Domain string // Public domain for vanity URLs (e.g. "zquab.com")
 
 	// Razorpay / Payment configuration
-	RazorpayKeyID         string // Razorpay API key ID (for frontend checkout)
-	RazorpayKeySecret     string // Razorpay API key secret
-	RazorpayWebhookSecret string // Razorpay webhook signature secret
-	PaymentProviderName   string // "razorpay" or "stub" (default "stub")
+	RazorpayKeyID       string // Razorpay API key ID (for frontend checkout)
+	PaymentProviderName string // "razorpay" or "stub" (default "stub")
 
 	// Firebase Cloud Messaging (optional — push notifications disabled if not set)
 	FirebaseCredentials string // Raw JSON or base64-encoded Firebase service account key
-
-	// Internal API key for service-to-service auth (e.g. JWT validation endpoint)
-	InternalAPIKey    []byte
-	InternalAPIKeySet bool
 
 	// Group Calls (disabled by default — enable via GROUP_CALLS_ENABLED=true)
 	GroupCallsEnabled bool // Whether group call features are enabled
@@ -96,17 +88,6 @@ type ICEServer struct {
 	Username   string `json:"username,omitempty"`
 	Credential string `json:"credential,omitempty"`
 }
-
-// ---------------------------------------------------------------------------
-// Context Keys (typed to avoid collisions with other packages)
-// ---------------------------------------------------------------------------
-
-// contextKey is an unexported type used for context value keys.
-type contextKey string
-
-// UserIDKey is the key used to store the authenticated user's ID in
-// the request context. Set by the auth middleware, read by handlers.
-const UserIDKey contextKey = "user_id"
 
 // ---------------------------------------------------------------------------
 // Redis Key Constants
@@ -180,8 +161,6 @@ func Init() {
 	PGTimeout = helper.GetEnvInt("PG_TIMEOUT", 5)
 
 	// Redis
-	RedisHost = helper.GetEnv("REDIS_HOST", "localhost")
-	RedisPort = helper.GetEnvInt("REDIS_PORT", 6379)
 	RedisCacheName = helper.GetEnv("REDIS_CACHE_NAME", "aarpaar")
 
 	// LiveKit Cloud (optional — group calls disabled if not set)
@@ -231,15 +210,9 @@ func Init() {
 	// Payment provider
 	PaymentProviderName = helper.GetEnv("PAYMENT_PROVIDER", "stub")
 	RazorpayKeyID = helper.GetEnv("RAZORPAY_KEY_ID", "")
-	RazorpayKeySecret = helper.GetEnv("RAZORPAY_KEY_SECRET", "")
-	RazorpayWebhookSecret = helper.GetEnv("RAZORPAY_WEBHOOK_SECRET", "")
 
 	// Firebase Cloud Messaging (optional)
 	FirebaseCredentials = helper.GetEnv("FIREBASE_CREDENTIALS", "")
-
-	// Internal API key for service-to-service auth
-	InternalAPIKey = []byte(helper.GetEnv("INTERNAL_API_KEY", ""))
-	InternalAPIKeySet = len(InternalAPIKey) > 0
 
 	// Group Calls (disabled by default — requires explicit opt-in)
 	GroupCallsEnabled = helper.GetEnv("GROUP_CALLS_ENABLED", "false") == "true"

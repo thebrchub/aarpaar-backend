@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/jackc/pgx/v5"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/shivanand-burli/go-starter-kit/helper"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
@@ -26,15 +29,15 @@ import (
 // ---------------------------------------------------------------------------
 
 func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -42,14 +45,14 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 	postID = services.ResolveOriginalPostID(r.Context(), postID)
 
 	var req models.CreateCommentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	// Must have body or gif
 	if strings.TrimSpace(req.Body) == "" && req.GifURL == "" {
-		JSONError(w, "Comment must have a body or GIF", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Comment must have a body or GIF")
 		return
 	}
 
@@ -59,7 +62,7 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 		maxComment = limits.MaxCommentLength
 	}
 	if len(req.Body) > maxComment {
-		JSONError(w, fmt.Sprintf("Comment too long (max %d chars)", maxComment), http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, fmt.Sprintf("Comment too long (max %d chars)", maxComment))
 		return
 	}
 
@@ -68,11 +71,11 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verify post exists
 	var postExists bool
-	_ = postgress.GetRawDB().QueryRowContext(ctx,
+	_ = postgress.GetPool().QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1)`, postID,
 	).Scan(&postExists)
 	if !postExists {
-		JSONError(w, "Post not found", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Post not found")
 		return
 	}
 
@@ -83,16 +86,16 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 		// It's a reply — get parent's path and depth
 		var pPath string
 		var pDepth int
-		err := postgress.GetRawDB().QueryRowContext(ctx,
+		err := postgress.GetPool().QueryRow(ctx,
 			`SELECT path::text, depth FROM post_comments WHERE id = $1 AND post_id = $2`,
 			*req.ParentID, postID,
 		).Scan(&pPath, &pDepth)
 		if err != nil {
-			JSONError(w, "Parent comment not found", http.StatusNotFound)
+			helper.Error(w, http.StatusNotFound, "Parent comment not found")
 			return
 		}
 		if pDepth >= config.MaxCommentDepth {
-			JSONError(w, fmt.Sprintf("Max reply depth reached (%d)", config.MaxCommentDepth), http.StatusBadRequest)
+			helper.Error(w, http.StatusBadRequest, fmt.Sprintf("Max reply depth reached (%d)", config.MaxCommentDepth))
 			return
 		}
 		depth = pDepth + 1
@@ -101,14 +104,14 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Insert comment, then set its ltree path
 	var commentID int64
-	err = postgress.GetRawDB().QueryRowContext(ctx,
+	err = postgress.GetPool().QueryRow(ctx,
 		`INSERT INTO post_comments (post_id, user_id, body, path, depth, gif_url, gif_width, gif_height)
 		 VALUES ($1, $2, $3, '', $4, $5, $6, $7) RETURNING id`,
 		postID, userID, req.Body, depth, nilIfEmpty(req.GifURL), nilIfZero(req.GifWidth), nilIfZero(req.GifHeight),
 	).Scan(&commentID)
 	if err != nil {
 		log.Printf("[arena] create comment failed user=%s post=%d: %v", userID, postID, err)
-		JSONError(w, "Failed to create comment", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to create comment")
 		return
 	}
 
@@ -120,7 +123,7 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 		path = fmt.Sprintf("c%d", commentID)
 	}
 
-	_, err = postgress.Exec(
+	_, err = postgress.Exec(ctx,
 		`UPDATE post_comments SET path = $1::ltree WHERE id = $2`, path, commentID,
 	)
 	if err != nil {
@@ -130,13 +133,13 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 	// Invalidate comment cache + single-post cache + commenter's feed caches
 	// so the commenter sees up-to-date commentCount immediately.
 	rdb := redis.GetRawClient()
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		invalidateCommentCache(rdb, postID)
 		invalidatePostAndFeedCaches(rdb, postID, userID)
 	})
 
 	// Notify post owner and parent comment author
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		bgCtx := context.Background()
 		postOwnerID := services.GetPostOwnerCached(bgCtx, postID)
 		if postOwnerID != "" && postOwnerID != userID && services.ShouldNotify(bgCtx, postOwnerID, services.NotifPrefComments) {
@@ -148,7 +151,7 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.ParentID != nil {
 			var parentAuthorID string
-			_ = postgress.GetRawDB().QueryRowContext(bgCtx,
+			_ = postgress.GetPool().QueryRow(bgCtx,
 				`SELECT user_id FROM post_comments WHERE id = $1`, *req.ParentID,
 			).Scan(&parentAuthorID)
 			if parentAuthorID != "" && parentAuthorID != userID && parentAuthorID != postOwnerID && services.ShouldNotify(bgCtx, parentAuthorID, services.NotifPrefComments) {
@@ -162,7 +165,7 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 
-	JSONSuccess(w, models.CommentResponse{
+	helper.JSON(w, http.StatusOK, models.CommentResponse{
 		ID:        commentID,
 		PostID:    postID,
 		UserID:    userID,
@@ -183,15 +186,15 @@ func CreateCommentHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -226,15 +229,15 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If parentId is set, fetch replies to that comment; otherwise top-level only
 
-	var rows *sql.Rows
+	var rows pgx.Rows
 	if parentIDParam != "" {
 		parentID, pErr := strconv.ParseInt(parentIDParam, 10, 64)
 		if pErr != nil {
-			JSONError(w, "Invalid parentId", http.StatusBadRequest)
+			helper.Error(w, http.StatusBadRequest, "Invalid parentId")
 			return
 		}
 		// Fetch direct replies to a specific comment
-		rows, err = postgress.GetRawDB().QueryContext(ctx,
+		rows, err = postgress.GetPool().Query(ctx,
 			`SELECT c.id, c.post_id, c.user_id, u.username, u.avatar_url,
 			        c.body, c.depth, c.like_count,
 			        my_cl.user_id IS NOT NULL,
@@ -253,7 +256,7 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 		)
 	} else {
 		// Fetch top-level comments with reply counts
-		rows, err = postgress.GetRawDB().QueryContext(ctx,
+		rows, err = postgress.GetPool().Query(ctx,
 			`SELECT c.id, c.post_id, c.user_id, u.username, u.avatar_url,
 			        c.body, c.depth, c.like_count,
 			        my_cl.user_id IS NOT NULL,
@@ -271,7 +274,7 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		log.Printf("[arena] get comments failed post=%d: %v", postID, err)
-		JSONError(w, "Failed to load comments", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load comments")
 		return
 	}
 	defer rows.Close()
@@ -321,7 +324,7 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSONSuccess(w, comments)
+	helper.JSON(w, http.StatusOK, comments)
 }
 
 // ---------------------------------------------------------------------------
@@ -330,49 +333,50 @@ func GetCommentsHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func DeleteCommentHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	commentID, err := strconv.ParseInt(r.PathValue("commentId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid comment ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid comment ID")
 		return
 	}
 
 	// Fetch the comment's ltree path and post_id (also verifies ownership)
 	var commentPath string
 	var commentPostID int64
-	err = postgress.GetRawDB().QueryRow(
+	err = postgress.GetPool().QueryRow(ctx,
 		`SELECT path::text, post_id FROM post_comments WHERE id = $1 AND user_id = $2`,
 		commentID, userID,
 	).Scan(&commentPath, &commentPostID)
 	if err != nil || commentPath == "" {
-		JSONError(w, "Comment not found or not yours", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Comment not found or not yours")
 		return
 	}
 
 	// Delete the comment and all its descendants in one shot
-	_, err = postgress.Exec(
+	_, err = postgress.Exec(ctx,
 		`DELETE FROM post_comments WHERE path <@ $1::ltree`,
 		commentPath,
 	)
 	if err != nil {
 		log.Printf("[arena] delete comment tree failed comment=%d user=%s: %v", commentID, userID, err)
-		JSONError(w, "Failed to delete comment", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to delete comment")
 		return
 	}
 
 	// Invalidate comment cache + single-post cache + user's feed caches
 	rdb := redis.GetRawClient()
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		invalidateCommentCache(rdb, commentPostID)
 		invalidatePostAndFeedCaches(rdb, commentPostID, userID)
 	})
 
-	JSONMessage(w, "success", "Comment deleted")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Comment deleted"})
 }
 
 // ---------------------------------------------------------------------------
@@ -382,15 +386,15 @@ func DeleteCommentHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func LikeCommentHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	commentID, err := strconv.ParseInt(r.PathValue("commentId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid comment ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid comment ID")
 		return
 	}
 
@@ -407,19 +411,19 @@ func LikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 	pipe.Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
 	pipe.Exec(r.Context())
 
-	JSONMessage(w, "success", "Comment liked")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Comment liked"})
 }
 
 func UnlikeCommentHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	commentID, err := strconv.ParseInt(r.PathValue("commentId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid comment ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid comment ID")
 		return
 	}
 
@@ -436,7 +440,7 @@ func UnlikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 	pipe.Set(r.Context(), config.COMMENT_LIKES_DIRTY_PREFIX+userID, 1, config.DirtyFlagTTL)
 	pipe.Exec(r.Context())
 
-	JSONMessage(w, "success", "Comment unliked")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Comment unliked"})
 }
 
 // ---------------------------------------------------------------------------
@@ -445,39 +449,40 @@ func UnlikeCommentHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func ReportCommentHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	commentID, err := strconv.ParseInt(r.PathValue("commentId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid comment ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid comment ID")
 		return
 	}
 
 	var req models.ReportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Reason) == "" {
-		JSONError(w, "Reason is required", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil || strings.TrimSpace(req.Reason) == "" {
+		helper.Error(w, http.StatusBadRequest, "Reason is required")
 		return
 	}
 
-	_, err = postgress.Exec(
+	_, err = postgress.Exec(ctx,
 		`INSERT INTO comment_reports (reporter_id, comment_id, reason) VALUES ($1, $2, $3)`,
 		userID, commentID, req.Reason,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "violates foreign key") {
-			JSONError(w, "Comment not found", http.StatusNotFound)
+			helper.Error(w, http.StatusNotFound, "Comment not found")
 		} else {
 			log.Printf("[arena] report comment failed user=%s comment=%d: %v", userID, commentID, err)
-			JSONError(w, "Failed to report comment", http.StatusInternalServerError)
+			helper.Error(w, http.StatusInternalServerError, "Failed to report comment")
 		}
 		return
 	}
 
-	JSONMessage(w, "success", "Comment reported")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Comment reported"})
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +522,7 @@ func nilIfZero(v int) any {
 
 // invalidateCommentCache deletes all cached comment pages for a post.
 // Uses SCAN — write-path only (comment create/delete), acceptable at scale.
-func invalidateCommentCache(rdb *goredis.Client, postID int64) {
+func invalidateCommentCache(rdb goredis.UniversalClient, postID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	// Cache keys now include userId — use SCAN to match all users.
@@ -542,7 +547,7 @@ func invalidateCommentCache(rdb *goredis.Client, postID int64) {
 // invalidatePostAndFeedCaches busts the single-post cache for a post (all users)
 // and the acting user's own feed caches so they see the updated commentCount
 // immediately. Write-path only (comment create/delete) — acceptable at scale.
-func invalidatePostAndFeedCaches(rdb *goredis.Client, postID int64, userID string) {
+func invalidatePostAndFeedCaches(rdb goredis.UniversalClient, postID int64, userID string) {
 	invalidatePostCache(postID)
 	invalidateUserFeedCaches(userID)
 }
@@ -550,7 +555,7 @@ func invalidatePostAndFeedCaches(rdb *goredis.Client, postID int64, userID strin
 // overlayPendingCommentLikes checks the Redis comment like/unlike buffers
 // and patches hasLiked + likeCount. Same pattern as overlayPendingLikes
 // for posts. Gated by dirty flag — only runs for users who just liked/unliked.
-func overlayPendingCommentLikes(ctx context.Context, rdb *goredis.Client, userID string, comments []models.CommentResponse) {
+func overlayPendingCommentLikes(ctx context.Context, rdb goredis.UniversalClient, userID string, comments []models.CommentResponse) {
 	if len(comments) == 0 {
 		return
 	}

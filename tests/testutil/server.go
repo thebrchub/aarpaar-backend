@@ -3,7 +3,6 @@ package testutil
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/shivanand-burli/go-starter-kit/jwt"
-	"github.com/shivanand-burli/go-starter-kit/middleware"
+	kitMW "github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/shivanand-burli/go-starter-kit/rtc"
@@ -27,9 +28,16 @@ import (
 	"github.com/thebrchub/aarpaar/services"
 )
 
+// TestJWTPrivateKey and TestJWTPublicKey are Ed25519 keys for testing.
+// Generate with: go run tests/keygen/main.go
+const (
+	TestJWTPrivateKey = "MC4CAQAwBQYDK2VwBCIEIHLsXh0Yp5Lkaq8E3MFp1RL7xHxHqbS3KhZ7KiL3XoV"
+	TestJWTPublicKey  = "MCowBQYDK2VwAyEAuDG7hJnQ3vUqFxVaKqBYzPBxYrL4bBKjfsGzLHB6JEY="
+)
+
 var (
 	setupOnce sync.Once
-	testDB    *sql.DB
+	testDB    *pgxpool.Pool
 )
 
 // SetTestEnv sets environment variables for tests.
@@ -87,18 +95,18 @@ func SetupTestInfra(t *testing.T) {
 		if err := postgress.Init(config.PostgresConn, config.PGTimeout); err != nil {
 			log.Fatalf("[test] Postgres init failed: %v", err)
 		}
-		testDB = postgress.GetRawDB()
+		testDB = postgress.GetPool()
 
 		// Migrations
 		services.RunMigrations()
 
 		// Redis
-		if err := redis.InitCache(config.RedisCacheName, config.RedisHost, config.RedisPort); err != nil {
+		if err := redis.InitCache(config.RedisCacheName, "", 0); err != nil {
 			log.Fatalf("[test] Redis init failed: %v", err)
 		}
 
 		// Arena limits (loads defaults since no app_settings row exists in test DB)
-		services.StartArenaLimitsRefresher(context.Background())
+		services.RefreshArenaLimits(context.Background())
 
 		// RTC optional stub
 		handlers.RTC = rtc.NewClientOptional(rtc.Config{})
@@ -108,9 +116,9 @@ func SetupTestInfra(t *testing.T) {
 
 // BuildTestMux builds the same HTTP mux as main.go (without starting a server).
 func BuildTestMux(engine *chat.Engine) http.Handler {
-	globalLimiter := middleware.NewIPRateLimiter(config.RateLimitRate, config.RateLimitBurst)
-	authLimiter := middleware.NewIPRateLimiter(2, 5)
-	healthLimiter := middleware.NewIPRateLimiter(2, 3)
+	globalLimiter := kitMW.NewIPRateLimiter(config.RateLimitRate, config.RateLimitBurst)
+	authLimiter := kitMW.NewIPRateLimiter(2, 5)
+	healthLimiter := kitMW.NewIPRateLimiter(2, 3)
 	mux := http.NewServeMux()
 
 	// Health check (own rate limit)
@@ -121,157 +129,161 @@ func BuildTestMux(engine *chat.Engine) http.Handler {
 
 	// Auth (public — tighter rate limit)
 	mux.HandleFunc("POST /api/v1/auth/google", authLimiter.LimitMiddleware(handlers.GoogleLoginHandler))
-	mux.HandleFunc("POST /api/v1/auth/refresh", authLimiter.LimitMiddleware(handlers.RefreshTokenHandler))
+	mux.HandleFunc("POST /api/v1/auth/refresh", authLimiter.LimitMiddleware(kitMW.HandleRefresh("")))
+	mux.HandleFunc("POST /api/v1/auth/logout", authLimiter.LimitMiddleware(kitMW.HandleLogout("")))
 
 	// Auth (protected)
-	mux.HandleFunc("POST /api/v1/auth/device", mw.Auth(handlers.RegisterDeviceHandler))
+	mux.HandleFunc("POST /api/v1/auth/device", kitMW.Chain(handlers.RegisterDeviceHandler, kitMW.Auth("")))
 
 	// Users
-	mux.HandleFunc("GET /api/v1/users/me", mw.Auth(handlers.GetMeHandler))
-	mux.HandleFunc("PATCH /api/v1/users/me", mw.Auth(handlers.UpdateMeHandler))
-	mux.HandleFunc("PUT /api/v1/users/me", mw.Auth(handlers.PutMeHandler))
-	mux.HandleFunc("GET /api/v1/users/search", mw.Auth(handlers.SearchUsersHandler))
-	mux.HandleFunc("GET /api/v1/users/check-username", mw.Auth(handlers.CheckUsernameHandler))
+	mux.HandleFunc("GET /api/v1/users/me", kitMW.Chain(handlers.GetMeHandler, kitMW.Auth("")))
+	mux.HandleFunc("PATCH /api/v1/users/me", kitMW.Chain(handlers.UpdateMeHandler, kitMW.Auth("")))
+	mux.HandleFunc("PUT /api/v1/users/me", kitMW.Chain(handlers.PutMeHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/users/search", kitMW.Chain(handlers.SearchUsersHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/users/check-username", kitMW.Chain(handlers.CheckUsernameHandler, kitMW.Auth("")))
 
 	// Rooms
-	mux.HandleFunc("GET /api/v1/rooms", mw.Auth(handlers.GetRoomsHandler))
-	mux.HandleFunc("POST /api/v1/rooms", mw.Auth(handlers.CreateDMHandler))
-	mux.HandleFunc("GET /api/v1/rooms/requests", mw.Auth(handlers.GetDMRequestsHandler))
-	mux.HandleFunc("GET /api/v1/rooms/{roomId}/messages", mw.Auth(handlers.GetRoomMessagesHandler))
-	mux.HandleFunc("POST /api/v1/rooms/{roomId}/accept", mw.Auth(handlers.AcceptDMRequestHandler))
-	mux.HandleFunc("POST /api/v1/rooms/{roomId}/reject", mw.Auth(handlers.RejectDMRequestHandler))
+	mux.HandleFunc("GET /api/v1/rooms", kitMW.Chain(handlers.GetRoomsHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/rooms", kitMW.Chain(handlers.CreateDMHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/rooms/requests", kitMW.Chain(handlers.GetDMRequestsHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/rooms/{roomId}/messages", kitMW.Chain(handlers.GetRoomMessagesHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/rooms/{roomId}/accept", kitMW.Chain(handlers.AcceptDMRequestHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/rooms/{roomId}/reject", kitMW.Chain(handlers.RejectDMRequestHandler, kitMW.Auth("")))
 
 	// Friends
-	mux.HandleFunc("GET /api/v1/friends", mw.Auth(handlers.GetFriendsHandler))
-	mux.HandleFunc("GET /api/v1/friends/requests", mw.Auth(handlers.GetFriendRequestsHandler))
-	mux.HandleFunc("POST /api/v1/friends/request", mw.Auth(handlers.SendFriendRequestHandler))
-	mux.HandleFunc("POST /api/v1/friends/accept", mw.Auth(handlers.AcceptFriendRequestHandler))
-	mux.HandleFunc("POST /api/v1/friends/reject", mw.Auth(handlers.RejectFriendRequestHandler))
-	mux.HandleFunc("DELETE /api/v1/friends/{username}", mw.Auth(handlers.RemoveFriendHandler))
+	mux.HandleFunc("GET /api/v1/friends", kitMW.Chain(handlers.GetFriendsHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/friends/requests", kitMW.Chain(handlers.GetFriendRequestsHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/friends/request", kitMW.Chain(handlers.SendFriendRequestHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/friends/accept", kitMW.Chain(handlers.AcceptFriendRequestHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/friends/reject", kitMW.Chain(handlers.RejectFriendRequestHandler, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/friends/{username}", kitMW.Chain(handlers.RemoveFriendHandler, kitMW.Auth("")))
 
 	// Matchmaking
-	mux.HandleFunc("POST /api/v1/match/enter", mw.Auth(handlers.EnterMatchQueueHandler))
-	mux.HandleFunc("POST /api/v1/match/leave", mw.Auth(handlers.LeaveMatchQueueHandler))
-	mux.HandleFunc("POST /api/v1/match/action", mw.Auth(handlers.MatchActionHandler))
-	mux.HandleFunc("POST /api/v1/match/report", mw.Auth(handlers.ReportUserHandler))
+	mux.HandleFunc("POST /api/v1/match/enter", kitMW.Chain(handlers.EnterMatchQueueHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/match/leave", kitMW.Chain(handlers.LeaveMatchQueueHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/match/action", kitMW.Chain(handlers.MatchActionHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/match/report", kitMW.Chain(handlers.ReportUserHandler, kitMW.Auth("")))
 
 	// Calls
-	mux.HandleFunc("GET /api/v1/calls/config", mw.Auth(handlers.GetCallConfigHandler))
-	mux.HandleFunc("GET /api/v1/calls/history", mw.Auth(handlers.GetCallHistoryHandler))
+	mux.HandleFunc("GET /api/v1/calls/config", kitMW.Chain(handlers.GetCallConfigHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/calls/history", kitMW.Chain(handlers.GetCallHistoryHandler, kitMW.Auth("")))
 
 	// Groups
-	mux.HandleFunc("GET /api/v1/groups", mw.Auth(handlers.ListGroupsHandler))
-	mux.HandleFunc("POST /api/v1/groups", mw.Auth(handlers.CreateGroupHandler))
-	mux.HandleFunc("GET /api/v1/groups/{groupId}", mw.Auth(handlers.GetGroupHandler))
-	mux.HandleFunc("PATCH /api/v1/groups/{groupId}", mw.Auth(handlers.UpdateGroupHandler))
-	mux.HandleFunc("DELETE /api/v1/groups/{groupId}", mw.Auth(handlers.DeleteGroupHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/join", mw.Auth(handlers.JoinGroupHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/members", mw.Auth(handlers.AddGroupMembersHandler))
-	mux.HandleFunc("DELETE /api/v1/groups/{groupId}/members/{userId}", mw.Auth(handlers.RemoveGroupMemberHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/admins", mw.Auth(handlers.PromoteAdminHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/invite", mw.Auth(handlers.GenerateInviteHandler))
-	mux.HandleFunc("POST /api/v1/invite/{inviteCode}", mw.Auth(handlers.JoinGroupByInviteHandler))
+	mux.HandleFunc("GET /api/v1/groups", kitMW.Chain(handlers.ListGroupsHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups", kitMW.Chain(handlers.CreateGroupHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/groups/{groupId}", kitMW.Chain(handlers.GetGroupHandler, kitMW.Auth("")))
+	mux.HandleFunc("PATCH /api/v1/groups/{groupId}", kitMW.Chain(handlers.UpdateGroupHandler, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/groups/{groupId}", kitMW.Chain(handlers.DeleteGroupHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/join", kitMW.Chain(handlers.JoinGroupHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/members", kitMW.Chain(handlers.AddGroupMembersHandler, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/groups/{groupId}/members/{userId}", kitMW.Chain(handlers.RemoveGroupMemberHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/admins", kitMW.Chain(handlers.PromoteAdminHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/invite", kitMW.Chain(handlers.GenerateInviteHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/invite/{inviteCode}", kitMW.Chain(handlers.JoinGroupByInviteHandler, kitMW.Auth("")))
 
 	// Group Calls
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls", mw.Auth(handlers.StartGroupCallHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/join", mw.Auth(handlers.JoinGroupCallHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/leave", mw.Auth(handlers.LeaveGroupCallHandler))
-	mux.HandleFunc("GET /api/v1/groups/{groupId}/calls/{callId}", mw.Auth(handlers.GetGroupCallStatusHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/mute", mw.Auth(handlers.MuteParticipantHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/kick", mw.Auth(handlers.KickParticipantHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/admins", mw.Auth(handlers.PromoteCallAdminHandler))
-	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/end", mw.Auth(handlers.ForceEndCallHandler))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls", kitMW.Chain(handlers.StartGroupCallHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/join", kitMW.Chain(handlers.JoinGroupCallHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/leave", kitMW.Chain(handlers.LeaveGroupCallHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/groups/{groupId}/calls/{callId}", kitMW.Chain(handlers.GetGroupCallStatusHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/mute", kitMW.Chain(handlers.MuteParticipantHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/kick", kitMW.Chain(handlers.KickParticipantHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/admins", kitMW.Chain(handlers.PromoteCallAdminHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/groups/{groupId}/calls/{callId}/end", kitMW.Chain(handlers.ForceEndCallHandler, kitMW.Auth("")))
 
 	// Vanity
-	mux.HandleFunc("PATCH /api/v1/groups/{groupId}/vanity", mw.Auth(handlers.SetVanitySlugHandler))
-	mux.HandleFunc("POST /api/v1/vanity/{slug}", mw.Auth(handlers.JoinGroupByVanityHandler))
+	mux.HandleFunc("PATCH /api/v1/groups/{groupId}/vanity", kitMW.Chain(handlers.SetVanitySlugHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/vanity/{slug}", kitMW.Chain(handlers.JoinGroupByVanityHandler, kitMW.Auth("")))
 
 	// Donations
-	mux.HandleFunc("POST /api/v1/donate/create-order", mw.Auth(handlers.CreateDonationOrderHandler))
-	mux.HandleFunc("GET /api/v1/donate/status/{orderId}", mw.Auth(handlers.GetDonationStatusHandler))
-	mux.HandleFunc("GET /api/v1/donate/history", mw.Auth(handlers.GetDonationHistoryHandler))
-	mux.HandleFunc("GET /api/v1/badges/tiers", mw.Auth(handlers.GetBadgeTiersHandler))
+	mux.HandleFunc("POST /api/v1/donate/create-order", kitMW.Chain(handlers.CreateDonationOrderHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/donate/status/{orderId}", kitMW.Chain(handlers.GetDonationStatusHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/donate/history", kitMW.Chain(handlers.GetDonationHistoryHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/badges/tiers", kitMW.Chain(handlers.GetBadgeTiersHandler, kitMW.Auth("")))
 
 	// Razorpay Webhook (bypasses rate limit)
 	mux.HandleFunc("POST /api/v1/webhook/razorpay", handlers.RazorpayWebhookHandler)
 
 	// Leaderboard
-	mux.HandleFunc("GET /api/v1/leaderboard", mw.Auth(handlers.GetLeaderboardHandler))
+	mux.HandleFunc("GET /api/v1/leaderboard", kitMW.Chain(handlers.GetLeaderboardHandler, kitMW.Auth("")))
 
 	// Online count (own rate limit)
 	mux.HandleFunc("GET /api/v1/online", healthLimiter.LimitMiddleware(handlers.GetOnlineCountHandler))
 
 	// Arena Posts
-	mux.HandleFunc("POST /api/v1/arena/posts", mw.Auth(handlers.CreatePostHandler))
-	mux.HandleFunc("GET /api/v1/arena/posts/{postId}", mw.Auth(handlers.GetPostHandler))
-	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}", mw.Auth(handlers.DeletePostHandler))
-	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/repost", mw.Auth(handlers.RepostHandler))
-	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/pin", mw.Auth(handlers.PinPostHandler))
-	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/pin", mw.Auth(handlers.PinPostHandler))
-	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/report", mw.Auth(handlers.ReportPostHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts", kitMW.Chain(handlers.CreatePostHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}", kitMW.Chain(handlers.GetPostHandler, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}", kitMW.Chain(handlers.DeletePostHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/repost", kitMW.Chain(handlers.RepostHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/pin", kitMW.Chain(handlers.PinPostHandler, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/pin", kitMW.Chain(handlers.PinPostHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/report", kitMW.Chain(handlers.ReportPostHandler, kitMW.Auth("")))
 
 	// Arena Likes
-	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/like", mw.Auth(handlers.LikePostHandler))
-	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/like", mw.Auth(handlers.UnlikePostHandler))
-	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/likes", mw.Auth(handlers.GetPostLikersHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/like", kitMW.Chain(handlers.LikePostHandler, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/like", kitMW.Chain(handlers.UnlikePostHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/likes", kitMW.Chain(handlers.GetPostLikersHandler, kitMW.Auth("")))
 
 	// Arena Bookmarks
-	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/bookmark", mw.Auth(handlers.BookmarkPostHandler))
-	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/bookmark", mw.Auth(handlers.UnbookmarkPostHandler))
-	mux.HandleFunc("GET /api/v1/arena/bookmarks", mw.Auth(handlers.GetBookmarksHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/bookmark", kitMW.Chain(handlers.BookmarkPostHandler, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/bookmark", kitMW.Chain(handlers.UnbookmarkPostHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/arena/bookmarks", kitMW.Chain(handlers.GetBookmarksHandler, kitMW.Auth("")))
 
 	// Arena Views
-	mux.HandleFunc("POST /api/v1/arena/posts/views", mw.Auth(handlers.RecordViewsHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/views", kitMW.Chain(handlers.RecordViewsHandler, kitMW.Auth("")))
 
 	// Arena Post Activity
-	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/activity", mw.Auth(handlers.GetPostActivityHandler))
-	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/reposts", mw.Auth(handlers.GetRepostsHandler))
-	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/profile-click", mw.Auth(handlers.RecordProfileClickHandler))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/activity", kitMW.Chain(handlers.GetPostActivityHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/reposts", kitMW.Chain(handlers.GetRepostsHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/profile-click", kitMW.Chain(handlers.RecordProfileClickHandler, kitMW.Auth("")))
 
 	// Arena Comments
-	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/comments", mw.Auth(handlers.CreateCommentHandler))
-	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/comments", mw.Auth(handlers.GetCommentsHandler))
-	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/comments/{commentId}", mw.Auth(handlers.DeleteCommentHandler))
-	mux.HandleFunc("POST /api/v1/arena/comments/{commentId}/like", mw.Auth(handlers.LikeCommentHandler))
-	mux.HandleFunc("DELETE /api/v1/arena/comments/{commentId}/like", mw.Auth(handlers.UnlikeCommentHandler))
-	mux.HandleFunc("POST /api/v1/arena/comments/{commentId}/report", mw.Auth(handlers.ReportCommentHandler))
+	mux.HandleFunc("POST /api/v1/arena/posts/{postId}/comments", kitMW.Chain(handlers.CreateCommentHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/arena/posts/{postId}/comments", kitMW.Chain(handlers.GetCommentsHandler, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/arena/posts/{postId}/comments/{commentId}", kitMW.Chain(handlers.DeleteCommentHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/arena/comments/{commentId}/like", kitMW.Chain(handlers.LikeCommentHandler, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/arena/comments/{commentId}/like", kitMW.Chain(handlers.UnlikeCommentHandler, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/arena/comments/{commentId}/report", kitMW.Chain(handlers.ReportCommentHandler, kitMW.Auth("")))
 
 	// Arena Feeds
-	mux.HandleFunc("GET /api/v1/arena/feed/global", mw.Auth(handlers.GlobalFeedHandler))
-	mux.HandleFunc("GET /api/v1/arena/feed/network", mw.Auth(handlers.NetworkFeedHandler))
-	mux.HandleFunc("GET /api/v1/arena/feed/trending", mw.Auth(handlers.TrendingFeedHandler))
-	mux.HandleFunc("GET /api/v1/arena/users/{userId}/posts", mw.Auth(handlers.UserPostsHandler))
+	mux.HandleFunc("GET /api/v1/arena/feed/global", kitMW.Chain(handlers.GlobalFeedHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/arena/feed/network", kitMW.Chain(handlers.NetworkFeedHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/arena/feed/trending", kitMW.Chain(handlers.TrendingFeedHandler, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/arena/users/{userId}/posts", kitMW.Chain(handlers.UserPostsHandler, kitMW.Auth("")))
 
 	// Arena Admin
-	mux.HandleFunc("DELETE /api/v1/admin/arena/posts/{postId}", mw.Auth(mw.BenkiAdminOnly(handlers.AdminDeletePostHandler)))
-	mux.HandleFunc("GET /api/v1/admin/arena/reports", mw.Auth(mw.BenkiAdminOnly(handlers.AdminGetPostReportsHandler)))
+	mux.HandleFunc("DELETE /api/v1/admin/arena/posts/{postId}", kitMW.Chain(handlers.AdminDeletePostHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/admin/arena/reports", kitMW.Chain(handlers.AdminGetPostReportsHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
 
 	// Admin
-	mux.HandleFunc("GET /api/v1/admin/stats", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminStatsHandler)))
-	mux.HandleFunc("GET /api/v1/admin/users", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminUsersHandler)))
-	mux.HandleFunc("POST /api/v1/admin/users/{userId}/ban", mw.Auth(mw.BenkiAdminOnly(handlers.BanUserHandler)))
-	mux.HandleFunc("POST /api/v1/admin/users/{userId}/unban", mw.Auth(mw.BenkiAdminOnly(handlers.UnbanUserHandler)))
-	mux.HandleFunc("GET /api/v1/admin/reports", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminReportsHandler)))
-	mux.HandleFunc("GET /api/v1/admin/users/{userId}/reports", mw.Auth(mw.BenkiAdminOnly(handlers.GetAdminUserReportsHandler)))
-	mux.HandleFunc("POST /api/v1/admin/badges", mw.Auth(mw.BenkiAdminOnly(handlers.CreateBadgeTierHandler)))
-	mux.HandleFunc("PATCH /api/v1/admin/badges/{badgeId}", mw.Auth(mw.BenkiAdminOnly(handlers.UpdateBadgeTierHandler)))
-	mux.HandleFunc("DELETE /api/v1/admin/badges/{badgeId}", mw.Auth(mw.BenkiAdminOnly(handlers.DeleteBadgeTierHandler)))
-	mux.HandleFunc("GET /api/v1/admin/settings/{key}", mw.Auth(mw.BenkiAdminOnly(handlers.GetAppSettingHandler)))
-	mux.HandleFunc("PATCH /api/v1/admin/settings/{key}", mw.Auth(mw.BenkiAdminOnly(handlers.UpdateAppSettingHandler)))
+	mux.HandleFunc("GET /api/v1/admin/stats", kitMW.Chain(handlers.GetAdminStatsHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/admin/users", kitMW.Chain(handlers.GetAdminUsersHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/ban", kitMW.Chain(handlers.BanUserHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/admin/users/{userId}/unban", kitMW.Chain(handlers.UnbanUserHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/admin/reports", kitMW.Chain(handlers.GetAdminReportsHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/admin/users/{userId}/reports", kitMW.Chain(handlers.GetAdminUserReportsHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("POST /api/v1/admin/badges", kitMW.Chain(handlers.CreateBadgeTierHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("PATCH /api/v1/admin/badges/{badgeId}", kitMW.Chain(handlers.UpdateBadgeTierHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("DELETE /api/v1/admin/badges/{badgeId}", kitMW.Chain(handlers.DeleteBadgeTierHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("GET /api/v1/admin/settings/{key}", kitMW.Chain(handlers.GetAppSettingHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
+	mux.HandleFunc("PATCH /api/v1/admin/settings/{key}", kitMW.Chain(handlers.UpdateAppSettingHandler, mw.BenkiAdminOnly, kitMW.Auth("")))
 
 	// WebSocket
-	mux.HandleFunc("GET /ws", mw.Auth(func(w http.ResponseWriter, r *http.Request) {
-		userID := r.Context().Value(config.UserIDKey).(string)
+	mux.HandleFunc("GET /ws", kitMW.Chain(func(w http.ResponseWriter, r *http.Request) {
+		userID := kitMW.Subject(r.Context())
 		chat.ServeWs(engine, w, r, userID)
-	}))
+	}, kitMW.Auth("")))
 
-	handler := mw.CORS(mw.BodyLimit(rateLimitRouter(globalLimiter, mux)))
+	handler := kitMW.NewCORS(kitMW.CORSConfig{
+		Origin:      config.CORSOrigin,
+		Credentials: true,
+	})(rateLimitRouter(globalLimiter, mux))
 	return handler
 }
 
 // rateLimitRouter applies the global rate limiter except for routes with their
 // own limiter or webhook routes that bypass limiting entirely.
-func rateLimitRouter(globalLimiter *middleware.IPRateLimiter, mux *http.ServeMux) http.Handler {
+func rateLimitRouter(globalLimiter *kitMW.IPRateLimiter, mux *http.ServeMux) http.Handler {
 	bypassPrefixes := []string{
 		"/health",
 		"/api/v1/auth/",
@@ -311,10 +323,10 @@ func StartTestServer(t *testing.T) (*httptest.Server, *chat.Engine, func()) {
 // CleanAll truncates all tables and flushes Redis for a fresh test state.
 func CleanAll(t *testing.T) {
 	t.Helper()
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 
 	// Dynamically discover all user-created tables to avoid hard-coded list going stale
-	rows, err := db.Query(
+	rows, err := db.Query(context.Background(),
 		`SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`)
 	if err != nil {
 		t.Fatalf("[cleanup] Failed to list tables: %v", err)
@@ -332,7 +344,7 @@ func CleanAll(t *testing.T) {
 	}
 
 	for _, table := range tables {
-		_, err := db.Exec("TRUNCATE " + table + " CASCADE")
+		_, err := db.Exec(context.Background(), "TRUNCATE "+table+" CASCADE")
 		if err != nil {
 			// Table might not exist yet, that's fine
 			t.Logf("[cleanup] TRUNCATE %s: %v", table, err)
@@ -348,11 +360,11 @@ func CleanAll(t *testing.T) {
 // SeedUser creates a test user in the database and returns their ID and a Bearer token.
 func SeedUser(t *testing.T, name, email string) (userID, token string) {
 	t.Helper()
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := db.QueryRowContext(ctx,
+	err := db.QueryRow(ctx,
 		`INSERT INTO users (google_id, email, name, username, gender)
 		 VALUES ($1, $2, $3, $4, 'Any')
 		 RETURNING id::text`,
@@ -369,11 +381,11 @@ func SeedUser(t *testing.T, name, email string) (userID, token string) {
 // SeedUserWithUsername creates a test user with a specific username and returns their ID and token.
 func SeedUserWithUsername(t *testing.T, name, email, username string) (userID, token string) {
 	t.Helper()
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := db.QueryRowContext(ctx,
+	err := db.QueryRow(ctx,
 		`INSERT INTO users (google_id, email, name, username, gender)
 		 VALUES ($1, $2, $3, $4, 'Any')
 		 RETURNING id::text`,
@@ -399,7 +411,7 @@ func AuthToken(userID string) string {
 // SeedFriendship creates a mutual friendship between two users + a DM room.
 func SeedFriendship(t *testing.T, userID1, userID2 string) string {
 	t.Helper()
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -409,7 +421,7 @@ func SeedFriendship(t *testing.T, userID1, userID2 string) string {
 		u1, u2 = u2, u1
 	}
 
-	_, err := db.ExecContext(ctx,
+	_, err := db.Exec(ctx,
 		`INSERT INTO friendships (user_id_1, user_id_2) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		u1, u2)
 	if err != nil {
@@ -418,14 +430,14 @@ func SeedFriendship(t *testing.T, userID1, userID2 string) string {
 
 	// Create DM room
 	var roomID string
-	err = db.QueryRowContext(ctx,
+	err = db.QueryRow(ctx,
 		`INSERT INTO rooms (type) VALUES ('DM') RETURNING id::text`,
 	).Scan(&roomID)
 	if err != nil {
 		t.Fatalf("[seed] Failed to create room: %v", err)
 	}
 
-	_, err = db.ExecContext(ctx,
+	_, err = db.Exec(ctx,
 		`INSERT INTO room_members (room_id, user_id, status) VALUES ($1, $2, 'active'), ($1, $3, 'active')`,
 		roomID, userID1, userID2)
 	if err != nil {
@@ -454,12 +466,12 @@ func SeedFriendship(t *testing.T, userID1, userID2 string) string {
 // SeedMessage inserts a message into a room.
 func SeedMessage(t *testing.T, roomID, senderID, content string) int64 {
 	t.Helper()
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var msgID int64
-	err := db.QueryRowContext(ctx,
+	err := db.QueryRow(ctx,
 		`INSERT INTO messages (room_id, sender_id, content) VALUES ($1, $2, $3) RETURNING id`,
 		roomID, senderID, content,
 	).Scan(&msgID)
@@ -472,11 +484,11 @@ func SeedMessage(t *testing.T, roomID, senderID, content string) int64 {
 // SeedBan bans a user.
 func SeedBan(t *testing.T, userID string) {
 	t.Helper()
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := db.ExecContext(ctx, `UPDATE users SET is_banned = true WHERE id = $1`, userID)
+	_, err := db.Exec(ctx, `UPDATE users SET is_banned = true WHERE id = $1`, userID)
 	if err != nil {
 		t.Fatalf("[seed] Failed to ban user: %v", err)
 	}
@@ -488,11 +500,11 @@ func SeedBan(t *testing.T, userID string) {
 // SeedBlock creates a block relationship.
 func SeedBlock(t *testing.T, blockerID, blockedID string) {
 	t.Helper()
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := db.ExecContext(ctx,
+	_, err := db.Exec(ctx,
 		`INSERT INTO blocked_users (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		blockerID, blockedID)
 	if err != nil {
@@ -503,12 +515,12 @@ func SeedBlock(t *testing.T, blockerID, blockedID string) {
 // SeedPost creates a post in the database and returns its ID.
 func SeedPost(t *testing.T, userID, caption string) int64 {
 	t.Helper()
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var postID int64
-	err := db.QueryRowContext(ctx,
+	err := db.QueryRow(ctx,
 		`INSERT INTO posts (user_id, caption, post_type, visibility) VALUES ($1, $2, 'original', 'public') RETURNING id`,
 		userID, caption,
 	).Scan(&postID)

@@ -55,7 +55,7 @@ func TestBadgeTiersCaching(t *testing.T) {
 	_, adminToken := testutil.SeedUser(t, "cacheadmin", "admin@test.com")
 
 	// Seed a badge tier directly in DB
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	_, err := db.Exec(`INSERT INTO badge_tiers (name, min_amount, icon, display_order) VALUES ('Bronze', 10, '🥉', 1)`)
 	require.NoError(t, err)
 
@@ -234,7 +234,7 @@ func TestTrendingFeedCaching(t *testing.T) {
 
 	// Seed posts with engagement
 	postID := testutil.SeedPost(t, userID, "Trending Post")
-	db := postgress.GetRawDB()
+	db := postgress.GetPool()
 	_, err := db.Exec(`UPDATE posts SET like_count = 100, comment_count = 50 WHERE id = $1`, postID)
 	require.NoError(t, err)
 
@@ -293,7 +293,7 @@ func TestSinglePostCaching(t *testing.T) {
 
 	t.Run("second call returns cached data", func(t *testing.T) {
 		// Mutate caption in DB directly
-		db := postgress.GetRawDB()
+		db := postgress.GetPool()
 		_, err := db.Exec(`UPDATE posts SET caption = 'Changed Caption' WHERE id = $1`, postID)
 		require.NoError(t, err)
 

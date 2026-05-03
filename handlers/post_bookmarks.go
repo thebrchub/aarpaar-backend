@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/shivanand-burli/go-starter-kit/helper"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/thebrchub/aarpaar/chat"
@@ -23,15 +25,16 @@ import (
 // ---------------------------------------------------------------------------
 
 func BookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -40,30 +43,30 @@ func BookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 
 	// FK constraint will reject if post doesn't exist; ON CONFLICT handles dupes.
 	// No need for a separate EXISTS check — saves one round-trip.
-	result, err := postgress.Exec(
+	result, err := postgress.Exec(ctx,
 		`INSERT INTO post_bookmarks (user_id, post_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		userID, postID,
 	)
 	if err != nil {
 		log.Printf("[arena] bookmark post failed user=%s post=%d: %v", userID, postID, err)
-		JSONError(w, "Failed to bookmark post", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to bookmark post")
 		return
 	}
 	if result == 0 {
 		// Either post doesn't exist (FK violation caught above) or already bookmarked
-		JSONMessage(w, "success", "Already bookmarked")
+		helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Already bookmarked"})
 		return
 	}
 
 	// Invalidate bookmarks cache + user's feed caches + single-post cache
 	// so hasBookmarked / bookmarkCount are fresh immediately.
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		invalidateBookmarksCache(userID)
 		invalidatePostCache(postID)
 		invalidateUserFeedCaches(userID)
 	})
 
-	JSONMessage(w, "success", "Post bookmarked")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Post bookmarked"})
 }
 
 // ---------------------------------------------------------------------------
@@ -72,40 +75,41 @@ func BookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func UnbookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
 	// Plain reposts redirect unbookmarks to the original post.
 	postID = services.ResolveOriginalPostID(r.Context(), postID)
 
-	_, err = postgress.Exec(
+	_, err = postgress.Exec(ctx,
 		`DELETE FROM post_bookmarks WHERE user_id = $1 AND post_id = $2`,
 		userID, postID,
 	)
 	if err != nil {
 		log.Printf("[arena] unbookmark post failed user=%s post=%d: %v", userID, postID, err)
-		JSONError(w, "Failed to remove bookmark", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to remove bookmark")
 		return
 	}
 
 	// Invalidate bookmarks cache + user's feed caches + single-post cache
 	// so hasBookmarked / bookmarkCount are fresh immediately.
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		invalidateBookmarksCache(userID)
 		invalidatePostCache(postID)
 		invalidateUserFeedCaches(userID)
 	})
 
-	JSONMessage(w, "success", "Bookmark removed")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Bookmark removed"})
 }
 
 // ---------------------------------------------------------------------------
@@ -114,9 +118,9 @@ func UnbookmarkPostHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -145,7 +149,7 @@ func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
@@ -166,7 +170,7 @@ func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("[arena] bookmarks feed query failed: %v", err)
-		JSONError(w, "Failed to load bookmarks", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load bookmarks")
 		return
 	}
 	defer rows.Close()
@@ -198,7 +202,7 @@ func GetBookmarksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSONSuccess(w, posts)
+	helper.JSON(w, http.StatusOK, posts)
 }
 
 // invalidateBookmarksCache deletes all cached bookmark feed pages for a user.

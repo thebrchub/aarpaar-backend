@@ -11,7 +11,10 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"github.com/jackc/pgx/v5"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/shivanand-burli/go-starter-kit/helper"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
 	"github.com/shivanand-burli/go-starter-kit/postgress"
 	"github.com/shivanand-burli/go-starter-kit/redis"
 	"github.com/shivanand-burli/go-starter-kit/storage"
@@ -27,15 +30,15 @@ import (
 // ---------------------------------------------------------------------------
 
 func CreatePostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	var req models.CreatePostRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -47,30 +50,30 @@ func CreatePostHandler(w http.ResponseWriter, r *http.Request) {
 		maxCaption = limits.MaxCaptionLength
 	}
 	if len(req.Caption) > maxCaption {
-		JSONError(w, fmt.Sprintf("Caption too long (max %d chars)", maxCaption), http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, fmt.Sprintf("Caption too long (max %d chars)", maxCaption))
 		return
 	}
 
 	// Validate media count
 	if len(req.Media) > limits.MaxMediaPerPost {
-		JSONError(w, fmt.Sprintf("Too many media items (max %d)", limits.MaxMediaPerPost), http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, fmt.Sprintf("Too many media items (max %d)", limits.MaxMediaPerPost))
 		return
 	}
 
 	// Must have either caption or media
 	if strings.TrimSpace(req.Caption) == "" && len(req.Media) == 0 {
-		JSONError(w, "Post must have a caption or media", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Post must have a caption or media")
 		return
 	}
 
 	// Validate media types
 	for _, m := range req.Media {
 		if m.MediaType != config.MediaTypeImage && m.MediaType != config.MediaTypeVideo {
-			JSONError(w, "Invalid media type: "+m.MediaType, http.StatusBadRequest)
+			helper.Error(w, http.StatusBadRequest, "Invalid media type: "+m.MediaType)
 			return
 		}
 		if m.ObjectKey == "" {
-			JSONError(w, "Media objectKey is required", http.StatusBadRequest)
+			helper.Error(w, http.StatusBadRequest, "Media objectKey is required")
 			return
 		}
 	}
@@ -89,26 +92,26 @@ func CreatePostHandler(w http.ResponseWriter, r *http.Request) {
 		// EXISTS with OFFSET: returns true if the user already has >= N posts.
 		// Short-circuits at the Nth row instead of scanning all rows like COUNT(*).
 		var limitReached bool
-		_ = postgress.GetRawDB().QueryRowContext(ctx,
+		_ = postgress.GetPool().QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM posts WHERE user_id = $1 OFFSET $2)`,
 			userID, limits.MaxPostsPerUser,
 		).Scan(&limitReached)
 		if limitReached {
-			JSONError(w, fmt.Sprintf("Post limit reached (%d). Donate to unlock unlimited posts!", limits.MaxPostsPerUser), http.StatusForbidden)
+			helper.Error(w, http.StatusForbidden, fmt.Sprintf("Post limit reached (%d). Donate to unlock unlimited posts!", limits.MaxPostsPerUser))
 			return
 		}
 	}
 
 	// Insert post
 	var postID int64
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`INSERT INTO posts (user_id, caption, post_type, visibility)
 		 VALUES ($1, $2, $3, $4) RETURNING id`,
 		userID, req.Caption, config.PostTypeOriginal, vis,
 	).Scan(&postID)
 	if err != nil {
 		log.Printf("[arena] create post failed user=%s: %v", userID, err)
-		JSONError(w, "Failed to create post", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to create post")
 		return
 	}
 
@@ -122,7 +125,7 @@ func CreatePostHandler(w http.ResponseWriter, r *http.Request) {
 				base+1, base+2, base+3, base+4, base+5, base+6, base+7, base+8)
 			params = append(params, postID, m.MediaType, m.ObjectKey, m.Width, m.Height, m.DurationMs, m.PreviewHash, m.SortOrder)
 		}
-		_, err := postgress.Exec(
+		_, err := postgress.Exec(ctx,
 			fmt.Sprintf(`INSERT INTO post_media (post_id, media_type, object_key, width, height, duration_ms, preview_hash, sort_order)
 				VALUES %s`, strings.Join(values, ", ")),
 			params...,
@@ -135,14 +138,14 @@ func CreatePostHandler(w http.ResponseWriter, r *http.Request) {
 	// Return the created post
 	post, err := getPostByID(ctx, postID, userID)
 	if err != nil {
-		JSONError(w, "Post created but failed to fetch", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Post created but failed to fetch")
 		return
 	}
 
 	// Invalidate feed caches so new post appears immediately
-	chat.RunBackground(func() { InvalidateFeedCaches() })
+	chat.Pool.Submit(func() { InvalidateFeedCaches() })
 
-	JSONSuccess(w, post)
+	helper.JSON(w, http.StatusOK, post)
 }
 
 // ---------------------------------------------------------------------------
@@ -151,15 +154,15 @@ func CreatePostHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func GetPostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -171,7 +174,7 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 	rdb := redis.GetRawClient()
 	if cached, err := rdb.Get(ctx, cacheKey).Bytes(); err == nil && len(cached) > 0 {
 		// Still record the detail expand
-		chat.RunBackground(func() {
+		chat.Pool.Submit(func() {
 			services.BufferDetailExpand(context.Background(), userID, postID)
 		})
 		var post models.PostResponse
@@ -193,12 +196,12 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 
 	post, err := getPostByID(ctx, postID, userID)
 	if err != nil {
-		JSONError(w, "Post not found", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Post not found")
 		return
 	}
 
 	// Record detail expand (unique per user, buffered in Redis)
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		services.BufferDetailExpand(context.Background(), userID, postID)
 	})
 
@@ -217,7 +220,7 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSONSuccess(w, post)
+	helper.JSON(w, http.StatusOK, post)
 }
 
 // ---------------------------------------------------------------------------
@@ -226,15 +229,15 @@ func GetPostHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -242,7 +245,7 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Fetch media keys for cleanup
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT object_key FROM post_media WHERE post_id = $1`, postID,
 	)
 	if err == nil {
@@ -260,7 +263,7 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Delete from storage
 		if len(keys) > 0 && Store != nil {
-			chat.RunBackground(func() {
+			chat.Pool.Submit(func() {
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer bgCancel()
 				if err := Store.DeleteBatch(bgCtx, keys); err != nil {
@@ -274,22 +277,22 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 	var postType string
 	var origPostID *int64
 	var caption string
-	_ = postgress.GetRawDB().QueryRowContext(ctx,
+	_ = postgress.GetPool().QueryRow(ctx,
 		`SELECT post_type, original_post_id, caption FROM posts WHERE id = $1 AND user_id = $2`,
 		postID, userID,
 	).Scan(&postType, &origPostID, &caption)
 
 	// Delete post (cascades to media, likes, comments)
-	result, err := postgress.Exec(
+	result, err := postgress.Exec(ctx,
 		`DELETE FROM posts WHERE id = $1 AND user_id = $2`, postID, userID,
 	)
 	if err != nil {
 		log.Printf("[arena] delete post failed post=%d user=%s: %v", postID, userID, err)
-		JSONError(w, "Failed to delete post", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to delete post")
 		return
 	}
 	if result == 0 {
-		JSONError(w, "Post not found or not yours", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Post not found or not yours")
 		return
 	}
 
@@ -297,13 +300,13 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 	if postType == config.PostTypeRepost && origPostID != nil {
 		origID := *origPostID
 		captionTrimmed := strings.TrimSpace(caption)
-		chat.RunBackground(func() {
+		chat.Pool.Submit(func() {
 			if captionTrimmed != "" {
-				_, _ = postgress.Exec(
+				_, _ = postgress.Exec(ctx,
 					`UPDATE posts SET repost_count = GREATEST(repost_count - 1, 0), quote_count = GREATEST(quote_count - 1, 0) WHERE id = $1`, origID,
 				)
 			} else {
-				_, _ = postgress.Exec(
+				_, _ = postgress.Exec(ctx,
 					`UPDATE posts SET repost_count = GREATEST(repost_count - 1, 0) WHERE id = $1`, origID,
 				)
 			}
@@ -311,12 +314,12 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Invalidate feed caches + single post cache
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		InvalidateFeedCaches()
 		redis.GetRawClient().Del(context.Background(), fmt.Sprintf("%s%d:%s", config.CachePost, postID, userID))
 	})
 
-	JSONMessage(w, "success", "Post deleted")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Post deleted"})
 }
 
 // ---------------------------------------------------------------------------
@@ -325,21 +328,21 @@ func DeletePostHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func RepostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
 	var req models.RepostRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -349,7 +352,7 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 		maxCaption = limits.MaxCaptionLength
 	}
 	if len(req.Caption) > maxCaption {
-		JSONError(w, fmt.Sprintf("Caption too long (max %d chars)", maxCaption), http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, fmt.Sprintf("Caption too long (max %d chars)", maxCaption))
 		return
 	}
 
@@ -358,11 +361,11 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Verify original exists
 	var exists bool
-	_ = postgress.GetRawDB().QueryRowContext(ctx,
+	_ = postgress.GetPool().QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1)`, postID,
 	).Scan(&exists)
 	if !exists {
-		JSONError(w, "Original post not found", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Original post not found")
 		return
 	}
 
@@ -371,36 +374,36 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 	captionTrimmed := strings.TrimSpace(req.Caption)
 	if captionTrimmed == "" {
 		var alreadyReposted bool
-		_ = postgress.GetRawDB().QueryRowContext(ctx,
+		_ = postgress.GetPool().QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM posts WHERE user_id = $1 AND original_post_id = $2 AND post_type = $3 AND caption = '')`,
 			userID, postID, config.PostTypeRepost,
 		).Scan(&alreadyReposted)
 		if alreadyReposted {
-			JSONError(w, "Already reposted", http.StatusConflict)
+			helper.Error(w, http.StatusConflict, "Already reposted")
 			return
 		}
 	}
 
 	var newPostID int64
-	err = postgress.GetRawDB().QueryRowContext(ctx,
+	err = postgress.GetPool().QueryRow(ctx,
 		`INSERT INTO posts (user_id, caption, post_type, original_post_id)
 		 VALUES ($1, $2, $3, $4) RETURNING id`,
 		userID, req.Caption, config.PostTypeRepost, postID,
 	).Scan(&newPostID)
 	if err != nil {
 		log.Printf("[arena] repost failed user=%s original=%d: %v", userID, postID, err)
-		JSONError(w, "Failed to repost", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to repost")
 		return
 	}
 
 	// Increment repost count on original in background (non-blocking)
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		if captionTrimmed != "" {
-			_, _ = postgress.Exec(
+			_, _ = postgress.Exec(ctx,
 				`UPDATE posts SET repost_count = repost_count + 1, quote_count = quote_count + 1 WHERE id = $1`, postID,
 			)
 		} else {
-			_, _ = postgress.Exec(
+			_, _ = postgress.Exec(ctx,
 				`UPDATE posts SET repost_count = repost_count + 1 WHERE id = $1`, postID,
 			)
 		}
@@ -408,7 +411,7 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 
 	post, err := getPostByID(ctx, newPostID, userID)
 	if err != nil {
-		JSONError(w, "Repost created but failed to fetch", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Repost created but failed to fetch")
 		return
 	}
 
@@ -416,9 +419,9 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 	invalidatePostCache(postID)
 
 	// Invalidate feed caches in background (heavier SCAN)
-	chat.RunBackground(func() { InvalidateFeedCaches() })
+	chat.Pool.Submit(func() { InvalidateFeedCaches() })
 
-	JSONSuccess(w, post)
+	helper.JSON(w, http.StatusOK, post)
 }
 
 // ---------------------------------------------------------------------------
@@ -428,37 +431,38 @@ func RepostHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func PinPostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
 	pin := r.Method == http.MethodPost
 
-	result, err := postgress.Exec(
+	result, err := postgress.Exec(ctx,
 		`UPDATE posts SET is_pinned = $1, updated_at = NOW()
 		 WHERE id = $2 AND user_id = $3`, pin, postID, userID,
 	)
 	if err != nil || result == 0 {
-		JSONError(w, "Post not found or not yours", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Post not found or not yours")
 		return
 	}
 
 	if pin {
-		JSONMessage(w, "success", "Post pinned")
+		helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Post pinned"})
 	} else {
-		JSONMessage(w, "success", "Post unpinned")
+		helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Post unpinned"})
 	}
 
 	// Invalidate post cache + user's feed caches so pin state is visible immediately.
-	chat.RunBackground(func() {
+	chat.Pool.Submit(func() {
 		invalidatePostCache(postID)
 		InvalidateFeedCaches()
 	})
@@ -470,9 +474,9 @@ func PinPostHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -504,7 +508,7 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
@@ -525,7 +529,7 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("[arena] global feed query failed: %v", err)
-		JSONError(w, "Failed to load feed", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load feed")
 		return
 	}
 	defer rows.Close()
@@ -560,7 +564,7 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSONSuccess(w, posts)
+	helper.JSON(w, http.StatusOK, posts)
 }
 
 // ---------------------------------------------------------------------------
@@ -569,9 +573,9 @@ func GlobalFeedHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -603,7 +607,7 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`WITH my_friends AS (
 			SELECT user_id_2 AS friend_id FROM friendships WHERE user_id_1 = $1
 			UNION ALL
@@ -630,7 +634,7 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("[arena] network feed query failed: %v", err)
-		JSONError(w, "Failed to load feed", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load feed")
 		return
 	}
 	defer rows.Close()
@@ -662,7 +666,7 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSONSuccess(w, posts)
+	helper.JSON(w, http.StatusOK, posts)
 }
 
 // ---------------------------------------------------------------------------
@@ -671,15 +675,15 @@ func NetworkFeedHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
-	viewerID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || viewerID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	viewerID := middleware.Subject(r.Context())
+	if viewerID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	targetUserID := r.PathValue("userId")
 	if targetUserID == "" {
-		JSONError(w, "userId is required", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "userId is required")
 		return
 	}
 
@@ -732,10 +736,10 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 		ORDER BY p.is_pinned DESC, p.created_at DESC
 		LIMIT $3 OFFSET $4`, visFilter)
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx, query, viewerID, targetUserID, limit, offset)
+	rows, err := postgress.GetPool().Query(ctx, query, viewerID, targetUserID, limit, offset)
 	if err != nil {
 		log.Printf("[arena] user posts query failed: %v", err)
-		JSONError(w, "Failed to load posts", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load posts")
 		return
 	}
 	defer rows.Close()
@@ -767,7 +771,7 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSONSuccess(w, posts)
+	helper.JSON(w, http.StatusOK, posts)
 }
 
 // ---------------------------------------------------------------------------
@@ -776,9 +780,9 @@ func UserPostsHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -810,7 +814,7 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 	// Trending = posts that received engagement in the last 24 hours.
 	// Uses denormalized counters + last_engaged_at (bumped by the flusher)
 	// instead of expensive CTEs scanning engagement tables.
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
@@ -832,7 +836,7 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("[arena] trending feed query failed: %v", err)
-		JSONError(w, "Failed to load trending", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load trending")
 		return
 	}
 	defer rows.Close()
@@ -865,7 +869,7 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSONSuccess(w, posts)
+	helper.JSON(w, http.StatusOK, posts)
 }
 
 // ---------------------------------------------------------------------------
@@ -874,35 +878,36 @@ func TrendingFeedHandler(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func ReportPostHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	ctx := r.Context()
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
 	var req models.ReportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Reason) == "" {
-		JSONError(w, "Reason is required", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil || strings.TrimSpace(req.Reason) == "" {
+		helper.Error(w, http.StatusBadRequest, "Reason is required")
 		return
 	}
 
-	_, err = postgress.Exec(
+	_, err = postgress.Exec(ctx,
 		`INSERT INTO post_reports (reporter_id, post_id, reason) VALUES ($1, $2, $3)`,
 		userID, postID, req.Reason,
 	)
 	if err != nil {
 		log.Printf("[arena] report post failed user=%s post=%d: %v", userID, postID, err)
-		JSONError(w, "Failed to report post", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to report post")
 		return
 	}
 
-	JSONMessage(w, "success", "Post reported")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Post reported"})
 }
 
 // ---------------------------------------------------------------------------
@@ -913,7 +918,7 @@ func ReportPostHandler(w http.ResponseWriter, r *http.Request) {
 func AdminDeletePostHandler(w http.ResponseWriter, r *http.Request) {
 	postID, err := strconv.ParseInt(r.PathValue("postId"), 10, 64)
 	if err != nil {
-		JSONError(w, "Invalid post ID", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Invalid post ID")
 		return
 	}
 
@@ -921,7 +926,7 @@ func AdminDeletePostHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Fetch media keys for cleanup
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT object_key FROM post_media WHERE post_id = $1`, postID,
 	)
 	if err == nil {
@@ -934,7 +939,7 @@ func AdminDeletePostHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(keys) > 0 && Store != nil {
-			chat.RunBackground(func() {
+			chat.Pool.Submit(func() {
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer bgCancel()
 				_ = Store.DeleteBatch(bgCtx, keys)
@@ -942,20 +947,20 @@ func AdminDeletePostHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := postgress.Exec(`DELETE FROM posts WHERE id = $1`, postID)
+	result, err := postgress.Exec(ctx, `DELETE FROM posts WHERE id = $1`, postID)
 	if err != nil {
-		JSONError(w, "Failed to delete post", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to delete post")
 		return
 	}
 	if result == 0 {
-		JSONError(w, "Post not found", http.StatusNotFound)
+		helper.Error(w, http.StatusNotFound, "Post not found")
 		return
 	}
 
 	// Invalidate feed caches
-	chat.RunBackground(func() { InvalidateFeedCaches() })
+	chat.Pool.Submit(func() { InvalidateFeedCaches() })
 
-	JSONMessage(w, "success", "Post deleted by admin")
+	helper.JSON(w, http.StatusOK, map[string]string{"status": "success", "message": "Post deleted by admin"})
 }
 
 // ---------------------------------------------------------------------------
@@ -969,7 +974,7 @@ func AdminGetPostReportsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := pgCtx(r)
 	defer cancel()
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx,
+	rows, err := postgress.GetPool().Query(ctx,
 		`SELECT pr.id, pr.reporter_id, pr.post_id, pr.reason, pr.created_at,
 		        p.caption, p.user_id
 		 FROM post_reports pr
@@ -978,7 +983,7 @@ func AdminGetPostReportsHandler(w http.ResponseWriter, r *http.Request) {
 		 LIMIT $1 OFFSET $2`, limit, offset,
 	)
 	if err != nil {
-		JSONError(w, "Failed to load reports", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to load reports")
 		return
 	}
 	defer rows.Close()
@@ -1000,14 +1005,14 @@ func AdminGetPostReportsHandler(w http.ResponseWriter, r *http.Request) {
 			reports = append(reports, rpt)
 		}
 	}
-	JSONSuccess(w, reports)
+	helper.JSON(w, http.StatusOK, reports)
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-func scanPost(rows *sql.Rows) (models.PostResponse, error) {
+func scanPost(rows pgx.Rows) (models.PostResponse, error) {
 	var p models.PostResponse
 	err := rows.Scan(
 		&p.ID, &p.UserID, &p.Username, &p.DisplayName, &p.AvatarURL,
@@ -1046,7 +1051,7 @@ func attachMedia(ctx context.Context, posts []models.PostResponse, store storage
 		strings.Join(placeholders, ","),
 	)
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx, query, params...)
+	rows, err := postgress.GetPool().Query(ctx, query, params...)
 	if err != nil {
 		return err
 	}
@@ -1137,7 +1142,7 @@ func attachOriginalPosts(ctx context.Context, posts []models.PostResponse, viewe
 		strings.Join(placeholders, ","),
 	)
 
-	rows, err := postgress.GetRawDB().QueryContext(ctx, query, params...)
+	rows, err := postgress.GetPool().Query(ctx, query, params...)
 	if err != nil {
 		log.Printf("[arena] fetch original posts failed: %v", err)
 		return
@@ -1217,7 +1222,7 @@ func parseFeedCursor(r *http.Request) (cursor time.Time, limit int) {
 
 func getPostByID(ctx context.Context, postID int64, viewerID string) (models.PostResponse, error) {
 	var p models.PostResponse
-	err := postgress.GetRawDB().QueryRowContext(ctx,
+	err := postgress.GetPool().QueryRow(ctx,
 		`SELECT p.id, p.user_id, u.username, u.name, u.avatar_url,
 		        p.caption, p.post_type, p.original_post_id, p.visibility,
 		        p.is_pinned, p.like_count, p.comment_count, p.repost_count,
@@ -1323,7 +1328,7 @@ func invalidateAllCommentCachesForUser(userID string) {
 }
 
 // scanDelCtx is a small helper that SCANs for keys matching a pattern and DELetes them.
-func scanDelCtx(ctx context.Context, rdb *goredis.Client, pattern string) {
+func scanDelCtx(ctx context.Context, rdb goredis.UniversalClient, pattern string) {
 	var cursor uint64
 	for {
 		keys, next, err := rdb.Scan(ctx, cursor, pattern, 100).Result()
@@ -1367,7 +1372,7 @@ func invalidatePostCache(postID int64) {
 // user and patches hasLiked + likeCount on each post. This provides
 // read-your-own-writes consistency while likes are still buffered (not yet
 // flushed to Postgres). Uses a single pipelined round trip — O(1) per post.
-func overlayPendingLikes(ctx context.Context, rdb *goredis.Client, userID string, posts []models.PostResponse) {
+func overlayPendingLikes(ctx context.Context, rdb goredis.UniversalClient, userID string, posts []models.PostResponse) {
 	if len(posts) == 0 {
 		return
 	}

@@ -6,10 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/goccy/go-json"
-	"github.com/google/uuid"
 	"github.com/shivanand-burli/go-starter-kit/storage"
+	"github.com/shivanand-burli/go-starter-kit/middleware"
+	"github.com/shivanand-burli/go-starter-kit/helper"
 	"github.com/thebrchub/aarpaar/config"
 	"github.com/thebrchub/aarpaar/models"
 	"github.com/thebrchub/aarpaar/services"
@@ -22,27 +21,27 @@ var Store storage.StorageService
 // with server-side size enforcement.
 // POST /api/v1/arena/media/presign
 func PresignUploadHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(config.UserIDKey).(string)
-	if !ok || userID == "" {
-		JSONError(w, "Unauthorized", http.StatusUnauthorized)
+	userID := middleware.Subject(r.Context())
+	if userID == "" {
+		helper.Error(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 
 	if Store == nil {
-		JSONError(w, "Storage not configured", http.StatusServiceUnavailable)
+		helper.Error(w, http.StatusServiceUnavailable, "Storage not configured")
 		return
 	}
 
 	var req models.PresignRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		JSONError(w, "Invalid request body", http.StatusBadRequest)
+	if err := helper.ReadJSON(r, &req); err != nil {
+		helper.Error(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	// Validate content type
 	ct := strings.ToLower(req.ContentType)
 	if !isAllowedMediaType(ct) {
-		JSONError(w, "Unsupported media type. Allowed: image/jpeg, image/webp, image/avif, image/png, video/mp4, video/webm", http.StatusBadRequest)
+		helper.Error(w, http.StatusBadRequest, "Unsupported media type. Allowed: image/jpeg, image/webp, image/avif, image/png, video/mp4, video/webm")
 		return
 	}
 
@@ -60,7 +59,7 @@ func PresignUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if ext == "" {
 		ext = mimeToExt(ct)
 	}
-	objectKey := fmt.Sprintf("arena/%s/%s%s", userID, uuid.New().String(), ext)
+	objectKey := fmt.Sprintf("arena/%s/%s%s", userID, helper.RandomUUID(), ext)
 
 	putMins := limits.PresignPutMins
 	if putMins <= 0 {
@@ -74,11 +73,11 @@ func PresignUploadHandler(w http.ResponseWriter, r *http.Request) {
 		Expiry:      time.Duration(putMins) * time.Minute,
 	})
 	if err != nil {
-		JSONError(w, "Failed to generate upload URL", http.StatusInternalServerError)
+		helper.Error(w, http.StatusInternalServerError, "Failed to generate upload URL")
 		return
 	}
 
-	JSONSuccess(w, models.PresignResponse{
+	helper.JSON(w, http.StatusOK, models.PresignResponse{
 		URL:       out.URL,
 		Fields:    out.Fields,
 		ObjectKey: objectKey,

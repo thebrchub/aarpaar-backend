@@ -1,7 +1,7 @@
 # ================================
 # Build stage
 # ================================
-FROM golang:1.25.5-alpine3.23 AS builder
+FROM golang:1.26.1-alpine3.23 AS builder
 
 WORKDIR /app
 
@@ -22,9 +22,8 @@ ENV GOPRIVATE=github.com/shivanand-burli/*
 COPY ./go.mod ./go.sum ./
 RUN go mod download
 
-# 5.1 Copy source and force-update go-starter-kit to latest commit
+# 5.1 Copy source
 COPY ./ .
-RUN go get -u github.com/shivanand-burli/go-starter-kit@latest && go mod tidy
 
 # 6. Build the application
 RUN CGO_ENABLED=0 \
